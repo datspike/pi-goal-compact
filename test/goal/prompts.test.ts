@@ -1,9 +1,10 @@
+import { inLanguage } from "../../src/language.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  GOAL_TOOL_NAME_GUIDANCE,
-  TOOL_PROMPT_GUIDELINES,
+  goalToolNameGuidance,
+  toolPromptGuidelines,
   budgetLimitPrompt,
   compactContinuationPrompt,
   completionAuditContinuationPromptSection,
@@ -14,19 +15,19 @@ import {
 } from "../../src/goal/prompts.js";
 import { createGoal } from "../../src/goal/state.js";
 
-test("tool prompt guidelines resolve exposed names without repeating alias footnotes", () => {
-  assert.match(GOAL_TOOL_NAME_GUIDANCE, /available tool list/);
-  assert.match(GOAL_TOOL_NAME_GUIDANCE, /namespace.*pi__get_goal/);
-  assert.match(GOAL_TOOL_NAME_GUIDANCE, /Never treat display, history or transcript names as callable aliases/);
+test("tool prompt guidelines resolve exposed names without repeating alias footnotes", () => inLanguage("en", () => {
+  assert.match(goalToolNameGuidance(), /available tool list/);
+  assert.match(goalToolNameGuidance(), /namespace.*pi__get_goal/);
+  assert.match(goalToolNameGuidance(), /Never treat display, history or transcript names as callable aliases/);
   assert.equal(goalToolReference("update_goal"), "update_goal");
-  const combined = TOOL_PROMPT_GUIDELINES.join("\n");
+  const combined = toolPromptGuidelines().join("\n");
   for (const name of ["get_goal", "create_goal", "update_goal", "amend_goal"]) assert.ok(combined.includes(name));
   assert.match(combined, /awaiting_user/);
   assert.match(combined, /goal_started before substantive work/);
-  for (const guideline of completionAuditToolGuidelines()) assert.ok(TOOL_PROMPT_GUIDELINES.includes(guideline));
-});
+  for (const guideline of completionAuditToolGuidelines()) assert.ok(toolPromptGuidelines().includes(guideline));
+}));
 
-test("continuation prompt uses the canonical completion-audit contract", () => {
+test("continuation prompt uses the canonical completion-audit contract", () => inLanguage("en", () => {
   const created = createGoal(null, "ship it", 10).goal;
   assert.ok(created);
 
@@ -42,7 +43,7 @@ test("continuation prompt uses the canonical completion-audit contract", () => {
   assert.match(continuation, /agreed outcome and required evidence satisfy its done criterion/);
   assert.match(continuation, /cannot replace required work or proof/);
   assert.ok(continuation.includes(completionAuditContinuationPromptSection().join("\n")));
-});
+}));
 
 test("compact continuation keeps marker detection without repeating the full objective", () => {
   const created = createGoal(null, "ship it", 10).goal;
@@ -58,7 +59,7 @@ test("compact continuation keeps marker detection without repeating the full obj
   assert.ok(compact.length < full.length);
 });
 
-test("continuation and budget-limit prompts reference exposed goal-completion tool names", () => {
+test("continuation and budget-limit prompts reference exposed goal-completion tool names", () => inLanguage("en", () => {
   const created = createGoal(null, "ship it", 10).goal;
   assert.ok(created);
 
@@ -73,9 +74,9 @@ test("continuation and budget-limit prompts reference exposed goal-completion to
     assert.match(prompt, /available tool list.*namespace/);
     assert.match(prompt, /Never treat display, history or transcript names as callable aliases/);
   }
-});
+}));
 
-test("continuation prompts carry the legacy done-criterion fallback", () => {
+test("continuation prompts carry the legacy done-criterion fallback", () => inLanguage("en", () => {
   const created = createGoal(null, "legacy ship", null)?.goal;
   assert.ok(created);
   const full = continuationPrompt(created);
@@ -90,8 +91,38 @@ test("continuation prompts carry the legacy done-criterion fallback", () => {
     assert.match(prompt, /Missing evidence for that criterion is still unfinished work/);
   }
   assert.match(compact, /get_goal/);
-});
+}));
 
 test("continuation marker detection tolerates a missing prompt from custom messages", () => {
   assert.equal(continuationGoalIdFromPrompt(undefined), null);
+});
+
+test("русский вариант правил несёт те же обязательства, что и английский", () => {
+  const created = createGoal(null, "ship it", 10).goal;
+  assert.ok(created);
+  const continuation = continuationPrompt(created);
+  const compact = compactContinuationPrompt(created);
+  const budget = budgetLimitPrompt(created);
+  const guidelines = toolPromptGuidelines().join("\n");
+  assert.match(goalToolNameGuidance(), /по точным именам из списка доступных инструментов[\s\S]*pi__get_goal/);
+  assert.match(guidelines, /goal_started до основной работы/);
+  assert.match(guidelines, /awaiting_user/);
+  for (const guideline of completionAuditToolGuidelines()) assert.ok(toolPromptGuidelines().includes(guideline));
+  assert.match(continuation, /Прежде чем решить, что цель достигнута, проверь завершение/);
+  assert.match(continuation, /список «требование → артефакт»/);
+  assert.match(continuation, /Не принимай косвенные признаки за завершение/);
+  assert.match(continuation, /Не отмечай цель завершённой только потому, что бюджет почти исчерпан/);
+  assert.ok(continuation.includes(completionAuditContinuationPromptSection().join("\n")));
+  for (const prompt of [continuation, compact]) {
+    assert.match(prompt, /классифицируй прошлый ход/);
+    assert.match(prompt, /Обязательное доказательство — это работа/);
+    assert.match(prompt, /оставь текущий вариант и заверши с отрицательным результатом/);
+    assert.match(prompt, /точка выбора пути, а не отрицательный результат/);
+    assert.match(prompt, /неизрасходованный бюджет не квота на новые попытки/);
+    assert.match(prompt, /Недостающее доказательство этого критерия — по-прежнему незавершённая работа/);
+    assert.match(prompt, /update_goal/);
+  }
+  assert.match(budget, /отметила цель как budgetLimited/);
+  assert.match(budget, /Не вызывай update_goal, пока цель действительно не завершена/);
+  for (const prompt of [continuation, compact, budget]) assert.doesNotMatch(prompt.replace(/<[^>]+>/g, ""), /\b(?:Continue|Before|Avoid|Budget|Do not)\b/);
 });

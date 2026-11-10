@@ -1,8 +1,9 @@
+import { inLanguage } from "../../src/language.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 
 import { formatBudget, formatDuration, formatFooterStatus, formatGoalSummary, formatTokenValue } from "../../src/goal/format.js";
-import { budgetLimitPrompt, continuationPrompt, TOOL_PROMPT_GUIDELINES } from "../../src/goal/prompts.js";
+import { budgetLimitPrompt, continuationPrompt, toolPromptGuidelines } from "../../src/goal/prompts.js";
 import {
   amendGoal,
   applyUsage,
@@ -397,12 +398,18 @@ test("createGoal replaces completed goals and rejects non-complete duplicates", 
   assert.match(createGoal(limited, "next").message ?? "", /non-complete goal/);
 });
 
-test("model-facing create_goal guidance matches create-after-complete semantics", () => {
-  const guidance = TOOL_PROMPT_GUIDELINES.join("\n");
+test("model-facing create_goal guidance matches create-after-complete semantics", () => inLanguage("en", () => {
+  const guidance = toolPromptGuidelines().join("\n");
 
   assert.match(guidance, /non-complete goal/);
   assert.match(guidance, /After a goal is complete,.*replaces it with a new active goal/);
   assert.doesNotMatch(guidance, /do not create a second goal while one already exists/);
+}));
+
+test("русские указания create_goal повторяют замену цели после завершения", () => {
+  const guidance = toolPromptGuidelines().join("\n");
+  assert.match(guidance, /незавершённую цель только по явной просьбе/);
+  assert.match(guidance, /После завершения цели create_goal заменяет её новой активной целью/);
 });
 
 test("goalsEquivalent compares full goal snapshots", () => {

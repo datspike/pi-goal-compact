@@ -201,15 +201,15 @@ test("описание create_goal просит задать вопросы до
   const description = (harness: Harness) => String(harness.getToolMetadata("create_goal")?.description ?? "");
   const harness = createRuntimeHarness();
   await harness.emit("session_start", { type: "session_start", reason: "startup" });
-  assert.match(description(harness), /ask the owner in one ask_user batch[\s\S]*record your assumptions in self_decided/);
+  assert.match(description(harness), /спроси владельца одним пакетом ask_user[\s\S]*запиши свои допущения в self_decided/);
   const cwd = await mkdtemp(join(tmpdir(), "goal-agreement-features-"));
   try {
     await mkdir(join(cwd, ".pi"), { recursive: true });
     await writeFile(join(cwd, ".pi", "goal-reports.json"), JSON.stringify({ features: { askBeforeGoal: false } }));
     const quiet = createRuntimeHarness({ cwd });
     await quiet.emit("session_start", { type: "session_start", reason: "startup" });
-    assert.doesNotMatch(description(quiet), /ask_user batch/);
-    assert.match(description(quiet), /Create a durable Goal only after an explicit request/);
+    assert.doesNotMatch(description(quiet), /пакетом ask_user/);
+    assert.match(description(quiet), /Создаёт долгую цель только после явной просьбы/);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

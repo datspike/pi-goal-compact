@@ -20,7 +20,24 @@ export function language(): Language {
   return current;
 }
 
-export const say: Say = (ru, en) => current === "ru" ? ru : en;
+/** Выбор значения по языку расширения: строки, списка правил или таблицы. */
+export function say<T>(ru: T, en: T): T {
+  return current === "ru" ? ru : en;
+}
+
+/**
+ * Выполняет `run` на заданном языке и возвращает прежний. Нужно, чтобы распознать текст,
+ * записанный в журнал при другой настройке языка; вызов синхронный, поэтому язык не протекает.
+ */
+export function inLanguage<T>(target: Language, run: () => T): T {
+  const prior = current;
+  current = target;
+  try {
+    return run();
+  } finally {
+    current = prior;
+  }
+}
 
 export function sayFor(target: Language): Say {
   return (ru, en) => target === "ru" ? ru : en;

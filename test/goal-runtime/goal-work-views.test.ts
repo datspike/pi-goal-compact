@@ -5,7 +5,7 @@ import { mock, test } from "node:test";
 import type { GoalWorkingState } from "../../src/goal/format.js";
 import type { GoalWorkState } from "../../src/goal/goal-work-state.js";
 import { goalFilePath } from "../../src/goal/goal-artifacts.js";
-import { compactContinuationPrompt, TOOL_PROMPT_GUIDELINES } from "../../src/goal/prompts.js";
+import { compactContinuationPrompt, toolPromptGuidelines } from "../../src/goal/prompts.js";
 import { createRuntimeHarness, flushContinuationScheduler, sessionCompactEvent } from "../support/runtime-harness.js";
 import { harnessCwd } from "../support/runtime-harness.js";
 
@@ -147,7 +147,7 @@ test("empty and stale plans are explicit, rather than evidence that nothing rema
   assert.match(snapshot(harness), /договорённость изменилась/);
   const prompt = compactContinuationPrompt(harness.snapshot().goal!, { stateSeq: 1, currentProjectionSeq: 1, workState: plan(), workStateStale: true });
   assert.match(prompt, /"stale":true/);
-  assert.match(prompt, /Before acting when a relevant field is truncated, work is omitted or the view is stale, read get_goal/);
+  assert.match(prompt, /Если нужное поле обрезано, работа пропущена или вид устарел, перед действием прочитай get_goal/);
 });
 
 test("long plans are bounded excerpts, with omitted stages retained in the complete state", () => {
@@ -159,8 +159,8 @@ test("long plans are bounded excerpts, with omitted stages retained in the compl
   assert.match(prompt, /Этап 0/);
   assert.ok(prompt.length < 10_000);
   assert.equal(work.items.length, 20);
-  assert.match(TOOL_PROMPT_GUIDELINES.join("\n"), /update_goal_work/);
-  assert.doesNotMatch(TOOL_PROMPT_GUIDELINES.join("\n"), /keep CURRENT|TIMELINE as/);
+  assert.match(toolPromptGuidelines().join("\n"), /update_goal_work/);
+  assert.doesNotMatch(toolPromptGuidelines().join("\n"), /keep CURRENT|TIMELINE as/);
 });
 
 test("registered work guidance uses the public schema and a camel-case revision is rejected", async () => {
@@ -170,7 +170,7 @@ test("registered work guidance uses the public schema and a camel-case revision 
   const schema = metadata.parameters as { properties: Record<string, unknown>; required: string[] };
   assert.deepEqual(Object.keys(schema.properties).sort(), ["expected_revision", "goal_id", "state"]);
   assert.deepEqual([...schema.required].sort(), ["expected_revision", "goal_id", "state"]);
-  assert.match((metadata.promptGuidelines ?? []).join("\n"), /goal_id, expected_revision and the full state/);
+  assert.match((metadata.promptGuidelines ?? []).join("\n"), /goal_id, expected_revision и полным состоянием/);
   await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expectedRevision: 1, state: plan() }), /malformed goal projection event/);
   assert.equal((await current(harness)).workRevision, 1);
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), summary: "Проверены имена публичных полей" } });

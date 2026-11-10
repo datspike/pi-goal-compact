@@ -101,5 +101,5 @@ test("the registered view guidance matches its optional public schema", () => {
   for (const params of [{}, { view: "full" }, { view: "status" }]) assert.equal(Check(schema, params), true);
   for (const params of [{ view: "short" }, { mode: "status" }, { view: null }]) assert.equal(Check(schema, params), false);
   assert.ok(metadata.promptSnippet!.includes("view=status"));
-  assert.ok(metadata.promptSnippet!.includes("default full view"));
+  assert.ok(metadata.promptSnippet!.includes("полный вид цели по умолчанию"));
 });

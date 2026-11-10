@@ -1,4 +1,4 @@
-import { language, say } from "../language.js";
+import { say } from "../language.js";
 import type { GoalHistoryPage, GoalHistoryQuery } from "./goal-projections.js";
 import { stringEnum } from "./string-enum.js";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,49 +11,52 @@ import { createGoal, replaceGoal, type AgreementInput } from "./state.js";
 import { SELF_DECIDED_KINDS, renderSelfDecided, unconfirmedSelfDecided, type SelfDecidedKind } from "./agreement.js";
 import { DEFAULT_GOAL_FEATURES, type GoalFeatures } from "./goal-report-config.js";
 import { GoalCanonicalWriteError } from "./goal-persistence.js";
-import { DONE_CRITERION_GUIDANCE, goalToolGuidelines } from "./prompts.js";
+import { doneCriterionGuidance, goalToolGuidelines } from "./prompts.js";
 import { MAX_GOAL_PROSE_PARAGRAPH_CHARS } from "./goal-language-quality.js";
 import type { GoalPaperCutUpdate } from "./goal-projections.js";
 import { isGoalWorkState, type GoalWorkState, type GoalWorkUpdateResult } from "./goal-work-state.js";
 import { type GoalArtifactRef, type GoalEntrySource, type GoalResult, type ThreadGoal } from "./types.js";
 
 // Функция, а не константа: язык задаётся при загрузке расширения, после импорта модулей.
-const goalProseDescription = (): string => `Write ${language() === "ru" ? "Russian" : "English"} prose in paragraphs of at most ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} characters. Keep exact commands, paths, error messages, identifiers and status values unchanged in inline or fenced code.`;
+const goalProseDescription = (): string => say(
+  `Пиши прозу по-русски абзацами не длиннее ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} знаков. Точные команды, пути, сообщения об ошибках, идентификаторы и значения статусов оставляй без изменений во встроенном или блочном коде.`,
+  `Write English prose in paragraphs of at most ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} characters. Keep exact commands, paths, error messages, identifiers and status values unchanged in inline or fenced code.`,
+);
 
-const EmptyParams = Type.Object({});
-const GetGoalParams = Type.Object({
+const emptyParams = () => Type.Object({});
+const getGoalParams = () => Type.Object({
   view: Type.Optional(Type.Union([Type.Literal("full"), Type.Literal("status"), Type.Literal("history")], {
-    description: "Default full includes the unchanged contract and work state. Status omits these; history reads a bounded event index or exact record. None authorizes a transition.",
+    description: say("По умолчанию full включает неизменённый договор и рабочее состояние. status их не включает; history читает ограниченный указатель событий или точную запись. Ни один вид не разрешает переход.", "Default full includes the unchanged contract and work state. Status omits these; history reads a bounded event index or exact record. None authorizes a transition."),
   })),
-  event_id: Type.Optional(Type.String({ minLength: 1, description: "History event id from the index, or a decision note id. Returns paged original JSON." })),
-  offset: Type.Optional(Type.Integer({ minimum: 0, description: "History index offset; follow nextOffset." })),
+  event_id: Type.Optional(Type.String({ minLength: 1, description: say("ID события истории из указателя или ID заметки-решения. Возвращает исходный JSON постранично.", "History event id from the index, or a decision note id. Returns paged original JSON.") })),
+  offset: Type.Optional(Type.Integer({ minimum: 0, description: say("Смещение в указателе истории; продолжай по nextOffset.", "History index offset; follow nextOffset.") })),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-  content_offset: Type.Optional(Type.Integer({ minimum: 0, description: "Unicode code point offset; follow nextContentOffset." })),
+  content_offset: Type.Optional(Type.Integer({ minimum: 0, description: say("Смещение в кодовых точках Unicode; продолжай по nextContentOffset.", "Unicode code point offset; follow nextContentOffset.") })),
   content_limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 8000 })),
 }, { additionalProperties: false });
-const ResumeGoalParams = Type.Object({
+const resumeGoalParams = () => Type.Object({
   user_decision_confirmed: Type.Optional(Type.Boolean({
-    description: "Required true when resuming a paused goal with an unconfirmed awaiting_user decision: the agent has interpreted the actual reply as the required answer. Never set for status questions or continuation without the required answer.",
+    description: say("Обязательно true при возобновлении цели на паузе с неподтверждённым решением awaiting_user: агент истолковал настоящий ответ как требуемый. Никогда не ставь для вопросов о статусе или продолжения без требуемого ответа.", "Required true when resuming a paused goal with an unconfirmed awaiting_user decision: the agent has interpreted the actual reply as the required answer. Never set for status questions or continuation without the required answer."),
   })),
 }, { additionalProperties: false });
 
-const AgreementParam = Type.Object({
-  owner_wants: Type.String({ minLength: 1, description: "What the owner wants: the outcome and the qualities that matter to them, briefly quoting the owner where the wording itself matters." }),
-  done_when: Type.String({ minLength: 1, description: "Done when: the completion criterion, including when a negative result is acceptable. owner_wants and done_when together are at most 2000 characters." }),
-}, { additionalProperties: false, description: "The agreement the extension keeps verbatim at the start of every context window until the goal changes." });
-const SelfDecidedParam = Type.Array(Type.Object({
-  kind: stringEnum(SELF_DECIDED_KINDS, { description: "assumption — you assumed it; deferred_by_owner — the owner postponed the question; proposal — your own proposal." }),
+const agreementParam = () => Type.Object({
+  owner_wants: Type.String({ minLength: 1, description: say("Чего хочет владелец: результат и важные ему качества; там, где важна сама формулировка, кратко процитируй владельца.", "What the owner wants: the outcome and the qualities that matter to them, briefly quoting the owner where the wording itself matters.") }),
+  done_when: Type.String({ minLength: 1, description: say("Готово, когда: критерий завершения, в том числе когда допустим отрицательный результат. owner_wants и done_when вместе не длиннее 2000 знаков.", "Done when: the completion criterion, including when a negative result is acceptable. owner_wants and done_when together are at most 2000 characters.") }),
+}, { additionalProperties: false, description: say("Договорённость, которую расширение дословно показывает в начале каждого контекстного окна, пока цель не изменится.", "The agreement the extension keeps verbatim at the start of every context window until the goal changes.") });
+const selfDecidedParam = () => Type.Array(Type.Object({
+  kind: stringEnum(SELF_DECIDED_KINDS, { description: say("assumption — твоё допущение; deferred_by_owner — владелец отложил вопрос; proposal — твоё собственное предложение.", "assumption — you assumed it; deferred_by_owner — the owner postponed the question; proposal — your own proposal.") }),
   text: Type.String({ minLength: 1, maxLength: 600 }),
-}, { additionalProperties: false }), { description: "Decisions the owner has not confirmed: scope, architecture or acceptance you chose yourself. May be empty, must be present." });
+}, { additionalProperties: false }), { description: say("Решения, которые владелец не подтверждал: охват, архитектура или приёмка, выбранные тобой. Список может быть пустым, но должен быть передан.", "Decisions the owner has not confirmed: scope, architecture or acceptance you chose yourself. May be empty, must be present.") });
 
-const CreateGoalParams = Type.Object({
+const createGoalParams = () => Type.Object({
   objective: Type.String({
-    description: `Preserve the original user request, approved outcome and evidence, non-goals, simplest path, complexity bounds, done criterion and decision gates. ${DONE_CRITERION_GUIDANCE}`,
+    description: `${say("Сохрани исходный запрос пользователя, одобренные результат и доказательства, то, что не входит, простейший путь, пределы сложности, критерий готовности и точки решений.", "Preserve the original user request, approved outcome and evidence, non-goals, simplest path, complexity bounds, done criterion and decision gates.")} ${doneCriterionGuidance()}`,
   }),
   token_budget: Type.Optional(
     Type.Union([
       Type.Integer({
-        description: "Optional positive integer token budget; null means no budget limit.",
+        description: say("Необязательный бюджет токенов, целое положительное число; null — без ограничения.", "Optional positive integer token budget; null means no budget limit."),
         minimum: 1,
       }),
       Type.Null(),
@@ -62,75 +65,75 @@ const CreateGoalParams = Type.Object({
   replace_existing: Type.Optional(
     Type.Boolean({
       description:
-        "Replace an existing non-complete goal when the user explicitly requests a new goal.",
+        say("Заменить существующую незавершённую цель, когда пользователь явно просит новую цель.", "Replace an existing non-complete goal when the user explicitly requests a new goal."),
     }),
   ),
-  agreement: Type.Optional(AgreementParam),
-  self_decided: Type.Optional(SelfDecidedParam),
+  agreement: Type.Optional(agreementParam()),
+  self_decided: Type.Optional(selfDecidedParam()),
 });
 
-const AmendGoalParams = Type.Object({
+const amendGoalParams = () => Type.Object({
   amendment: Type.Optional(Type.String({
     minLength: 1,
-    description: "New user-approved addition. Supply exactly one of amendment or amendment_id. Never resend edited text to repair an applied amendment.",
+    description: say("Новое одобренное пользователем дополнение. Передай ровно одно из amendment и amendment_id. Никогда не отправляй исправленный текст повторно, чтобы восстановить применённую поправку.", "New user-approved addition. Supply exactly one of amendment or amendment_id. Never resend edited text to repair an applied amendment."),
   })),
   amendment_id: Type.Optional(Type.String({
     minLength: 1,
-    description: "Recovery only: the ID returned for an already applied amendment. Restores its projections without appending or changing the saved contract; omit amendment.",
+    description: say("Только для восстановления: ID, возвращённый для уже применённой поправки. Восстанавливает её проекции, не добавляя и не меняя сохранённый договор; amendment не передавай.", "Recovery only: the ID returned for an already applied amendment. Restores its projections without appending or changing the saved contract; omit amendment."),
   })),
   agreement: Type.Optional(Type.Object({
     owner_wants: Type.String({ minLength: 1 }),
     done_when: Type.String({ minLength: 1 }),
-  }, { additionalProperties: false, description: "Required with amendment when the goal has an agreement: the complete new edition, not a diff." })),
-  self_decided: Type.Optional(SelfDecidedParam),
+  }, { additionalProperties: false, description: say("Обязательно вместе с amendment, если у цели есть договорённость: полная новая редакция, а не разница.", "Required with amendment when the goal has an agreement: the complete new edition, not a diff.") })),
+  self_decided: Type.Optional(selfDecidedParam()),
 }, { additionalProperties: false });
 
-const UpdateGoalParams = Type.Object({
+const updateGoalParams = () => Type.Object({
   status: stringEnum(["complete"] as const, {
-    description: "Only complete is accepted. Do not call this until no required work remains.",
+    description: say("Принимается только complete. Не вызывай, пока остаётся обязательная работа.", "Only complete is accepted. Do not call this until no required work remains."),
   }),
 });
 
-const RecordGoalNoteParams = Type.Object({
-  kind: stringEnum(["decision", "paper_cut"] as const, { description: "Select exactly one note branch; decision uses decision+rationale, paper_cut uses impact+severity." }),
-  action: Type.Optional(stringEnum(["record", "update", "repair"] as const, { description: "Default record. update closes an existing paper_cut; repair rebuilds the document for an already saved note without another event." })),
-  note_id: Type.Optional(Type.String({ minLength: 1, description: "Required for update/repair; use noteId from the receipt or paperCuts[].id from get_goal." })),
-  expected_revision: Type.Optional(Type.Integer({ minimum: 0, description: "Required for update: use that paperCuts entry revision, not workRevision." })),
-  status: Type.Optional(stringEnum(["resolved", "wont_fix"] as const, { description: "Required for update. wont_fix does not approve a scope change or cancel required work." })),
-  resolution: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Required for update: evidence of the fix or reason for accepting the risk." })),
-  title: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: "Required for record only." })),
-  decision: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Required for record with kind=decision; the durable choice." })),
-  rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Required only for kind=decision; why the choice was made." })),
+const recordGoalNoteParams = () => Type.Object({
+  kind: stringEnum(["decision", "paper_cut"] as const, { description: say("Выбери ровно один вид заметки; decision использует decision и rationale, paper_cut — impact и severity.", "Select exactly one note branch; decision uses decision+rationale, paper_cut uses impact+severity.") }),
+  action: Type.Optional(stringEnum(["record", "update", "repair"] as const, { description: say("По умолчанию record. update закрывает существующий paper_cut; repair пересобирает документ уже сохранённой заметки без нового события.", "Default record. update closes an existing paper_cut; repair rebuilds the document for an already saved note without another event.") })),
+  note_id: Type.Optional(Type.String({ minLength: 1, description: say("Обязательно для update и repair; бери noteId из квитанции или paperCuts[].id из get_goal.", "Required for update/repair; use noteId from the receipt or paperCuts[].id from get_goal.") })),
+  expected_revision: Type.Optional(Type.Integer({ minimum: 0, description: say("Обязательно для update: ревизия этой записи paperCuts, а не workRevision.", "Required for update: use that paperCuts entry revision, not workRevision.") })),
+  status: Type.Optional(stringEnum(["resolved", "wont_fix"] as const, { description: say("Обязательно для update. wont_fix не одобряет изменение охвата и не отменяет обязательную работу.", "Required for update. wont_fix does not approve a scope change or cancel required work.") })),
+  resolution: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: say("Обязательно для update: доказательство исправления или причина принять риск.", "Required for update: evidence of the fix or reason for accepting the risk.") })),
+  title: Type.Optional(Type.String({ minLength: 1, maxLength: 240, description: say("Обязательно только для record.", "Required for record only.") })),
+  decision: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: say("Обязательно для record с kind=decision; устойчивый выбор.", "Required for record with kind=decision; the durable choice.") })),
+  rationale: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: say("Обязательно только для kind=decision; почему сделан такой выбор.", "Required only for kind=decision; why the choice was made.") })),
   consequence: Type.Optional(Type.String({ maxLength: 1200 })),
-  impact: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Required only for kind=paper_cut; consequence of deferring the issue." })),
-  severity: Type.Optional(stringEnum(["low", "medium", "high"] as const, { description: "Required only for kind=paper_cut." })),
+  impact: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: say("Обязательно только для kind=paper_cut; последствие откладывания проблемы.", "Required only for kind=paper_cut; consequence of deferring the issue.") })),
+  severity: Type.Optional(stringEnum(["low", "medium", "high"] as const, { description: say("Обязательно только для kind=paper_cut.", "Required only for kind=paper_cut.") })),
   revisit: Type.Optional(Type.String({ maxLength: 1200 })),
-  self_decided: Type.Optional(stringEnum(SELF_DECIDED_KINDS, { description: "With record kind=decision: also add the decision to the Self-decided list as this kind. Use for a notable choice about scope, architecture or acceptance the owner has not confirmed." })),
-  confirmation: Type.Optional(stringEnum(["confirmed", "rejected"] as const, { description: "With update kind=decision and note_id=S-…: the owner's verdict on a Self-decided item. Accepted only in a turn started by a real owner reply." })),
+  self_decided: Type.Optional(stringEnum(SELF_DECIDED_KINDS, { description: say("С record kind=decision: добавить решение и в список «Решаю сам» с этим видом. Используй для заметного выбора охвата, архитектуры или приёмки, который владелец не подтверждал.", "With record kind=decision: also add the decision to the Self-decided list as this kind. Use for a notable choice about scope, architecture or acceptance the owner has not confirmed.") })),
+  confirmation: Type.Optional(stringEnum(["confirmed", "rejected"] as const, { description: say("С update kind=decision и note_id=S-…: вердикт владельца по пункту «Решаю сам». Принимается только в ходе, начатом настоящей репликой владельца.", "With update kind=decision and note_id=S-…: the owner's verdict on a Self-decided item. Accepted only in a turn started by a real owner reply.") })),
 }, { additionalProperties: false });
 
-export const ProgressReportParams = Type.Object({
-  eventKind: Type.Optional(stringEnum(["goal_started", "phase_changed", "progress_checkpoint", "verification", "blocker_opened", "blocker_resolved", "decision_recorded", "artifact_updated", "goal_completed"] as const, { description: "Select one semantic delta. Required alternatives: goal_started changed or completed; phase_changed changed; verification verification; blocker_opened problemOrDecision; blocker_resolved problemOrDecision or completed; decision_recorded problemOrDecision; artifact_updated changed or completed; goal_completed verification or completed; progress_checkpoint none." })),
-  action: stringEnum(["publish", "suppress"] as const, { description: "publish records a report; suppress accepts no fields besides action." }),
-  status: Type.Optional(stringEnum(["working", "verifying", "blocked", "awaiting_user"] as const, { description: "Required for publish. working needs a meaningful delta and continues independent work despite one blocked item. verifying needs verification. blocked needs problemOrDecision and means the whole goal has no safe next action; awaiting_user needs needUser for a real decision. Both hold continuation until a user answer and working report." })),
-  phase: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_PHASE_CHARS, description: "Required for publish; short current meaningful action in present tense." })),
-  summary: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_SUMMARY_CHARS, description: "Required for publish; 1-3 connected sentences describing change, meaning and next step." })),
-  changed: Type.Optional(Type.String({ maxLength: MAX_REPORT_CHANGED_CHARS, description: "Use as the changed alternative for goal_started or artifact_updated; required for phase_changed. working needs any meaningful delta." })),
-  completed: Type.Optional(Type.String({ maxLength: MAX_REPORT_COMPLETED_CHARS, description: "Use as the completed alternative for goal_started, blocker_resolved, artifact_updated or goal_completed." })),
-  problemOrDecision: Type.Optional(Type.String({ maxLength: MAX_REPORT_PROBLEM_CHARS, description: "Required for blocker_opened, decision_recorded, or blocked status; blocker_resolved accepts this or completed." })),
+export const progressReportParams = () => Type.Object({
+  eventKind: Type.Optional(stringEnum(["goal_started", "phase_changed", "progress_checkpoint", "verification", "blocker_opened", "blocker_resolved", "decision_recorded", "artifact_updated", "goal_completed"] as const, { description: say("Выбери одно смысловое изменение. Обязательные поля: goal_started — changed или completed; phase_changed — changed; verification — verification; blocker_opened — problemOrDecision; blocker_resolved — problemOrDecision или completed; decision_recorded — problemOrDecision; artifact_updated — changed или completed; goal_completed — verification или completed; progress_checkpoint — ничего.", "Select one semantic delta. Required alternatives: goal_started changed or completed; phase_changed changed; verification verification; blocker_opened problemOrDecision; blocker_resolved problemOrDecision or completed; decision_recorded problemOrDecision; artifact_updated changed or completed; goal_completed verification or completed; progress_checkpoint none.") })),
+  action: stringEnum(["publish", "suppress"] as const, { description: say("publish записывает отчёт; suppress не принимает полей, кроме action.", "publish records a report; suppress accepts no fields besides action.") }),
+  status: Type.Optional(stringEnum(["working", "verifying", "blocked", "awaiting_user"] as const, { description: say("Обязательно для publish. working требует содержательного изменения и продолжает независимую работу, даже если один пункт заблокирован. verifying требует verification. blocked требует problemOrDecision и означает, что у всей цели нет безопасного следующего действия; awaiting_user требует needUser для настоящего решения. Оба удерживают продолжение до ответа пользователя и отчёта working.", "Required for publish. working needs a meaningful delta and continues independent work despite one blocked item. verifying needs verification. blocked needs problemOrDecision and means the whole goal has no safe next action; awaiting_user needs needUser for a real decision. Both hold continuation until a user answer and working report.") })),
+  phase: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_PHASE_CHARS, description: say("Обязательно для publish; короткое текущее содержательное действие в настоящем времени.", "Required for publish; short current meaningful action in present tense.") })),
+  summary: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_SUMMARY_CHARS, description: say("Обязательно для publish; 1–3 связных предложения: что изменилось, что это значит и что дальше.", "Required for publish; 1-3 connected sentences describing change, meaning and next step.") })),
+  changed: Type.Optional(Type.String({ maxLength: MAX_REPORT_CHANGED_CHARS, description: say("Вариант changed для goal_started или artifact_updated; обязательно для phase_changed. working требует любого содержательного изменения.", "Use as the changed alternative for goal_started or artifact_updated; required for phase_changed. working needs any meaningful delta.") })),
+  completed: Type.Optional(Type.String({ maxLength: MAX_REPORT_COMPLETED_CHARS, description: say("Вариант completed для goal_started, blocker_resolved, artifact_updated или goal_completed.", "Use as the completed alternative for goal_started, blocker_resolved, artifact_updated or goal_completed.") })),
+  problemOrDecision: Type.Optional(Type.String({ maxLength: MAX_REPORT_PROBLEM_CHARS, description: say("Обязательно для blocker_opened, decision_recorded или статуса blocked; blocker_resolved принимает это поле или completed.", "Required for blocker_opened, decision_recorded, or blocked status; blocker_resolved accepts this or completed.") })),
   riskAndComplexity: Type.Optional(Type.String({ maxLength: MAX_REPORT_RISK_CHARS })),
-  verification: Type.Optional(Type.String({ maxLength: MAX_REPORT_VERIFICATION_CHARS, description: "Required for verification; one alternative for goal_completed; also required for verifying status." })),
+  verification: Type.Optional(Type.String({ maxLength: MAX_REPORT_VERIFICATION_CHARS, description: say("Обязательно для verification; один из вариантов для goal_completed; также обязательно для статуса verifying.", "Required for verification; one alternative for goal_completed; also required for verifying status.") })),
   nextStep: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEXT_STEP_CHARS })),
-  needUser: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEED_USER_CHARS, description: "Required for awaiting_user status; concrete decision needed from the user." })),
+  needUser: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEED_USER_CHARS, description: say("Обязательно для статуса awaiting_user; конкретное решение, нужное от пользователя.", "Required for awaiting_user status; concrete decision needed from the user.") })),
 }, { additionalProperties: false });
 
-const GoalWorkParams = Type.Object({
+const goalWorkParams = () => Type.Object({
   goal_id: Type.String({ minLength: 1 }),
-  expected_revision: Type.Integer({ minimum: 0, description: "Use workRevision from get_goal. A stale revision requires reading the current state before retrying." }),
+  expected_revision: Type.Integer({ minimum: 0, description: say("Бери workRevision из get_goal. При устаревшей ревизии перед повтором прочитай текущее состояние.", "Use workRevision from get_goal. A stale revision requires reading the current state before retrying.") }),
   state: Type.Object({
-    outcome: Type.String({ description: "Concise user result; does not replace or amend the approved objective." }),
-    doneWhen: Type.String({ description: "Concise explanation of the agreed completion criterion." }),
-    summary: Type.String({ description: "Current whole-task position, not just the latest delta." }),
+    outcome: Type.String({ description: say("Краткий результат для пользователя; не заменяет и не меняет одобренную цель.", "Concise user result; does not replace or amend the approved objective.") }),
+    doneWhen: Type.String({ description: say("Краткое объяснение согласованного критерия завершения.", "Concise explanation of the agreed completion criterion.") }),
+    summary: Type.String({ description: say("Текущее положение всей задачи, а не только последнее изменение.", "Current whole-task position, not just the latest delta.") }),
     items: Type.Array(Type.Object({
       id: Type.String({ minLength: 1 }),
       title: Type.String(),
@@ -139,8 +142,8 @@ const GoalWorkParams = Type.Object({
       result: Type.Optional(Type.String()),
       evidence: Type.Optional(Type.String()),
     }, { additionalProperties: false })),
-    activeDecisionIds: Type.Array(Type.String({ minLength: 1 }), { description: "IDs of existing decision records that still determine the current path." }),
-    nextItemId: Type.Optional(Type.String({ minLength: 1, description: "Next useful active or planned item. Check dependencies and authority; blocked, done, cancelled and unknown IDs are rejected." })),
+    activeDecisionIds: Type.Array(Type.String({ minLength: 1 }), { description: say("ID существующих записей решений, которые всё ещё определяют текущий путь.", "IDs of existing decision records that still determine the current path.") }),
+    nextItemId: Type.Optional(Type.String({ minLength: 1, description: say("Следующий полезный активный или запланированный пункт. Проверь зависимости и полномочия; заблокированные, готовые, отменённые и неизвестные ID отклоняются.", "Next useful active or planned item. Check dependencies and authority; blocked, done, cancelled and unknown IDs are rejected.") })),
     verification: Type.Optional(Type.String()),
     risks: Type.Optional(Type.String()),
   }, { additionalProperties: false }),
@@ -270,11 +273,11 @@ function requiredReport(params: {
 export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   pi.registerTool({
     name: "resume_goal",
-    label: "Resume Goal",
-    description: "Resume the same paused Goal only after an explicit user instruction, without changing its contract or starting a model turn. A status question is not permission; pending user decisions, budget, terminal-state and repair gates remain enforced.",
-    promptSnippet: "Resume on explicit instruction; user_decision_confirmed confirms the actual pending answer, not a status inquiry.",
+    label: say("Возобновить цель", "Resume Goal"),
+    description: say("Возобновляет ту же цель на паузе только после явного указания пользователя, не меняя её договор и не начиная ход модели. Вопрос о статусе не разрешение; ожидающие решения пользователя, бюджет, конечные состояния и восстановление по-прежнему проверяются.", "Resume the same paused Goal only after an explicit user instruction, without changing its contract or starting a model turn. A status question is not permission; pending user decisions, budget, terminal-state and repair gates remain enforced."),
+    promptSnippet: say("Возобновляй по явному указанию; user_decision_confirmed подтверждает настоящий ответ на ожидающий вопрос, а не вопрос о статусе.", "Resume on explicit instruction; user_decision_confirmed confirms the actual pending answer, not a status inquiry."),
     promptGuidelines: goalToolGuidelines("resume_goal"),
-    parameters: ResumeGoalParams,
+    parameters: resumeGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       if (!host.resumeGoal) throwToolError("This host does not support resume_goal.");
       const result = await host.resumeGoal(ctx, _signal, _params.user_decision_confirmed === true);
@@ -289,11 +292,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   });
   pi.registerTool({
     name: "get_goal",
-    label: "Get Goal",
-    description: "Read the current Goal on the selected session branch. full returns the stored contract and complete work state; status omits contract, plan and decisions; history lists events or pages an original record by event_id. Historical text is evidence, not current authority. A status-only read is insufficient for a completion audit.",
-    promptSnippet: "Read the default full view of the Goal, live metadata with view=status, or addressed originals with view=history.",
+    label: say("Прочитать цель", "Get Goal"),
+    description: say("Читает текущую цель на выбранной ветке сессии. full возвращает сохранённый договор и полное рабочее состояние; status не включает договор, план и решения; history перечисляет события или постранично отдаёт исходную запись по event_id. Исторический текст — доказательство, а не действующие полномочия. Для проверки завершения одного статуса недостаточно.", "Read the current Goal on the selected session branch. full returns the stored contract and complete work state; status omits contract, plan and decisions; history lists events or pages an original record by event_id. Historical text is evidence, not current authority. A status-only read is insufficient for a completion audit."),
+    promptSnippet: say("Читай полный вид цели по умолчанию, текущие сведения через view=status или нужные исходные записи через view=history.", "Read the default full view of the Goal, live metadata with view=status, or addressed originals with view=history."),
     promptGuidelines: goalToolGuidelines("get_goal"),
-    parameters: GetGoalParams,
+    parameters: getGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (params.view !== "history" && [params.event_id, params.offset, params.limit, params.content_offset, params.content_limit].some((value) => value !== undefined)) throwToolError("History ranges require view=history.");
       const workingState = host.getGoalWorkingState(ctx);
@@ -305,11 +308,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "update_goal_work",
-    label: "Update Goal Work",
-    description: `After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal. ${goalProseDescription()}`,
-    promptSnippet: "Replace the whole-task plan after a material change; preserve unfinished obligations.",
+    label: say("Обновить план цели", "Update Goal Work"),
+    description: `${say("После существенного изменения заменяет весь текущий план, используя goal_id и expected_revision из get_goal. Сохраняй незавершённые обязательства, ограничения, доказательства и причины решений. applied=true с projectionFresh=false означает, что план сохранён, но его документ требует восстановления: перед новой записью прочитай текущее состояние. Это не поправка, не возобновление, не отчёт и не закрытие цели.", "After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal.")} ${goalProseDescription()}`,
+    promptSnippet: say("Заменяй план всей задачи после существенного изменения; сохраняй незавершённые обязательства.", "Replace the whole-task plan after a material change; preserve unfinished obligations."),
     promptGuidelines: goalToolGuidelines("update_goal_work"),
-    parameters: GoalWorkParams,
+    parameters: goalWorkParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isGoalWorkState(params.state)) throwToolError("Malformed goal work state.");
       const result = await host.updateGoalWork(params.goal_id, params.state, params.expected_revision, ctx, toolCallId);
@@ -322,11 +325,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "amend_goal",
-    label: "Amend Goal",
-    description: "Append a user-approved amendment, or recover an already applied amendment by amendment_id without changing the contract. Supply exactly one input. A paused goal resumes only after successful projection recovery.",
-    promptSnippet: "Append an approved change, or repair its already applied write by amendment_id.",
+    label: say("Дополнить цель", "Amend Goal"),
+    description: say("Добавляет одобренную пользователем поправку или восстанавливает уже применённую поправку по amendment_id, не меняя договор. Передай ровно одно из двух. Цель на паузе возобновляется только после успешного восстановления проекции.", "Append a user-approved amendment, or recover an already applied amendment by amendment_id without changing the contract. Supply exactly one input. A paused goal resumes only after successful projection recovery."),
+    promptSnippet: say("Добавляй одобренное изменение или восстанавливай уже применённую запись по amendment_id.", "Append an approved change, or repair its already applied write by amendment_id."),
     promptGuidelines: goalToolGuidelines("amend_goal"),
-    parameters: AmendGoalParams,
+    parameters: amendGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if ((params.amendment !== undefined) === (params.amendment_id !== undefined)) {
         throwToolError("Supply exactly one of amendment or amendment_id.");
@@ -351,11 +354,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "load_goal_language_guide",
-    label: "Load Goal Language Guide",
-    description: "Load the structured language-repair diagnostics and concise repair guidance after a goal projection is rejected. Diagnostics contain artifact, code, field, length, limit, and repair without raw sensitive excerpts.",
-    promptSnippet: "After rejected Goal text, read diagnostics and repair the affected data safely.",
+    label: say("Языковая справка цели", "Load Goal Language Guide"),
+    description: say("Загружает структурированную языковую диагностику и краткие указания по исправлению после отклонения проекции цели. Диагностика содержит artifact, code, field, length, limit и repair без исходных чувствительных выдержек.", "Load the structured language-repair diagnostics and concise repair guidance after a goal projection is rejected. Diagnostics contain artifact, code, field, length, limit, and repair without raw sensitive excerpts."),
+    promptSnippet: say("После отклонённого текста цели прочитай диагностику и безопасно исправь затронутые данные.", "After rejected Goal text, read diagnostics and repair the affected data safely."),
     promptGuidelines: goalToolGuidelines("load_goal_language_guide"),
-    parameters: EmptyParams,
+    parameters: emptyParams(),
     async execute() {
       const result = host.loadGoalLanguageGuide();
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { result, error: null } };
@@ -364,11 +367,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "record_goal_note",
-    label: "Record Goal Note",
-    description: `Record a durable decision or deferred risk. Default action=record requires title and kind-specific fields. action=update closes a paper_cut by note_id with expected_revision, status and resolution; it does not approve scope changes. action=repair rebuilds the document for an existing note by kind and note_id without appending another note. Read IDs and note revisions via get_goal(view=full). ${goalProseDescription()}`,
-    promptSnippet: "Record a decision or risk, close a paper cut, or repair an already saved note by ID.",
+    label: say("Записать заметку цели", "Record Goal Note"),
+    description: `${say("Записывает устойчивое решение или отложенный риск. По умолчанию action=record требует title и поля своего вида. action=update закрывает paper_cut по note_id с expected_revision, status и resolution; изменения охвата это не одобряет. action=repair пересобирает документ существующей заметки по kind и note_id, не добавляя новой. ID и ревизии заметок читай через get_goal(view=full).", "Record a durable decision or deferred risk. Default action=record requires title and kind-specific fields. action=update closes a paper_cut by note_id with expected_revision, status and resolution; it does not approve scope changes. action=repair rebuilds the document for an existing note by kind and note_id without appending another note. Read IDs and note revisions via get_goal(view=full).")} ${goalProseDescription()}`,
+    promptSnippet: say("Записывай решение или риск, закрывай мелкий недочёт или восстанавливай уже сохранённую заметку по ID.", "Record a decision or risk, close a paper cut, or repair an already saved note by ID."),
     promptGuidelines: goalToolGuidelines("record_goal_note"),
-    parameters: RecordGoalNoteParams,
+    parameters: recordGoalNoteParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       const action = params.action ?? "record";
       let result: unknown;
@@ -438,11 +441,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "report_goal_progress",
-    label: "Report Goal Progress",
-    description: `Publish a user-facing result delta, not internal activity. Publish needs status, phase, summary, nextStep and its status-specific delta; suppress takes only action. If one item is blocked but other safe work remains, report working. Separate independent facts with blank lines. ${goalProseDescription()}`,
-    promptSnippet: "Report a meaningful result change, or suppress a due reminder with action only.",
+    label: say("Отчёт о ходе цели", "Report Goal Progress"),
+    description: `${say("Публикует изменение результата для пользователя, а не внутреннюю активность. publish требует status, phase, summary, nextStep и поле изменения для своего статуса; suppress принимает только action. Если один пункт заблокирован, но остаётся другая безопасная работа, сообщай working. Независимые факты разделяй пустыми строками.", "Publish a user-facing result delta, not internal activity. Publish needs status, phase, summary, nextStep and its status-specific delta; suppress takes only action. If one item is blocked but other safe work remains, report working. Separate independent facts with blank lines.")} ${goalProseDescription()}`,
+    promptSnippet: say("Сообщай о содержательном изменении результата или гаси напоминание одним action.", "Report a meaningful result change, or suppress a due reminder with action only."),
     promptGuidelines: goalToolGuidelines("report_goal_progress"),
-    parameters: ProgressReportParams,
+    parameters: progressReportParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (params.action === "suppress" && Object.keys(params).some((key) => key !== "action")) {
         throwToolError("suppress accepts only action; use publish for report fields.");
@@ -461,11 +464,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "update_goal",
-    label: "Update Goal",
-    description: "Complete the current Goal only after the agreed outcome and required evidence are satisfied. First read get_goal(view=full), then publish report_goal_progress(status=verifying) and await success before a separate completion call. A working goal_completed event is insufficient. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof.",
-    promptSnippet: "Complete the Goal only after the agreed result and required evidence are satisfied.",
+    label: say("Закрыть цель", "Update Goal"),
+    description: say("Завершает текущую цель только после того, как согласованный результат и обязательные доказательства выполнены. Сначала прочитай get_goal(view=full), затем опубликуй report_goal_progress(status=verifying) и дождись успеха перед отдельным вызовом закрытия. Событие goal_completed со статусом working недостаточно. Если запись не удалась, перед повтором изучи сохранённое состояние; ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство.", "Complete the current Goal only after the agreed outcome and required evidence are satisfied. First read get_goal(view=full), then publish report_goal_progress(status=verifying) and await success before a separate completion call. A working goal_completed event is insufficient. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof."),
+    promptSnippet: say("Закрывай цель только после выполнения согласованного результата и обязательных доказательств.", "Complete the Goal only after the agreed result and required evidence are satisfied."),
     promptGuidelines: goalToolGuidelines("update_goal"),
-    parameters: UpdateGoalParams,
+    parameters: updateGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const result = await host.completeGoal("tool", ctx);
       if (!result.ok || !result.goal) {
@@ -495,17 +498,17 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 }
 
 /** Д5: вопросы до цели. Выключенная доработка возвращает прежнее описание `create_goal`. */
-export const ASK_BEFORE_GOAL_RULE = "Before create_goal, ask the owner in one ask_user batch everything that changes scope, architecture or acceptance and is not already settled in the conversation, files or memory. If the owner said to work without questions, do not ask; record your assumptions in self_decided instead.";
+export const askBeforeGoalRule = (): string => say("Перед create_goal спроси владельца одним пакетом ask_user обо всём, что меняет охват, архитектуру или приёмку и ещё не решено в разговоре, файлах или памяти. Если владелец сказал работать без вопросов, не спрашивай, а запиши свои допущения в self_decided.", "Before create_goal, ask the owner in one ask_user batch everything that changes scope, architecture or acceptance and is not already settled in the conversation, files or memory. If the owner said to work without questions, do not ask; record your assumptions in self_decided instead.");
 
 /** Регистрирует `create_goal`; повторная регистрация после загрузки настроек меняет описание в той же сессии. */
 export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: Pick<GoalFeatures, "askBeforeGoal">): void {
   pi.registerTool({
     name: "create_goal",
-    label: "Create Goal",
-    description: `Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. After success publish goal_started before substantive work. This does not copy the conversation automatically.${rules.askBeforeGoal ? ` ${ASK_BEFORE_GOAL_RULE}` : ""}`,
-    promptSnippet: "Create a durable Goal only on explicit request; preserve the agreed outcome, evidence and done criterion.",
+    label: say("Создать цель", "Create Goal"),
+    description: `${say("Создаёт долгую цель только после явной просьбы. Сохрани замысел пользователя и согласованные границы; не придумывай более строгих условий приёмки. После успеха опубликуй goal_started до основной работы. Разговор автоматически не копируется.", "Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. After success publish goal_started before substantive work. This does not copy the conversation automatically.")}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
+    promptSnippet: say("Создавай долгую цель только по явной просьбе; сохраняй согласованный результат, доказательства и критерий готовности.", "Create a durable Goal only on explicit request; preserve the agreed outcome, evidence and done criterion."),
     promptGuidelines: goalToolGuidelines("create_goal"),
-    parameters: CreateGoalParams,
+    parameters: createGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const current = host.getGoal();
       const features = host.getFeatures?.() ?? DEFAULT_GOAL_FEATURES;

@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 
-import { compactContinuationPrompt, continuationPrompt } from "./prompts.js";
+import { inLanguage, type Language } from "../language.js";
+import { avoidRepeatLine, compactContinuationPrompt, continuationPrompt } from "./prompts.js";
 import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "./types.js";
 
 type GoalCompactionInput = Pick<SessionBeforeCompactEvent["preparation"], "messagesToSummarize" | "turnPrefixMessages">;
 type PreparedMessage = GoalCompactionInput["messagesToSummarize"][number];
-const INSTRUCTION_BOUNDARY = "\nAvoid repeating work that is already done. Choose the next concrete action toward the objective.";
+// Журнал может содержать продолжения, записанные при другой настройке языка: кадр узнаётся на обоих.
+const LANGUAGES: readonly Language[] = ["ru", "en"];
 const NAMESPACED_GET_GOAL = " (or the exposed namespaced equivalent, such as pi__get_goal)";
 // Recognize shipped footers after wording changes without embedding their old instructions.
 const SHIPPED_FOOTERS = new Set([
@@ -16,10 +18,15 @@ const SHIPPED_FOOTERS = new Set([
 
 /** Ignore only the known accounting counters when recognizing a pure control copy. */
 function withoutBudgetCounters(content: string): string {
-  return content.replace(
-    /^Budget:\n- Time spent pursuing goal: [0-9 hms]+\n- Tokens used: [0-9.,KMB() ]+\n- Token budget: (?:none|[0-9.,KMB() ]+)\n- Tokens remaining: (?:unbounded|[0-9.,KMB() ]+)$/m,
-    "Budget:",
-  );
+  return content
+    .replace(
+      /^Budget:\n- Time spent pursuing goal: [0-9 hms]+\n- Tokens used: [0-9.,KMB() ]+\n- Token budget: (?:none|[0-9.,KMB() ]+)\n- Tokens remaining: (?:unbounded|[0-9.,KMB() ]+)$/m,
+      "Budget:",
+    )
+    .replace(
+      /^Бюджет:\n- Время работы над целью: [0-9 hms]+\n- Использовано токенов: [0-9.,KMB() ]+\n- Бюджет токенов: (?:нет|[0-9.,KMB() ]+)\n- Осталось токенов: (?:без ограничения|[0-9.,KMB() ]+)$/m,
+      "Бюджет:",
+    );
 }
 
 function projectContinuation(message: PreparedMessage): PreparedMessage | null {
@@ -35,15 +42,20 @@ function projectContinuation(message: PreparedMessage): PreparedMessage | null {
     usage: { tokensUsed: 0, activeSeconds: 0 }, createdAt: 0, updatedAt: 0,
   };
   const sourceContent = message.content;
-  const compact = compactContinuationPrompt(referenceGoal);
-  if (withoutBudgetCounters(message.content) === withoutBudgetCounters(compact)) return null;
+  const frames = LANGUAGES.map((target) => inLanguage(target, () => ({
+    compact: compactContinuationPrompt(referenceGoal),
+    full: continuationPrompt(referenceGoal),
+    boundary: `\n${avoidRepeatLine()}`,
+    budget: target === "ru" ? "\nБюджет:\n" : "\nBudget:\n",
+  })));
+  if (frames.some(({ compact }) => withoutBudgetCounters(sourceContent) === withoutBudgetCounters(compact))) return null;
 
   // Use the actual producers as the frame contract, not a second copy of their instructions.
   // Unknown frames remain intact; recognized bodies preserve every byte of factual context.
-  for (const [reference, start] of [
-    [compact, "\nBudget:\n"],
-    [continuationPrompt(referenceGoal), "<untrusted_objective>"],
-  ] as const) {
+  for (const [reference, start, INSTRUCTION_BOUNDARY] of frames.flatMap(({ compact, full, boundary, budget }) => [
+    [compact, budget, boundary],
+    [full, "<untrusted_objective>", boundary],
+  ] as const)) {
     const first = reference.indexOf(start);
     const last = reference.lastIndexOf(INSTRUCTION_BOUNDARY);
     if (first < 0 || last <= first) continue;

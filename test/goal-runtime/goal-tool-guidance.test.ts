@@ -45,8 +45,8 @@ test("однострочные подсказки инструментов, уд
 test("the status choice carries the local-blocker rule and the paragraph limit is discoverable", () => {
   const tool = definitions().find(tool => tool.name === "report_goal_progress")!;
   const status = (tool.parameters as { properties: { status: { description: string } } }).properties.status.description;
-  assert.match(status, /whole goal|whole Goal/);
-  assert.match(status, /independent|one item|local blocker/);
+  assert.match(status, /у всей цели нет безопасного следующего действия/);
+  assert.match(status, /независимую работу, даже если один пункт заблокирован/);
   assert.match(tool.description, /700/);
 });
 

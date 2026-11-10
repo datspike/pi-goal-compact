@@ -26,7 +26,7 @@ import {
   settleRun,
 } from "../support/runtime-harness.js";
 import { compactContinuationPrompt } from "../../src/goal/prompts.js";
-import { ProgressReportParams } from "../../src/goal/tools.js";
+import { progressReportParams } from "../../src/goal/tools.js";
 
 /** Первая причина, по которой отчёт должен быть опубликован, или `null`. */
 function reportDueReason(...args: Parameters<typeof reportDueReasons>) {
@@ -317,12 +317,12 @@ test("awaiting_user without needUser is rejected before it writes a report or ho
 });
 
 test("progress report schema has an object root and rejects unknown fields", () => {
-  assert.equal(ProgressReportParams.type, "object");
-  assert.equal(Check(ProgressReportParams, { action: "suppress" }), true);
-  assert.equal(Check(ProgressReportParams, { action: "suppress", phase: "лишнее" }), true);
-  assert.equal(Check(ProgressReportParams, { action: "publish", status: "working", phase: "работа", nextStep: "Продолжить." }), true);
-  assert.equal(Check(ProgressReportParams, { action: "publish", status: "awaiting_user", phase: "решение", nextStep: "Дождаться ответа." }), true);
-  assert.equal(Check(ProgressReportParams, { action: "publish", status: "working", phase: "работа", nextStep: "Продолжить.", unknown: true }), false);
+  assert.equal(progressReportParams().type, "object");
+  assert.equal(Check(progressReportParams(), { action: "suppress" }), true);
+  assert.equal(Check(progressReportParams(), { action: "suppress", phase: "лишнее" }), true);
+  assert.equal(Check(progressReportParams(), { action: "publish", status: "working", phase: "работа", nextStep: "Продолжить." }), true);
+  assert.equal(Check(progressReportParams(), { action: "publish", status: "awaiting_user", phase: "решение", nextStep: "Дождаться ответа." }), true);
+  assert.equal(Check(progressReportParams(), { action: "publish", status: "working", phase: "работа", nextStep: "Продолжить.", unknown: true }), false);
 });
 
 test("suppress rejects report fields before recording a side effect", async () => {

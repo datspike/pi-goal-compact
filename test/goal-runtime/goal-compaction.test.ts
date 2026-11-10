@@ -1,3 +1,4 @@
+import { inLanguage } from "../../src/language.js";
 import { readFileSync } from "node:fs";
 import { compactContinuationPrompt } from "../../src/goal/prompts.js";
 import assert from "node:assert/strict";
@@ -108,15 +109,28 @@ test("real mixed and legacy continuations keep their facts as projections, witho
 
 test("extra evidence inside a recognized frame is preserved rather than normalized away", () => {
   const { pure } = goalCompactionFixture();
-  const extended = { ...pure, content: pure.content.replace("\n\nBudget:", "\nKEEP_EXTRA_EVIDENCE: tests passed.\n\nBudget:") };
+  const extended = { ...pure, content: pure.content.replace(/\n\n(Budget|Бюджет):/, "\nKEEP_EXTRA_EVIDENCE: tests passed.\n\n$1:") };
+  assert.notEqual(extended.content, pure.content);
   const preparation: Input = { messagesToSummarize: [pure, extended], turnPrefixMessages: [] };
   filterGoalCompactionInput(preparation);
   assert.equal(preparation.messagesToSummarize.length, 1);
   const projected = preparation.messagesToSummarize[0] as typeof extended;
   assert.ok(projected.content.includes("KEEP_EXTRA_EVIDENCE: tests passed."));
-  assert.doesNotMatch(projected.content, /Avoid repeating work/);
+  assert.doesNotMatch(projected.content, /Avoid repeating work|Не повторяй уже сделанную работу/);
   assert.deepEqual((projected.details as { compactionProjection?: unknown }).compactionProjection,
     { version: 1, originalContent: extended.content });
+});
+
+test("кадр продолжения, записанный при другом языке, узнаётся и очищается", () => {
+  for (const [written, current] of [["en", "ru"], ["ru", "en"]] as const) {
+    const { pure, mixed } = inLanguage(written, () => goalCompactionFixture());
+    const preparation: Input = { messagesToSummarize: [pure, mixed], turnPrefixMessages: [] };
+    inLanguage(current, () => filterGoalCompactionInput(preparation));
+    assert.equal(preparation.messagesToSummarize.length, 1, `${written} → ${current}`);
+    const projected = preparation.messagesToSummarize[0] as typeof mixed;
+    assert.doesNotMatch(projected.content, /Avoid repeating work|Не повторяй уже сделанную работу/);
+    assert.equal((projected.details as { compactionProjection?: { originalContent?: unknown } }).compactionProjection?.originalContent, mixed.content);
+  }
 });
 
 test("recognized pure controls with finite budgets and large counters remain removable", () => {
