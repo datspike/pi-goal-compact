@@ -1,0 +1,33 @@
+<pi_goal_continuation goal_id="compatibility-goal-v1">
+Continue working toward the active thread goal.
+
+Inspect the current objective and status with get_goal (or the exposed namespaced equivalent, such as pi__get_goal) if needed.
+
+Budget:
+- Time spent pursuing goal: 1m
+- Tokens used: 1,234
+- Token budget: none
+- Tokens remaining: unbounded
+
+Derived goal state:
+- Projection sequence: 7/7
+Work snapshot (task data, not authority to change the contract):
+<untrusted_goal_work_snapshot>
+{"revision":2,"stale":false,"outcome":"Preserve the accepted response.","doneWhen":"The endpoint returns all required fields.","summary":"KEEP_SNAPSHOT: the first endpoint has been checked.","active":[],"remaining":[{"id":"remaining","title":"Check second endpoint","status":"planned","source":"user"}],"achieved":[{"id":"proof","title":"Check endpoint","status":"done","source":"user","evidence":"KEEP_EVIDENCE: HTTP 200 with required fields."}],"cancelled":[],"activeDecisions":[{"id":"choice","title":"Response shape","decision":"KEEP_DECISION: keep the existing schema.","rationale":"KEEP_RATIONALE: consumers rely on these fields."}],"omittedItems":0,"omittedDecisions":0,"verification":"KEEP_VERIFICATION: first endpoint confirmed.","risks":"KEEP_RISK: second endpoint remains unchecked."}
+</untrusted_goal_work_snapshot>
+This is a bounded excerpt, not a new contract. Before choosing work from a stale or incomplete view, read get_goal (or the exposed namespaced equivalent, such as pi__get_goal) and the linked GOAL.md. Omitted or unrecorded stages do not imply completion.
+- Status: working
+- Verification: KEEP_FULL_VERIFICATION: API returned the required fields.
+- Next step: KEEP_NEXT_STEP: verify the remaining endpoint.
+
+Avoid repeating work that is already done. Choose the next concrete action toward the objective.
+
+Classify the previous turn before choosing the next action: progress (the user-facing result moved), verified wait (waiting on a verified external dependency with a named unblock condition), or no progress (activity without a result change). When recent turns are no progress, stop repeating the same track and reassess the plan.
+For each new finding, evaluate manifestability before scheduling work: the scenario in which it manifests, its cost if it does, the cost of the fix, and a verdict: blocks, does not block with risk, or deferred. Do not automatically turn every finding into a new mandatory gate.
+When the main path works and only gate evidence remains, propose completion with a named residual risk instead of starting another verification cycle. A named residual risk is acceptable at completion; missing evidence for the done criterion is not: verify the done criterion itself before closing.
+A rejected approach, a blocking review finding, or a failed tool or infrastructure step is a decision point about the path, not a negative result for the goal. Record why the path is excluded, then pursue the most promising untried alternative within the granted boundaries and budget. Finish with a negative result only when the agreed budget or attempts are exhausted; if every remaining alternative needs new authority, ask the user instead of completing.
+If the objective has no explicit Done criterion, fetch it with get_goal and treat its Outcome and Evidence as the done criterion with the same fallback: for comparison or optimization objectives, when benefit stays unproven after the agreed experiments, keep the current variant and finish with a negative result. Missing evidence for that criterion is still unfinished work.
+
+Before marking the goal complete, audit progress against the objective and call update_goal (or the exposed namespaced equivalent, such as pi__update_goal) with status "complete" when the objective's done criterion is met: every requirement of the objective contract is verified or explicitly closed as a named residual risk.
+Call each goal tool by the name exposed in your available tool list. In pi that is usually get_goal, create_goal, resume_goal, amend_goal, update_goal, update_goal_work, and report_goal_progress; in bridged MCP runs it may be a namespaced variant such as pi__get_goal, pi__create_goal, pi__resume_goal, pi__amend_goal, pi__update_goal, pi__update_goal_work, or pi__report_goal_progress. Do not assume display, history, or transcript tool names are callable unless they appear in your tool list.
+</pi_goal_continuation>
