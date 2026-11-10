@@ -16,5 +16,8 @@
     "@earendil-works/pi-tui",
     "typebox",
     "jscpd"
+  ],
+  "ignoreBinaries": [
+    "java"
   ]
 }

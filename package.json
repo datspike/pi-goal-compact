@@ -29,7 +29,8 @@
     "lint:dup": "jscpd",
     "lint:style": "eslint src scripts test",
     "check:public": "node --import tsx scripts/check-public-tree.ts",
-    "verify": "npm run typecheck && npm run lint:arch && npm run lint:dead && npm test && npm run check:public"
+    "verify": "npm run typecheck && npm run lint:arch && npm run lint:dead && npm test && npm run check:public && npm run check:formal",
+    "check:formal": "tsx scripts/check-formal.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
