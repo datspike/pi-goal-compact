@@ -108,8 +108,9 @@ OwnerInput ==
     /\ errorTimer' = FALSE
     /\ UNCHANGED <<goal, queue, writeUnknown, checkpoint, subagents, bad>>
 
-\* /gr: возобновление паузы командой. Билет, а не прямой запуск: команда
-\* приходит в простое, работу начнёт доставка.
+\* Возобновление паузы с продолжением: автовозобновление после лимита
+\* провайдера или согласие владельца при открытии сессии. Билет, а не прямой
+\* запуск: работу начнёт доставка. Молчаливое /gr продолжения не даёт.
 ResumeCommand ==
     /\ agent = "idle"
     /\ goal = "paused"
@@ -138,11 +139,12 @@ SwitchBranch ==
     /\ epoch' = epoch + 1
     /\ checkpoint' = "none"
     /\ errorTimer' = FALSE
-    \* На новой ветке активная цель сама не продолжается: владелец видит,
-    \* что она активна, и решает сам.
-    /\ notice' = (goal = "active")
-    /\ UNCHANGED <<goal, agent, outcome, queue, ownerReplied, writeUnknown,
-                   subagents, bad>>
+    \* Активная цель продолжается на новой ветке сама, как в прежнем
+    \* расширении: билет новой эпохи. Негодный билет объяснит доставка.
+    /\ queue' = IF goal = "active" THEN Append(queue, [e |-> epoch + 1, k |-> "goal"])
+              ELSE queue
+    /\ UNCHANGED <<goal, agent, outcome, ownerReplied, writeUnknown,
+                   subagents, notice, bad>>
 
 Abort ==
     /\ agent = "running"

@@ -146,13 +146,20 @@ describe("контрольная точка с продолжением", () => 
 describe("билет продолжения на входе в прогон", () => {
   const arrive = (runtime: FakePi, message: any) => runtime.event("before_agent_start", { type: "before_agent_start", messageType: "custom", message, systemPrompt: "", systemPromptOptions: {} });
 
-  test("свежий билет проходит, устаревший прерывается, а в окне модели гаснет", async () => {
+  // В Pi 1.5 отмена из before_agent_start не останавливает запрос к модели: у прогона ещё нет
+  // сигнала отмены. Поэтому отказ исполняется при первой сборке окна того же прогона.
+  test("свежий билет проходит, устаревший прерывается при сборке окна и гаснет в нём", async () => {
     const runtime = fakePi({ language: "en" });
     await completeManual(runtime);
     const ticket = runtime.sent[0]!.message;
     await arrive(runtime, ticket);
+    await runtime.event("context", { messages: [] });
     expect(runtime.aborts).toBe(0);
     await arrive(runtime, ticket);
+    expect(runtime.aborts).toBe(0);
+    await runtime.event("context", { messages: [] });
+    expect(runtime.aborts).toBe(1);
+    await runtime.event("context", { messages: [] });
     expect(runtime.aborts).toBe(1);
 
     const second = fakePi({ language: "en" });
@@ -160,8 +167,8 @@ describe("билет продолжения на входе в прогон", ()
     const stale = second.sent[0]!.message;
     await second.event("input", { text: "новая реплика", source: "interactive" });
     await arrive(second, stale);
-    expect(second.aborts).toBe(1);
     const context = await second.event("context", { messages: [{ role: "custom", ...stale }] });
+    expect(second.aborts).toBe(1);
     expect(context.messages[0].content).not.toContain("Continue the main objective");
   });
 
@@ -179,8 +186,10 @@ describe("билет продолжения на входе в прогон", ()
   test("билет другого процесса прерывается, чужие сообщения не трогаются", async () => {
     const runtime = fakePi({ language: "en" });
     await arrive(runtime, { customType: "goal-compact-ticket", content: "x", details: { id: "a", runtime: "other", epoch: 0, kind: "checkpoint" } });
+    await runtime.event("context", { messages: [] });
     expect(runtime.aborts).toBe(1);
     await arrive(runtime, { customType: "other-extension", content: "x" });
+    await runtime.event("context", { messages: [] });
     expect(runtime.aborts).toBe(1);
   });
 });

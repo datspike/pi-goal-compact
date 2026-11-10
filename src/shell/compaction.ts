@@ -17,6 +17,7 @@ import type { CheckpointRequest, CoreEffect, CompactionReason } from "../core/mo
 import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from "../request-stage/index.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
+import type { Tickets } from "./tickets.js";
 import { notice, sayFor } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
 
@@ -53,33 +54,17 @@ function routeOf(ctx: ExtensionContext): string {
 	return JSON.stringify(model ? [model.provider, model.id, model.api, model.baseUrl ?? ""] : null);
 }
 
-/** Неотправленный билет этого процесса заменяется в окне модели пустой пометкой (решение 0002). */
-const EXPIRED_TICKET = "Это служебное продолжение устарело; не выполняй его.";
-
-interface TicketDetails { id: string; runtime: string; epoch: number; kind: string }
-
-function ticketDetails(value: unknown): TicketDetails | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const details = value as Partial<TicketDetails>;
-	return typeof details.id === "string" && typeof details.runtime === "string" && typeof details.epoch === "number" && typeof details.kind === "string"
-		? details as TicketDetails
-		: undefined;
-}
-
 type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "repairAttempts"> & { sessionId: string };
 
 /**
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
  * карточки и рабочая стадия (строки реестра С01–С14).
  */
-export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver): (effect: CoreEffect, ctx: ExtensionContext) => void {
+export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets): (effect: CoreEffect, ctx: ExtensionContext) => void {
 	const language = settings.summaryLanguage;
 	const say = sayFor(language);
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
 	const stage = createRequestStage();
-	const runtime = randomUUID();
-	const issuedTickets = new Set<string>();
-	const admittedTickets = new Set<string>();
 	let summarySequence = 0;
 	let pendingCard: PendingCard | undefined;
 	let manualCorrelation: string | undefined;
@@ -145,27 +130,18 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 				return;
 			}
 			case "send_ticket": {
-				const id = randomUUID();
-				issuedTickets.add(id);
-				const details: TicketDetails = { id, runtime, epoch: effect.ticket.epoch, kind: effect.ticket.kind };
-				try {
-					pi.sendMessage(
-						{ customType: RECORD.ticket, content: continuationPrompt(effect.request as unknown as CheckpointParams, language), display: false, details },
-						{ triggerTurn: true },
-					);
+				if (effect.ticket.kind !== "checkpoint") return;
+				const sent = tickets.send(effect, continuationPrompt(effect.request as unknown as CheckpointParams, language));
+				if (sent) {
 					manual(ctx, "continuation-claimed");
 					manual(ctx, "send-attempted");
-				} catch {
+				} else {
 					manual(ctx, "error");
 					notice(ctx, say("Не удалось поставить continuation после compact", "Could not queue continuation after compaction"), "error");
-				} finally {
-					manualCorrelation = undefined;
 				}
+				manualCorrelation = undefined;
 				return;
 			}
-			case "abort_run":
-				ctx.abort();
-				return;
 			case "checkpoint_cancelled":
 				manual(ctx, effect.reason === "failed" ? "error" : "cancel");
 				manualCorrelation = undefined;
@@ -174,6 +150,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 			case "checkpoint_scheduled":
 			case "checkpoint_refused":
 			case "admit_ticket":
+			case "abort_run":
+			case "continue_goal":
 				return;
 		}
 	};
@@ -235,30 +213,10 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		if (event.source !== "extension") driver.dispatch({ type: "owner_input" }, ctx);
 		return undefined;
 	});
-	pi.on("before_agent_start", (event, ctx) => {
-		stage.observe("before_agent_start", event, ctx);
-		if (event.messageType !== "custom" || event.message.customType !== RECORD.ticket) return undefined;
-		const details = ticketDetails(event.message.details);
-		// Билет другого процесса (после /reload или из старой сессии) не может быть годен: эпоха -1 никогда не совпадёт.
-		const epoch = details && details.runtime === runtime ? details.epoch : -1;
-		const effects = driver.dispatch({ type: "ticket_arrived", ticket: { epoch, kind: "checkpoint" } }, ctx);
-		if (details && effects.some((effect) => effect.type === "admit_ticket")) admittedTickets.add(details.id);
-		return undefined;
-	});
+	pi.on("before_agent_start", (event, ctx) => { stage.observe("before_agent_start", event, ctx); });
 	pi.on("agent_start", (event, ctx) => {
 		stage.observe("agent_start", event, ctx);
 		driver.dispatch({ type: "run_started" }, ctx);
-	});
-	pi.on("context", (event) => {
-		let changed = false;
-		const messages = event.messages.map((message) => {
-			if (message.role !== "custom" || message.customType !== RECORD.ticket) return message;
-			const details = ticketDetails(message.details);
-			if (!details || details.runtime !== runtime || !issuedTickets.has(details.id) || admittedTickets.has(details.id)) return message;
-			changed = true;
-			return { ...message, content: EXPIRED_TICKET };
-		});
-		return changed ? { messages } : undefined;
 	});
 	pi.on("agent_settled", (event, ctx) => {
 		stage.observe("agent_settled", event, ctx);

@@ -13,10 +13,10 @@ import { createGoalReports, holdsContinuation, type GoalReportAction, type GoalR
 import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-runtime-status.js";
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
 import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
-import { clearActiveHostOverflowRecovery, createGoalRecoveryMachine, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
+import { beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
 import type { GoalProgressReport } from "../goal/report-schema.js";
-import { amendGoal as appendAmendment, goalsEquivalent, goalWithLiveUsage, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
-import type { GoalEntrySource, GoalResult, ThreadGoal } from "../goal/types.js";
+import { amendGoal as appendAmendment, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
+import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { goalContext } from "./goal-context.js";
 
 const ARTIFACT_LINK_LABELS = { GOAL: "Сводка" } as const;
@@ -36,6 +36,10 @@ export interface GoalRunHooks {
   /** Отменить отложенное автовозобновление после лимита провайдера. */
   cancelProviderLimitAutoResume(): void;
   isProviderLimitAutoResumeScheduled(goalId: string): boolean;
+  /** Прогон прерван самим расширением (отказ устаревшему билету), а не владельцем. */
+  ownAbort(): boolean;
+  /** Скрытые продолжения дошли до предела и ждут слова владельца. */
+  isLimitHeld(): boolean;
 }
 
 const NO_RUN_HOOKS: GoalRunHooks = {
@@ -44,6 +48,8 @@ const NO_RUN_HOOKS: GoalRunHooks = {
   invalidateExternalRetry: () => {},
   cancelProviderLimitAutoResume: () => {},
   isProviderLimitAutoResumeScheduled: () => false,
+  ownAbort: () => false,
+  isLimitHeld: () => false,
 };
 
 type AmendmentOutcome = { language: { verdict: string }; state: { languageRepair: { artifact: string } | null; currentProjectionSeq: number; stateSeq: number } };
@@ -61,6 +67,8 @@ export function createGoalSession(pi: ExtensionAPI) {
   let activity: GoalRuntimeActivity | null = null;
   let agentRunSequence = 0;
   let currentTurnIndex: number | null = null;
+  // Запуск от чужого расширения: его не учитывают и не продолжают (Ц31). Держится до следующего допуска.
+  let foreignRun = false;
 
   // Пока документ не синхронизирован или запись не подтверждена, внешние записи запрещены.
   const persistence = createGoalPersistence({ pi, assertExternalWrite: () => projections.assertWritable() });
@@ -630,7 +638,61 @@ export function createGoalSession(pi: ExtensionAPI) {
     flush: (source: GoalEntrySource) => persistence.flushGoalPersistence(source),
     maybeFlushRuntime: (source: GoalEntrySource) => persistence.maybeFlushRuntimePersistence(source),
     pauseForAbort(ctx: ExtensionContext): void {
-      if (getGoal()?.status === "active") applyTransition({ kind: "abort_pause" }, ctx);
+      // Свой отказ устаревшему билету — не обрыв владельцем (решение 0002).
+      if (getGoal()?.status === "active" && !hooks.ownAbort()) applyTransition({ kind: "abort_pause" }, ctx);
+    },
+    /** Техническая пауза: восстановление после ошибки исчерпано или повтор PiRetry не удался. */
+    pauseForRecovery(ctx: ExtensionContext, recoveryReason: string): void {
+      if (getGoal()?.status === "active") applyTransition({ kind: "recovery_pause", recoveryReason }, ctx);
+    },
+    /** Esc во время ожидания повтора PiRetry: техническая пауза становится ручной. */
+    pauseManually(ctx: ExtensionContext): void {
+      const goal = getGoal();
+      if (goal?.status !== "paused" || goal.pause?.kind !== "recovery") {
+        if (goal?.status === "active" && !hooks.ownAbort()) applyTransition({ kind: "abort_pause" }, ctx);
+        return;
+      }
+      const nextGoal = cloneGoal(goal);
+      nextGoal.pause = { kind: "manual", reason: "Assistant execution was interrupted by user." };
+      nextGoal.updatedAt = nonDecreasingUpdatedAt(goal);
+      applyTransition({ kind: "set", nextGoal, source: "runtime" }, ctx);
+    },
+    /** При закрытии сессии с незавершённым восстановлением цель уходит на техническую паузу. */
+    pauseForShutdown(ctx: ExtensionContext, recoveryReason: string): void {
+      if (getGoal()?.status === "active") applyTransition({ kind: "recovery_shutdown_pause", recoveryReason }, ctx);
+    },
+    /**
+     * Ход упёрся в окно контекста: Pi сожмёт и повторит сам. Пока он это делает, продолжение цели
+     * не нужно. Новый старт цели после переполнения требует обычной реплики владельца — отметка
+     * об этом пишется в журнал, чтобы пережить перезагрузку.
+     */
+    beginOverflowRecovery(ctx: ExtensionContext): void {
+      const active = getGoal()?.status === "active";
+      const persist = active ? beginHostOverflowRecovery(recovery).persistHostOverflowCapReset : requireHostOverflowUserReset(recovery);
+      if (active) status.refreshUi(ctx);
+      if (persist) pi.appendEntry(CUSTOM_ENTRY_TYPE, hostOverflowCapResetEntry(true));
+    },
+    resetRecovery(): void { resetRecoveryMachine(recovery); },
+    hasUnconfirmedWrite: () => unconfirmedWrite() !== null,
+    markRun(foreign: boolean): void { foreignRun = foreign; },
+    runIsForeign: () => foreignRun,
+    /** Данные цели для текста продолжения: план, следующий шаг, удержания. */
+    continuationSnapshot() {
+      const goal = getGoal();
+      const current = projections.current();
+      const projection = goal && current?.goalId === goal.goalId ? current : null;
+      const reportState = reports.getState();
+      if (!projection && !reportState.lastReport) return undefined;
+      const working = goalWorkingState(goal, projection, reportState);
+      return {
+        stateSeq: projection?.stateSeq ?? 0, currentProjectionSeq: projection?.currentProjectionSeq ?? 0,
+        status: working.progressStatus ?? undefined, currentStep: working.currentStep ?? undefined, nextStep: working.nextStep ?? undefined,
+        verification: working.latestUsefulVerification ?? undefined, blockers: working.blocker ?? undefined, needUser: working.needUser ?? undefined,
+        workState: working.workState, workRevision: working.workRevision, workStateStale: working.workStateStale, activeDecisions: working.activeDecisions,
+        openPaperCuts: projection?.paperCuts.filter((item) => item.status === "open").length ?? 0,
+        repairPending: projections.repair() !== null, awaitingUser: reportState.awaitingUser,
+        continuationHeld: reports.isContinuationHeld() || hooks.isLimitHeld(), userAnswerReceived: reportState.hasUserDecisionSinceAwaiting,
+      };
     },
     resumePausedGoal,
     resumeGateFailure,

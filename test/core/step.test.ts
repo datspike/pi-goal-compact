@@ -80,15 +80,15 @@ describe("билет продолжения", () => {
   const issued = run([...compacted, done]).state;
 
   test("свежий билет допускается один раз", () => {
-    const first = step(issued, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" } });
+    const first = step(issued, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" }, gate: "absent" });
     expect(first.effects).toEqual([{ type: "admit_ticket" }]);
-    const second = step(first.state, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" } });
+    const second = step(first.state, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" }, gate: "absent" });
     expect(second.effects).toEqual([{ type: "abort_run" }]);
   });
 
   test("после реплики владельца билет устарел, и его прерывание не считается обрывом", () => {
     const answered = step(issued, { type: "owner_input" }).state;
-    const stale = step(answered, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" } });
+    const stale = step(answered, { type: "ticket_arrived", ticket: { epoch: issued.epoch, kind: "checkpoint" }, gate: "absent" });
     expect(stale.effects).toEqual([{ type: "abort_run" }]);
     expect(stale.state.selfAbort).toBe(true);
     const pending = step(stale.state, { type: "checkpoint_requested", request, alreadyCompacted: false }).state;
@@ -98,6 +98,53 @@ describe("билет продолжения", () => {
   });
 
   test("билет чужого процесса прерывается", () => {
-    expect(step(issued, { type: "ticket_arrived", ticket: { epoch: -1, kind: "checkpoint" } }).effects).toEqual([{ type: "abort_run" }]);
+    expect(step(issued, { type: "ticket_arrived", ticket: { epoch: -1, kind: "checkpoint" }, gate: "absent" }).effects).toEqual([{ type: "abort_run" }]);
+  });
+});
+
+describe("продолжение цели", () => {
+  const running = run([{ type: "run_started" }]).state;
+  const settle = (gate: "runs" | "held" | "absent", extra: Partial<{ outcome: "completed" | "aborted" | "error"; pendingMessages: boolean }> = {}): CoreEvent =>
+    ({ type: "before_settle", gate, outcome: extra.outcome ?? "completed", pendingMessages: extra.pendingMessages ?? false });
+
+  test("граница перед простоем продолжает только разрешённую цель после удачного прогона", () => {
+    expect(step(running, settle("runs")).effects).toEqual([{ type: "continue_goal" }]);
+    expect(step(running, settle("held")).effects).toEqual([]);
+    expect(step(running, settle("absent")).effects).toEqual([]);
+    expect(step(running, settle("runs", { outcome: "error" })).effects).toEqual([]);
+    expect(step(running, settle("runs", { outcome: "aborted" })).effects).toEqual([]);
+  });
+
+  test("реплика владельца в очереди и ждущая контрольная точка важнее продолжения", () => {
+    expect(step(running, settle("runs", { pendingMessages: true })).effects).toEqual([]);
+    expect(run([...scheduled, settle("runs")]).effects).toEqual(["checkpoint_scheduled"]);
+  });
+
+  test("пробуждение из простоя ставит один билет цели, во время прогона не нужно", () => {
+    const idle = run([{ type: "run_started" }, { type: "settled", aborted: false }]).state;
+    const woken = step(idle, { type: "wake", gate: "runs" });
+    expect(woken.effects).toEqual([{ type: "send_ticket", ticket: { epoch: idle.epoch, kind: "goal" }, request: null }]);
+    expect(step(woken.state, { type: "wake", gate: "runs" }).effects).toEqual([]);
+    expect(step(idle, { type: "wake", gate: "held" }).effects).toEqual([]);
+    expect(step(running, { type: "wake", gate: "runs" }).effects).toEqual([]);
+  });
+
+  test("билет цели допускается, только пока цель разрешает работу и эпоха та же", () => {
+    const idle = run([{ type: "run_started" }, { type: "settled", aborted: false }]).state;
+    const issued = step(idle, { type: "wake", gate: "runs" }).state;
+    const ticket = { epoch: issued.epoch, kind: "goal" as const };
+    expect(step(issued, { type: "ticket_arrived", ticket, gate: "runs" }).effects).toEqual([{ type: "admit_ticket" }]);
+    // Цель ушла в ожидание ответа владельца между постановкой и доставкой.
+    expect(step(issued, { type: "ticket_arrived", ticket, gate: "held" }).effects).toEqual([{ type: "abort_run" }]);
+    expect(step(issued, { type: "ticket_arrived", ticket, gate: "absent" }).effects).toEqual([{ type: "abort_run" }]);
+    const switched = step(issued, { type: "context_switched" }).state;
+    expect(step(switched, { type: "ticket_arrived", ticket, gate: "runs" }).effects).toEqual([{ type: "abort_run" }]);
+  });
+
+  test("продолжение после сжатия по запросу агента не обходит ожидающую цель", () => {
+    const { state } = run([...compacted, done]);
+    const ticket = { epoch: state.epoch, kind: "checkpoint" as const };
+    expect(step(state, { type: "ticket_arrived", ticket, gate: "held" }).effects).toEqual([{ type: "abort_run" }]);
+    expect(step(state, { type: "ticket_arrived", ticket, gate: "runs" }).effects).toEqual([{ type: "admit_ticket" }]);
   });
 });

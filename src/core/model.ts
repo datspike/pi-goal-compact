@@ -33,7 +33,15 @@ export const initialState: CoreState = {
   selfAbort: false,
 };
 
-export type TicketKind = "checkpoint";
+/** checkpoint — продолжение после сжатия по запросу агента; goal — продолжение цели из простоя. */
+export type TicketKind = "checkpoint" | "goal";
+
+/**
+ * Что цель разрешает прямо сейчас. Решает модуль цели, ядро только сверяет.
+ * runs — работать без владельца; held — цель есть, но стоит (ожидание ответа, пауза,
+ * неизвестный исход записи, предел продолжений, сабагент); absent — цели нет или она закрыта.
+ */
+export type GoalGate = "runs" | "held" | "absent";
 
 export interface Ticket {
   readonly epoch: number;
@@ -57,7 +65,14 @@ export type CoreEvent =
   /** pendingMessages — у Pi уже есть ждущее сообщение, и оно само запустит прогон. */
   | { readonly type: "checkpoint_compact_done"; readonly ok: boolean; readonly pendingMessages: boolean }
   /** Билет дошёл до before_agent_start. */
-  | { readonly type: "ticket_arrived"; readonly ticket: Ticket };
+  | { readonly type: "ticket_arrived"; readonly ticket: Ticket; readonly gate: GoalGate }
+  /**
+   * Граница agent_before_settle: последняя точка прогона перед простоем.
+   * pendingMessages — в очереди Pi уже есть сообщение (обычно реплика владельца), оно и пойдёт дальше.
+   */
+  | { readonly type: "before_settle"; readonly gate: GoalGate; readonly outcome: "completed" | "aborted" | "error"; readonly pendingMessages: boolean }
+  /** Повод начать работу цели из простоя: сабагент закончил, возобновление, смена ветки, сжатие. */
+  | { readonly type: "wake"; readonly gate: GoalGate };
 
 export type CheckpointRefusal = "in_progress" | "already_compacted";
 
@@ -65,7 +80,10 @@ export type CoreEffect =
   | { readonly type: "checkpoint_scheduled" }
   | { readonly type: "checkpoint_refused"; readonly reason: CheckpointRefusal }
   | { readonly type: "compact"; readonly request: CheckpointRequest }
-  | { readonly type: "send_ticket"; readonly ticket: Ticket; readonly request: CheckpointRequest }
+  /** request есть только у билета контрольной точки. */
+  | { readonly type: "send_ticket"; readonly ticket: Ticket; readonly request: CheckpointRequest | null }
+  /** Продолжить цель следующим запросом модели в том же прогоне. */
+  | { readonly type: "continue_goal" }
   | { readonly type: "admit_ticket" }
   | { readonly type: "abort_run" }
   /** Контрольная точка снята: путь из простоя не нужен. */

@@ -17,6 +17,7 @@ import {
   isGoalReportEntry,
 } from "../goal/goal-reports.js";
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
+import { isAssistantContextOverflow, isErrorAssistantMessage } from "../goal/recovery.js";
 import { registerGoalTools } from "../goal/tools.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
@@ -99,8 +100,6 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     cancelProviderLimitAutoResume: (_goalId, ctx) => session.cancelProviderLimitAutoResume(ctx),
   });
 
-  // Учёт идёт только для своих запусков; признак держится до следующего допуска.
-  let foreignRun = false;
   let terminalUsageAccounted = false;
   let terminalFallbackHandled = false;
   let agentEndHandled = false;
@@ -111,7 +110,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     session.status.setActivity(name ? { label: `инструмент: ${name}` } : null);
   };
   const resetRun = (): void => {
-    foreignRun = false;
+    session.markRun(false);
     activeToolCalls.clear();
   };
   const reload = async (ctx: ExtensionContext): Promise<void> => {
@@ -143,8 +142,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("before_agent_start", async (event) => {
-    foreignRun = isForeignRun(event);
-    if (foreignRun) return undefined;
+    session.markRun(isForeignRun(event));
+    if (session.runIsForeign()) return undefined;
     // Напоминание об отчёте уходит в ход между вызовами инструментов, а не в системный промпт:
     // изменённый префикс сбросил бы кэш провайдера для всего запроса.
     session.reports.maybeMarkDue(session.getGoal(), session.getTurnIndex());
@@ -153,7 +152,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
 
   // Напоминание действует один запуск; в следующем окне оно гасится.
   pi.on("context", async (event) => {
-    if (foreignRun) return undefined;
+    if (session.runIsForeign()) return undefined;
     let changed = false;
     const messages = event.messages.map((message) => {
       if (message.role !== "custom" || message.customType !== GOAL_PROGRESS_INSTRUCTION_CUSTOM_TYPE) return message;
@@ -164,7 +163,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("agent_start", async () => {
-    if (foreignRun) return;
+    if (session.runIsForeign()) return;
     session.noteAgentRun();
     terminalUsageAccounted = false;
     terminalFallbackHandled = false;
@@ -172,7 +171,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("turn_start", async (event, ctx) => {
-    if (foreignRun) return;
+    if (session.runIsForeign()) return;
     session.setTurnIndex(event.turnIndex);
     terminalUsageAccounted = false;
     terminalFallbackHandled = false;
@@ -184,14 +183,14 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("tool_execution_start", async (event, ctx) => {
-    if (foreignRun) return;
+    if (session.runIsForeign()) return;
     activeToolCalls.set(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`, event.toolName);
     refreshToolActivity();
     session.status.refreshUi(ctx);
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
-    if (foreignRun) return;
+    if (session.runIsForeign()) return;
     activeToolCalls.delete(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`);
     if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? `ошибка инструмента: ${event.toolName}` : `завершён инструмент: ${event.toolName}` });
     else refreshToolActivity();
@@ -201,7 +200,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("turn_end", async (event, ctx) => {
-    if (foreignRun) return;
+    if (session.runIsForeign()) return;
     activeToolCalls.clear();
     session.status.setActivity(null);
     if (terminalFallbackHandled) return;
@@ -213,6 +212,12 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     session.flush("runtime");
     if (isAbortedAssistantMessage(message)) {
       session.pauseForAbort(ctx);
+      return;
+    }
+    // Ошибку разбирает конец прогона, когда Pi закончит свои повторы.
+    if (isErrorAssistantMessage(message as Parameters<typeof isErrorAssistantMessage>[0])) return;
+    if (isAssistantContextOverflow(message as Parameters<typeof isAssistantContextOverflow>[0], ctx.model?.contextWindow ?? 0)) {
+      session.beginOverflowRecovery(ctx);
       return;
     }
     // Удачный ход обнуляет счётчики повторов, внимание к ошибке остаётся до слова владельца.
@@ -234,7 +239,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("agent_end", async (event, ctx) => {
-    if (foreignRun) {
+    if (session.runIsForeign()) {
       session.endUserTurn();
       return;
     }

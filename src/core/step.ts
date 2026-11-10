@@ -1,10 +1,15 @@
-import type { CoreEffect, CoreEvent, CoreState, StepResult, Ticket } from "./model.js";
+import type { CoreEffect, CoreEvent, CoreState, GoalGate, StepResult, Ticket } from "./model.js";
 
 const result = (state: CoreState, ...effects: CoreEffect[]): StepResult => ({ state, effects });
 
-/** Билет годен, только если с его постановки не было реплики владельца и смены контекста. */
-function admissible(state: CoreState, ticket: Ticket): boolean {
-  return ticket.epoch === state.epoch && state.ticketEpoch === ticket.epoch;
+/**
+ * Билет годен, только если с его постановки не было реплики владельца и смены контекста,
+ * а цель всё ещё разрешает работу. Продолжение после сжатия по запросу агента законно и без
+ * цели: агент сам попросил сжать и продолжить; но ожидающую или приостановленную цель оно не обходит.
+ */
+function admissible(state: CoreState, ticket: Ticket, gate: GoalGate): boolean {
+  const fresh = ticket.epoch === state.epoch && state.ticketEpoch === ticket.epoch;
+  return fresh && (ticket.kind === "goal" ? gate === "runs" : gate !== "held");
 }
 
 /**
@@ -61,8 +66,20 @@ export function step(state: CoreState, event: CoreEvent): StepResult {
       const ticket: Ticket = { epoch: state.epoch, kind: "checkpoint" };
       return result({ ...cleared, ticketEpoch: state.epoch }, { type: "send_ticket", ticket, request });
     }
+    case "before_settle": {
+      // Ждущая контрольная точка сама запустит работу после сжатия; ошибку и обрыв разбирает модуль цели.
+      const continues = event.gate === "runs" && event.outcome === "completed" && !event.pendingMessages &&
+        state.agent === "running" && state.checkpoint.phase === "none";
+      return continues ? result(state, { type: "continue_goal" }) : result(state);
+    }
+    case "wake": {
+      // Во время прогона будить не нужно: решение примет граница перед простоем. Свежий билет — один.
+      if (event.gate !== "runs" || state.agent !== "idle" || state.checkpoint.phase !== "none" || state.ticketEpoch === state.epoch) return result(state);
+      const ticket: Ticket = { epoch: state.epoch, kind: "goal" };
+      return result({ ...state, ticketEpoch: state.epoch }, { type: "send_ticket", ticket, request: null });
+    }
     case "ticket_arrived": {
-      if (admissible(state, event.ticket)) return result({ ...state, agent: "running", ticketEpoch: null }, { type: "admit_ticket" });
+      if (admissible(state, event.ticket, event.gate)) return result({ ...state, agent: "running", ticketEpoch: null }, { type: "admit_ticket" });
       return result({ ...state, selfAbort: true }, { type: "abort_run" });
     }
   }

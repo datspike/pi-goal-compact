@@ -66,6 +66,7 @@ export function fakePi(options: FakeOptions = {}) {
       commands.set(name, { name, source: "extension", ...value });
     },
     getCommands() { return [...commands.values()]; },
+    getAllTools() { return [...tools.keys()].map((name) => ({ name })); },
     // Как в Pi: обработчики одного события вызываются по порядку регистрации на одном объекте события.
     on(name: string, value: any) { handlers.set(name, [...(handlers.get(name) ?? []), value]); },
     events: {
