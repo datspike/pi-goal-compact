@@ -18,6 +18,9 @@ export const RECORD = {
   standard: "goal-compact-standard",
   card: "goal-compact-card",
   ticket: "goal-compact-ticket",
+  /** Сообщения начала окна; в журнал не пишутся, собираются заново при каждом запросе (решение 0004). */
+  agreement: "goal-compact-agreement",
+  ownerReplies: "goal-compact-owner-replies",
 } as const;
 
 /** Прежнее имя → новое. Поля записей при этом не меняются: формат тот же. */

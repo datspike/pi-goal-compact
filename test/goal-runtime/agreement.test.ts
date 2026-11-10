@@ -151,3 +151,14 @@ test("с выключенной сверкой закрытие идёт с пе
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test("собранное расширение ставит договорённость за сводкой сжатия в каждом запросе", async () => {
+  const harness = await setup();
+  const summary = { role: "compactionSummary", summary: "## Цель\nПересказ.\n\n## Прогресс\n- шаг", tokensBefore: 10, timestamp: 1 };
+  const results = await harness.emit("context", { type: "context", messages: [summary, { role: "user", content: "дальше", timestamp: 2 }] }) as Array<{ messages?: Array<{ role: string; customType?: string; content?: unknown; summary?: string }> } | undefined>;
+  const messages = results.find((result) => result?.messages?.some((message) => message.customType === "goal-compact-agreement"))?.messages;
+  assert.ok(messages, "договорённость должна попасть в окно");
+  assert.equal(messages[0]!.summary, "## Прогресс\n- шаг");
+  assert.equal(messages[1]!.customType, "goal-compact-agreement");
+  assert.match(String(messages[1]!.content), /Собрать отчёт о продажах за квартал/);
+});
