@@ -2,7 +2,7 @@ import type { CustomMessageEntryDraft, ExtensionAPI, ExtensionContext } from "@e
 
 import type { CoreEffect, GoalGate } from "../core/model.js";
 import { createExternalRetryRecovery } from "../goal/external-retry-recovery.js";
-import { compactContinuationPrompt } from "../goal/prompts.js";
+import { compactContinuationPrompt, continuationGoalIdFromPrompt } from "../goal/prompts.js";
 import { createProviderLimitAutoResumeScheduler } from "../goal/provider-limit-auto-resume.js";
 import { recoveryPhaseBlocksContinuation, setRecoveryPendingAttention } from "../goal/recovery-machine.js";
 import { createGoalRecoveryRuntime } from "../goal/recovery-runtime.js";
@@ -90,10 +90,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   const continuationText = (goal: ThreadGoal): string => compactContinuationPrompt(goal, session.continuationSnapshot());
 
   /** Повод начать работу из простоя. Во время прогона и при сообщениях в очереди решит граница перед простоем. */
-  const wake = (ctx: ExtensionContext, explicit = false): void => {
+  const wake = (ctx: ExtensionContext): void => {
     wakeContext = ctx;
     noticeIfLimitHeld();
-    const reason = holdReason(explicit);
+    const reason = holdReason();
     if (reason === "subagents") {
       subagents.hold();
       return;
@@ -108,12 +108,22 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     timer.unref?.();
   };
 
+  /**
+   * Возобновление с продолжением: согласие владельца при открытии сессии или таймер лимита
+   * провайдера. Продолжение уходит обычной репликой, как в прежнем расширении: она видна
+   * владельцу и снимает предел восстановления Pi после переполнения окна. Пока работает
+   * сабагент, цель ждёт его и продолжится билетом.
+   */
   const resumeWithContinuation = (ctx: ExtensionContext): string | null => {
     const blocked = session.resumeGateFailure();
     if (blocked) return blocked.message;
     providerLimit.clear();
     session.resumePausedGoal(ctx);
-    if (session.getGoal()?.status === "active") wake(ctx, true);
+    const goal = session.getGoal();
+    if (goal?.status !== "active") return null;
+    wakeContext = ctx;
+    if (subagents.hasActiveRuns()) subagents.hold();
+    else pi.sendUserMessage(continuationText(goal), { deliverAs: "followUp" });
     return null;
   };
 
@@ -211,9 +221,16 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
 
   pi.on("input", (event, ctx) => {
     externalRetry.observe(ctx);
-    if (event.source === "extension") return undefined;
+    if (event.source === "extension") {
+      // Реплика-продолжение от расширения проходит, только если её цель всё ещё активна и не ждёт владельца.
+      const continuationGoalId = continuationGoalIdFromPrompt(event.text);
+      if (continuationGoalId === null) return undefined;
+      const goal = session.getGoal();
+      if (!session.isContinuationHeld() && goal?.status === "active" && goal.goalId === continuationGoalId) return { action: "continue" as const };
+      session.status.refreshUi(ctx);
+      return { action: "handled" as const };
+    }
     providerLimit.clear();
-    recoveryRuntime.onUserInput();
     // Реплика владельца снимает предел скрытых продолжений и начинает счёт заново.
     hidden = null;
     limitNoticeFor = null;

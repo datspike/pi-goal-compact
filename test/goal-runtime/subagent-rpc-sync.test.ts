@@ -293,7 +293,7 @@ test("возобновление по согласию владельца не �
     // Открытие сессии с приостановленной целью: владелец подтверждает возобновление в диалоге.
     await harness.emit("session_start", { type: "session_start", reason: "resume" });
     assert.equal(harness.snapshot().goal?.status, "active");
-    assert.equal(goalTickets(harness).length, 1);
+    assert.equal(harness.sentUserMessages.length, 1);
   });
 });
 
