@@ -1,12 +1,12 @@
 import type { Api, Context, Model, ModelsApiStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionContext, SessionBeforeCompactEvent, SessionBeforeTreeEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "../../src/compaction/file-hints.js";
-import { russianCompaction, russianTreeSummary, type RussianCompactionOptions, type RussianCompactionResult } from "../../src/compaction/summary.js";
+import { summarizeCompaction, summarizeTree, type CompactionSummaryOptions, type CompactionSummaryResult } from "../../src/compaction/summary.js";
 import { asPi } from "./as-pi.js";
 import { fileListsOf } from "./pi-messages.js";
 
 /** Достаёт сжатие из успешного результата сводки; отмена — провал теста. */
-export function compactionOf(result: RussianCompactionResult | undefined) {
+export function compactionOf(result: CompactionSummaryResult | undefined) {
   if (!result || !("compaction" in result)) throw new Error(`сводка отменена: ${JSON.stringify(result)}`);
   return result.compaction;
 }
@@ -44,12 +44,12 @@ export type FakeTreeEvent = {
   signal: AbortSignal;
   preparation: { userWantsSummary: boolean; replaceInstructions?: boolean; customInstructions?: string; entriesToSummarize: FakeEntry[] };
 };
-type FakeCompactionOptions = Omit<RussianCompactionOptions, "model"> & { model?: FakeModel };
+type FakeCompactionOptions = Omit<CompactionSummaryOptions, "model"> & { model?: FakeModel };
 
 /** Запускает сжатие на подделках; приведение к типам Pi собрано здесь, а не в каждом тесте. */
 export function compactWith(event: FakeCompactEvent, ctx: FakeContext, options?: FakeCompactionOptions) {
   const { model, ...rest } = options ?? {};
-  return russianCompaction(event as SessionBeforeCompactEvent, asPi<ExtensionContext>(ctx), model ? { ...rest, model: model as Model<Api> } : rest);
+  return summarizeCompaction(event as SessionBeforeCompactEvent, asPi<ExtensionContext>(ctx), model ? { ...rest, model: model as Model<Api> } : rest);
 }
 
 /** Успешное сжатие с типизированными списками файлов. */
@@ -60,6 +60,6 @@ export async function compactedWith(event: FakeCompactEvent, ctx: FakeContext, o
 
 /** Сводка ветки на подделках; без сводки — `undefined`. */
 export async function treeSummaryWith(event: FakeTreeEvent, ctx: FakeContext) {
-  const summary = (await russianTreeSummary(event as SessionBeforeTreeEvent, asPi<ExtensionContext>(ctx)))?.summary;
+  const summary = (await summarizeTree(event as SessionBeforeTreeEvent, asPi<ExtensionContext>(ctx)))?.summary;
   return summary && { ...summary, details: fileListsOf(summary.details) };
 }

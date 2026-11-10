@@ -3,7 +3,8 @@ import { resolveCompactCapability, type CompactCapabilityOverride } from "../com
 import { ECONOMY_WINDOW, formatFooter, LONG_CHAT_MAXIMUM, resolvePolicy, type ContextMode } from "../compaction/policy.js";
 import { appendMode, restoreMode } from "../compaction/session-mode.js";
 import { STATUS_KEY, withCurrentRecordNames } from "../records.js";
-import { notice, type Say } from "./notice.js";
+import type { Say } from "../language.js";
+import { notice } from "./notice.js";
 
 type RegistryDeclaration = { contextWindow?: number; hasLongPricingTier: boolean };
 

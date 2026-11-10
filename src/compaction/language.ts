@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { validateCompactCapabilityOverrides, type CompactCapabilityOverride } from "./compact-budget.js";
 
-export type SummaryLanguage = "ru" | "en";
+import type { Language } from "../language.js";
+
+export type SummaryLanguage = Language;
 export type SummarySettings = { summaryLanguage: SummaryLanguage; appendCompaction: boolean; compactCapabilities?: CompactCapabilityOverride[] };
 
 /** Reads and validates the session's global summary preferences once at extension load. */
@@ -22,8 +24,11 @@ export function loadSummarySettings(agentDir = process.env.PI_CODING_AGENT_DIR |
 	const config = (settings as Record<string, unknown>).contextCompaction;
 	if (config === undefined) return defaults;
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("contextCompaction must be an object");
-	const { summaryLanguage: language = "ru", appendCompaction = true } = config as Record<string, unknown>;
-	if (language !== "ru" && language !== "en") throw new Error("contextCompaction.summaryLanguage must be ru or en");
+	// `language` — ключ нового расширения; `summaryLanguage` остался от прежнего и читается, если нового нет.
+	const record = config as Record<string, unknown>;
+	const key = "language" in record ? "language" : "summaryLanguage";
+	const { [key]: language = "ru", appendCompaction = true } = record;
+	if (language !== "ru" && language !== "en") throw new Error(`contextCompaction.${key} must be ru or en`);
 	if (typeof appendCompaction !== "boolean") throw new Error("contextCompaction.appendCompaction must be a boolean");
 	if (!("compactCapabilities" in config)) return { summaryLanguage: language, appendCompaction };
 	const compactCapabilities = validateCompactCapabilityOverrides((config as Record<string, unknown>).compactCapabilities);

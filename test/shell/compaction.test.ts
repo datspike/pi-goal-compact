@@ -72,16 +72,17 @@ describe("контрольная точка с продолжением", () => 
     expect(runtime.sent).toHaveLength(1);
   });
 
-  test("английская сводка отдаётся Pi, а точка и продолжение пишутся по-английски", async () => {
+  test("английскую сводку пишет расширение, а точка и продолжение пишутся по-английски", async () => {
     const runtime = fakePi({ language: "en" });
-    expect(await runtime.event("session_before_tree", {})).toBeUndefined();
+    expect(await runtime.event("session_before_tree", { preparation: { userWantsSummary: false } })).toBeUndefined();
     expect(await runtime.event("before_provider_request", { payload: { model: "fixture" } })).toBeUndefined();
     const callback = await completeManual(runtime);
     expect(callback.customInstructions).toContain("## Main objective");
     expect(callback.customInstructions).not.toContain("## Главная цель");
     expect(runtime.sent[0]?.message.content).toContain("Continue the main objective");
+    // Сводку на английском тоже пишет расширение (Т11.3): без модели в контексте сжатие явно отменяется, как и на русском.
     for (const reason of ["threshold", "overflow"]) {
-      expect(await runtime.event("session_before_compact", { reason, willRetry: reason === "overflow", preparation: { tokensBefore: 100 } })).toBeUndefined();
+      expect(await runtime.event("session_before_compact", { reason, willRetry: reason === "overflow", preparation: { tokensBefore: 100 } })).toEqual({ cancel: true });
     }
   });
 
@@ -331,7 +332,7 @@ for (const change of ["none", "model", "route", "api", "fork", "switch", "tree",
   if (["model", "route", "api"].includes(change)) await runtime.event("model_select", {});
   if (change === "fork") await runtime.event("session_before_fork", {});
   if (change === "switch") await runtime.event("session_before_switch", {});
-  if (change === "tree") await runtime.event("session_before_tree", {});
+  if (change === "tree") await runtime.event("session_before_tree", { preparation: { userWantsSummary: false } });
   if (change === "pending") runtime.setPending(true);
   release();
   await runtime.flush();

@@ -1,6 +1,7 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { MAX_COMPACT_PAYLOAD_CHARS, calculateCompactBudget, type CompactCapability } from "./compact-budget.js";
 import type { Api, AssistantMessage, Model, ModelsApiStreamOptions, TextContent, Usage } from "@earendil-works/pi-ai";
+import { language, type Language } from "../language.js";
 import { collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
 import {
 	convertToLlm,
@@ -71,6 +72,135 @@ export const RUSSIAN_TREE_SUMMARY_INSTRUCTIONS = `Составь краткое 
 
 Сохраняй точные пути, имена файлов, функции, команды и сообщения ошибок. Не продолжай разговор и не добавляй ответов на вопросы из истории; выведи только summary. Сохраняй в смысловом тексте точные пути для незавершённой работы и проверок. Не создавай блоки <read-files>, <modified-files> или <file-hints>: расширение добавит файловые наводки отдельно.`.trim();
 
+const RUSSIAN_TURN_PREFIX_INSTRUCTIONS = `Это ранняя часть пользовательского хода, а его недавняя часть сохранена отдельно. Составь краткий контекст для продолжения на русском языке и используй ровно этот формат:
+
+## Исходный запрос
+[Что пользователь просил в этом ходу; ключевые фразы о цели и достижимости — дословно. Если запрос отменяет или меняет прежнюю цель, ограничения или план, назови, что именно]
+
+## Прогресс на текущий момент
+- [Ключевые решения и действия в ранней части]
+
+## Контекст для продолжения
+- [Что нужно знать, чтобы понять сохранённую недавнюю часть]
+
+Сохраняй точные пути, команды, имена функций и сообщения ошибок. Выведи только summary.`;
+
+/** Английский вариант (Т11.3): те же правила, что у русских инструкций выше, в переводе. */
+export const ENGLISH_COMPACTION_FOCUS = `
+The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+
+Use this EXACT format:
+
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Ordered list of what should happen next]
+
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
+
+Do not continue the conversation and do not answer questions from the history: output only the structured summary. Be concise, but do not drop unfinished work, constraints, decisions made, reasons for decisions, errors, completion and sufficiency criteria from the history, or data needed to continue.
+In "## Next Steps", mark the source of each step: "user decision" or "agent proposal". Do not record closing with a negative result, a fallback or stopping as a step unless the user decided it.
+In "## Key Decisions", keep the paths already tried with the reason they were rejected, alternatives not yet checked, and the budget spent and remaining.
+In "## Key Decisions", give every decision an explicit status: "accepted", "open" or "rejected". Do not describe an open decision as accepted, and do not bring a rejected path back as current. If the user changed an earlier decision, mark the new one as current and the earlier one as replaced.
+If the work touches several related objects — MRs, branches, target environments, repositories or artifacts with different versions — list all of them in "## Critical Context": identifier, source, target and the matching artifact. Do not collapse the set into one example, even when the changes are functionally the same.
+Keep the user's statements about the goal and about whether the result is achievable verbatim.
+For a split turn, use the sections "## Original Request", "## Progress So Far" and "## Context Needed to Continue".
+Do not translate or alter exact technical fragments: paths, file names, commands, identifiers, function names, APIs, error messages and code. Keep in the prose the exact paths needed for unfinished work, checks and constraints. Do not create <read-files>, <modified-files> or <file-hints> blocks: the extension adds bounded file hints separately.`.trim();
+
+export const ENGLISH_TREE_SUMMARY_INSTRUCTIONS = `Write a brief structured summary of the branch being left so that it can be resumed later.
+
+Use exactly this format:
+
+## Goal
+[What the user was trying to accomplish in this branch]
+
+## Constraints & Preferences
+- [Constraints, preferences and requirements]
+- [Or "(none)" if there were none]
+
+## Progress
+### Done
+- [x] [Completed actions and changes]
+
+### In Progress
+- [ ] [Work started but not finished]
+
+### Blocked
+- [Issues preventing progress, or "(none)"]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [What should happen next]
+
+Preserve exact paths, file names, functions, commands and error messages. Do not continue the conversation and do not add answers to questions from the history; output only the summary. Keep in the prose the exact paths for unfinished work and checks. Do not create <read-files>, <modified-files> or <file-hints> blocks: the extension adds file hints separately.`.trim();
+
+const ENGLISH_TURN_PREFIX_INSTRUCTIONS = `This is the early part of a user turn; its recent part is kept separately. Write a brief context for continuing and use exactly this format:
+
+## Original Request
+[What the user asked for in this turn; key phrases about the goal and achievability verbatim. If the request cancels or changes the earlier goal, constraints or plan, name what exactly]
+
+## Progress So Far
+- [Key decisions and actions in the early part]
+
+## Context Needed to Continue
+- [What is needed to understand the kept recent part]
+
+Preserve exact paths, commands, function names and error messages. Output only the summary.`;
+
+interface SummaryText {
+	focus: string;
+	tree: string;
+	turnPrefix: string;
+	splitTurnHeader: string;
+	extraCompaction: string;
+	extraTree: string;
+	noHistory: string;
+}
+
+const SUMMARY_TEXT: Readonly<Record<Language, SummaryText>> = {
+	ru: {
+		focus: RUSSIAN_COMPACTION_FOCUS, tree: RUSSIAN_TREE_SUMMARY_INSTRUCTIONS, turnPrefix: RUSSIAN_TURN_PREFIX_INSTRUCTIONS,
+		splitTurnHeader: SPLIT_TURN_HEADER,
+		extraCompaction: "Дополнительный checkpoint-контекст и инструкции текущей операции:",
+		extraTree: "Дополнительные инструкции текущего перехода по дереву:",
+		noHistory: "Предыдущей истории нет.",
+	},
+	en: {
+		focus: ENGLISH_COMPACTION_FOCUS, tree: ENGLISH_TREE_SUMMARY_INSTRUCTIONS, turnPrefix: ENGLISH_TURN_PREFIX_INSTRUCTIONS,
+		splitTurnHeader: "**Turn Context (split turn):**\nThis turn started after the history above. If its request changes the goal, constraints or next steps, it takes precedence; the sections above describe the state before the turn.",
+		extraCompaction: "Additional checkpoint context and instructions for this operation:",
+		extraTree: "Additional instructions for this tree navigation:",
+		noHistory: "No previous history.",
+	},
+};
+
+/** Инструкции и служебные строки сводки на языке расширения. */
+export function summaryText(): SummaryText {
+	return SUMMARY_TEXT[language()];
+}
+
 const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 	"## Goal": "## Цель",
 	"## Constraints & Preferences": "## Ограничения и предпочтения",
@@ -119,8 +249,12 @@ function classifySummaryLines(summary: string): SummaryLine[] {
 	});
 }
 
-/** Переводит только известные структурные заголовки вне code и machine-readable блоков. */
+/**
+ * Переводит только известные структурные заголовки вне code и machine-readable блоков.
+ * В английском варианте заголовки уже английские, и сводка не меняется.
+ */
 export function localizeSummaryStructure(summary: string): string {
+	if (language() === "en") return summary;
 	return classifySummaryLines(summary)
 		.map(({ line, protected: isProtected }) => !isProtected ? SUMMARY_HEADINGS[line] ?? line : line)
 		.join("\n");
@@ -137,12 +271,13 @@ export function hasStructuralHeading(summary: string, headings: string[]): boole
 	return classifySummaryLines(summary).some(({ line, protected: isProtected }) => !isProtected && headings.includes(line));
 }
 
+// Заголовки обоих языков: прежняя сводка могла быть написана до смены языка.
 function hasLocalizedSummaryStructure(summary: string, allowSplitTurn: boolean): boolean {
-	return hasStructuralHeading(summary, allowSplitTurn ? ["## Цель", "## Исходный запрос"] : ["## Цель"]);
+	return hasStructuralHeading(summary, allowSplitTurn ? ["## Цель", "## Goal", "## Исходный запрос", "## Original Request"] : ["## Цель", "## Goal"]);
 }
 
 function hasLocalizedPrefixStructure(summary: string): boolean {
-	return hasStructuralHeading(summary, ["## Исходный запрос"]);
+	return hasStructuralHeading(summary, ["## Исходный запрос", "## Original Request"]);
 }
 
 type SummaryResponse = {
@@ -152,14 +287,14 @@ type SummaryResponse = {
 
 export type CompactionFailureReason = "aborted" | "context-changed" | "invalid-response" | "request-failed" | "insufficient-window" | "unsupported" | "request-too-large";
 
-export type RussianCompactionOptions = {
+export type CompactionSummaryOptions = {
     capability?: CompactCapability;
     model?: Model<Api>;
     isCurrent?: () => boolean;
     onFailure?: (reason: string) => void;
 };
 
-export type RussianCompactionResult = {
+export type CompactionSummaryResult = {
     compaction: NonNullable<SessionBeforeCompactResult["compaction"]>;
 } | {
     cancel: true;
@@ -313,7 +448,7 @@ function guardFor(ctx: ExtensionContext, snapshot: OperationSnapshot, owner?: ()
     return { ...(capability ? { capability } : {}), model: snapshot.serviceModelRef, signal: snapshot.signal, validate: () => assertCurrent(ctx, snapshot, owner) };
 }
 
-function reportFailure(options: RussianCompactionOptions | undefined, reason: CompactionFailureReason): RussianCompactionResult {
+function reportFailure(options: CompactionSummaryOptions | undefined, reason: CompactionFailureReason): CompactionSummaryResult {
     try {
         options?.onFailure?.(reason);
     }
@@ -468,24 +603,13 @@ async function summarizeMessages(ctx: ExtensionContext, messages: AgentMessage[]
 }
 
 async function summarizeTurnPrefix(ctx: ExtensionContext, messages: AgentMessage[], signal: AbortSignal, maxTokens: number, sources: readonly unknown[], customInstructions: string | undefined, guard?: CompactionRequestGuard): Promise<SummaryResponse> {
-    const instructions = `Это ранняя часть пользовательского хода, а его недавняя часть сохранена отдельно. Составь краткий контекст для продолжения на русском языке и используй ровно этот формат:
-
-## Исходный запрос
-[Что пользователь просил в этом ходу; ключевые фразы о цели и достижимости — дословно. Если запрос отменяет или меняет прежнюю цель, ограничения или план, назови, что именно]
-
-## Прогресс на текущий момент
-- [Ключевые решения и действия в ранней части]
-
-## Контекст для продолжения
-- [Что нужно знать, чтобы понять сохранённую недавнюю часть]
-
-Сохраняй точные пути, команды, имена функций и сообщения ошибок. Выведи только summary.`;
-    const focusedInstructions = customInstructions ? `${instructions}\n\nДополнительный checkpoint-контекст и инструкции текущей операции:\n${customInstructions}` : instructions;
+    const instructions = summaryText().turnPrefix;
+    const focusedInstructions = customInstructions ? `${instructions}\n\n${summaryText().extraCompaction}\n${customInstructions}` : instructions;
     return summarizeMessages(ctx, messages, focusedInstructions, undefined, maxTokens, signal, sources, guard);
 }
 
-/** Генерирует русское summary для automatic/manual compaction; отказ всегда имеет явный исход. */
-export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: ExtensionContext, options?: RussianCompactionOptions): Promise<RussianCompactionResult> {
+/** Генерирует summary на языке расширения для automatic/manual compaction; отказ всегда имеет явный исход. */
+export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx: ExtensionContext, options?: CompactionSummaryOptions): Promise<CompactionSummaryResult> {
     const serviceModel = options?.model ?? ctx.model;
     if (!serviceModel)
         return reportFailure(options, signalAborted(ctx, event.signal) ? "aborted" : "request-failed");
@@ -496,15 +620,16 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
         guard.validate();
         const preparation = event.preparation;
         const sources = event.branchEntries.flatMap((entry) => entry.type === "compaction" || entry.type === "branch_summary" ? [entry.details] : []);
+        const text = summaryText();
         const instructions = event.customInstructions
-            ? `${RUSSIAN_COMPACTION_FOCUS}\n\nДополнительный checkpoint-контекст и инструкции текущей операции:\n${event.customInstructions}`
-            : RUSSIAN_COMPACTION_FOCUS;
+            ? `${text.focus}\n\n${text.extraCompaction}\n${event.customInstructions}`
+            : text.focus;
         const serviceMaxTokens = serviceModel.maxTokens;
         const maxTokens = Math.min(Math.floor(preparation.settings.reserveTokens * 0.8), serviceMaxTokens > 0 ? serviceMaxTokens : Number.POSITIVE_INFINITY);
         let summary: string;
         let usage: Usage | undefined;
         if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
-            let historyText = preparation.previousSummary ? localizeSummaryStructure(withoutFileTracking(preparation.previousSummary, sources)) : "Предыдущей истории нет.";
+            let historyText = preparation.previousSummary ? localizeSummaryStructure(withoutFileTracking(preparation.previousSummary, sources)) : text.noHistory;
             let historyUsage: Usage | undefined;
             if (preparation.messagesToSummarize.length > 0) {
                 const history = await summarizeMessages(ctx, preparation.messagesToSummarize, instructions, preparation.previousSummary, maxTokens, event.signal, sources, guard);
@@ -522,7 +647,7 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
             const prefixText = localizeSummaryStructure(prefix.text);
             if (!hasLocalizedPrefixStructure(prefixText))
                 throw new SummaryFailure("invalid-response");
-            summary = `${historyText}\n\n${SPLIT_TURN_HEADER}\n${prefixText}`;
+            summary = `${historyText}\n\n${text.splitTurnHeader}\n${prefixText}`;
             usage = combineUsage(historyUsage, prefix.usage);
         }
         else {
@@ -554,8 +679,8 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
     }
 }
 
-/** Генерирует русское summary для /tree, сохраняя native token budget, usage и cumulative file tracking. */
-export async function russianTreeSummary(event: SessionBeforeTreeEvent, ctx: ExtensionContext): Promise<SessionBeforeTreeResult | undefined> {
+/** Генерирует summary на языке расширения для /tree, сохраняя native token budget, usage и cumulative file tracking. */
+export async function summarizeTree(event: SessionBeforeTreeEvent, ctx: ExtensionContext): Promise<SessionBeforeTreeResult | undefined> {
 	if (!event.preparation.userWantsSummary || !ctx.model) return undefined;
 	try {
 		const reserveTokens = DEFAULT_RESERVE_TOKENS;
@@ -568,8 +693,8 @@ export async function russianTreeSummary(event: SessionBeforeTreeEvent, ctx: Ext
 		const instructions = replaceInstructions
 			? event.preparation.customInstructions!
 			: event.preparation.customInstructions
-				? `${RUSSIAN_TREE_SUMMARY_INSTRUCTIONS}\n\nДополнительные инструкции текущего перехода по дереву:\n${event.preparation.customInstructions}`
-				: RUSSIAN_TREE_SUMMARY_INSTRUCTIONS;
+				? `${summaryText().tree}\n\n${summaryText().extraTree}\n${event.preparation.customInstructions}`
+				: summaryText().tree;
 		const result = await completeSummary(ctx, conversationPrompt(prepared.messages, instructions), Math.min(4096, ctx.model.maxTokens > 0 ? ctx.model.maxTokens : Number.POSITIVE_INFINITY), event.signal);
 		const summary = withoutFileTracking(localizeSummaryStructure(stripBranchSummaryPreamble(result.text)));
 		if (!replaceInstructions && !hasLocalizedSummaryStructure(summary, false)) return undefined;

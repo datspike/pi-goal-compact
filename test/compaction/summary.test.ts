@@ -1,3 +1,4 @@
+import { setLanguage } from "../../src/language.js";
 import { MAX_COMPACT_PAYLOAD_CHARS } from "../../src/compaction/compact-budget.js";
 import { describe, expect, test } from "../support/expect.js";
 import { compactedWith, compactWith, treeSummaryWith, type FakeCompactEvent, type FakeComplete, type FakeContext, type FakeEntry, type FakeModel, type FakeTreeEvent } from "../support/compaction.js";
@@ -127,6 +128,34 @@ test("Russian compact keeps localized headings, split-turn context and cumulativ
 	const split = await compactedWith({ ...event, preparation: { ...event.preparation, isSplitTurn: true, messagesToSummarize: [message], turnPrefixMessages: [message] } }, ctx);
 	expect(split.summary).toContain("**Контекст разрезанного хода:**\nЭтот ход начат после истории выше.");
 	expect(split.summary).toContain("действует он; разделы выше описывают состояние до хода.\n## Исходный запрос");
+});
+
+test("английскую сводку тоже пишет расширение: английские разделы, правила и наводки", async () => {
+	setLanguage("en");
+	try {
+		const requests: string[] = [];
+		const responses = ["## Goal\nContinue work", "## Goal\nExisting work", "## Original Request\nComplete the feature"];
+		const ctx: FakeContext = {
+			model: { maxTokens: 8192 },
+			modelRegistry: { complete: async (_model, context) => {
+				requests.push(JSON.stringify(context.messages));
+				return { content: [{ type: "text", text: responses.shift() }], usage: { input: 1 } };
+			} },
+		};
+		const event = compactEvent({ fileOps: { read: new Set(["src/a.ts"]), edited: new Set(["src/b.ts"]) } });
+		const normal = await compactedWith(event, ctx);
+		expect(normal.summary).toContain("## Goal\nContinue work");
+		expect(normal.summary).toContain("Tracked in total: 1 read, 1 modified");
+		expect(normal.summary).not.toMatch(/[А-Яа-я]/);
+		expect(requests[0]).toContain("give every decision an explicit status");
+		expect(requests[0]).not.toMatch(/[А-Яа-я]/);
+		const message = userMessage("Continue the feature");
+		const split = await compactedWith({ ...event, preparation: { ...event.preparation, isSplitTurn: true, messagesToSummarize: [message], turnPrefixMessages: [message] } }, ctx);
+		expect(split.summary).toContain("**Turn Context (split turn):**\nThis turn started after the history above.");
+		expect(split.summary).toContain("## Original Request\nComplete the feature");
+	} finally {
+		setLanguage("ru");
+	}
 });
 
 test("split-turn compact sends custom instructions to every summary request", async () => {

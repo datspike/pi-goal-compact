@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { convertToLlm } from "@earendil-works/pi-coding-agent";
 
 /** Сообщение агента в том виде, в каком Pi отдаёт его на сжатие; сам тип пакет не экспортирует. */
@@ -139,7 +140,7 @@ export function formatFileHints(files: FileLists, messages: readonly AgentMessag
 		if (selected >= MAX_HINTS) break;
 		const directory = parent(path);
 		const name = directory === "." ? path : path.slice(directory.length);
-		const line = `  ${JSON.stringify(name)} [${modified.has(path) ? "изменялся" : "читался"}]`;
+		const line = `  ${JSON.stringify(name)} [${modified.has(path) ? say("изменялся", "modified") : say("читался", "read")}]`;
 		const cost = line.length + 1 + (groups.has(directory) ? 0 : JSON.stringify(directory).length + 2);
 		if (used + cost > FILE_HINTS_MAX_CHARS - 1500) continue;
 		if (!groups.has(directory)) groups.set(directory, []);
@@ -149,7 +150,8 @@ export function formatFileHints(files: FileLists, messages: readonly AgentMessag
 	}
 	const lines = [
 		"<file-hints>",
-		"Наводки, не список текущих изменений. Точные пути для незавершённой работы — в тексте сводки.",
+		say("Наводки, не список текущих изменений. Точные пути для незавершённой работы — в тексте сводки.",
+			"Hints, not a list of current changes. Exact paths for unfinished work are in the summary text."),
 		...Array.from(groups, ([directory, names]) => `${JSON.stringify(directory)}:\n${names.join("\n")}`),
 	];
 	const counts = new Map<string, number>();
@@ -158,15 +160,17 @@ export function formatFileHints(files: FileLists, messages: readonly AgentMessag
 	let shownGroups = 0;
 	for (const [directory, count] of [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
 		if (shownGroups >= MAX_GROUPS) break;
-		const line = `История ${JSON.stringify(directory)}: ${count} путей`;
+		const line = say(`История ${JSON.stringify(directory)}: ${count} путей`, `History ${JSON.stringify(directory)}: ${count} paths`);
 		if (groupChars + line.length > 650) continue;
 		lines.push(line);
 		groupChars += line.length + 1;
 		shownGroups++;
 	}
 	lines.push(
-		`Всего в учёте: ${files.readFiles.length} прочитанных, ${files.modifiedFiles.length} изменявшихся; точных наводок: ${selected}.`,
-		"Полный учёт сохранён в details.readFiles/modifiedFiles этой записи. Для возврата к смыслу и решениям используй доступный поиск истории сессии (session_search/session_get); не перечитывай журнал без необходимости.",
+		say(`Всего в учёте: ${files.readFiles.length} прочитанных, ${files.modifiedFiles.length} изменявшихся; точных наводок: ${selected}.`,
+			`Tracked in total: ${files.readFiles.length} read, ${files.modifiedFiles.length} modified; exact hints: ${selected}.`),
+		say("Полный учёт сохранён в details.readFiles/modifiedFiles этой записи. Для возврата к смыслу и решениям используй доступный поиск истории сессии (session_search/session_get); не перечитывай журнал без необходимости.",
+			"The full record is kept in details.readFiles/modifiedFiles of this entry. To recover meaning and decisions, use the available session history search (session_search/session_get); do not reread the log unless needed."),
 		"</file-hints>",
 	);
 	return `\n\n${lines.join("\n")}`;

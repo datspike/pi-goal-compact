@@ -11,13 +11,14 @@ import {
 } from "../compaction/checkpoint.js";
 import type { SummarySettings } from "../compaction/language.js";
 import type { ContextMode } from "../compaction/policy.js";
-import { russianCompaction, russianTreeSummary } from "../compaction/summary.js";
+import { summarizeCompaction, summarizeTree } from "../compaction/summary.js";
 import type { CoreEffect, CompactionReason } from "../core/model.js";
 import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from "../request-stage/index.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
 import type { Tickets } from "./tickets.js";
-import { notice, sayFor } from "./notice.js";
+import { sayFor } from "../language.js";
+import { notice } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
 
 const WORKING_STANDARD = "Compact: стандартная сводка";
@@ -90,7 +91,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		stage.beginCompaction(ctx, WORKING_STANDARD);
 		try {
 			const model = ctx.model ? { ...ctx.model, contextWindow: window.capability(ctx).window } : undefined;
-			const compact = await russianCompaction(event, ctx, {
+			const compact = await summarizeCompaction(event, ctx, {
 				...(model ? { model } : {}),
 				capability: window.capability(ctx),
 				isCurrent: () => generation === summarySequence,
@@ -255,13 +256,12 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		const reason = event.reason as CompactionReason;
 		driver.dispatch({ type: "compaction_started", reason, willRetry: event.willRetry }, ctx);
 		if (reason !== "manual" || !manualCorrelation) external(ctx, "contained", reason, event.willRetry, event.preparation.tokensBefore);
-		if (language === "ru") return summarize(event, ctx);
-		return undefined;
+		// Сводку на обоих языках пишет расширение (Т11.3): иначе договорённость некуда вставить.
+		return summarize(event, ctx);
 	});
 	pi.on("session_before_tree", async (event, ctx) => {
 		switched(ctx);
-		if (language === "ru") return russianTreeSummary(event, ctx);
-		return undefined;
+		return summarizeTree(event, ctx);
 	});
 	pi.on("session_compact", async (event, ctx) => {
 		stage.observe("session_compact", event, ctx);
