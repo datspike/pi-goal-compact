@@ -3,7 +3,8 @@
   "entry": [
     "src/index.ts",
     "scripts/*.ts",
-    "test/**/*.test.ts"
+    "test/**/*.test.ts",
+    "test/**/*.test.mjs"
   ],
   "project": [
     "src/**/*.ts",
@@ -11,12 +12,6 @@
     "test/**"
   ],
   "ignoreExportsUsedInFile": true,
-  "ignoreDependencies": [
-    "@earendil-works/pi-ai",
-    "@earendil-works/pi-tui",
-    "typebox",
-    "jscpd"
-  ],
   "ignoreBinaries": [
     "java"
   ]

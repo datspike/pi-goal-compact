@@ -1,0 +1,36 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+import { validateCompactCapabilityOverrides, type CompactCapabilityOverride } from "./compact-budget.js";
+
+export type SummaryLanguage = "ru" | "en";
+export type SummarySettings = { summaryLanguage: SummaryLanguage; appendCompaction: boolean; compactCapabilities?: CompactCapabilityOverride[] };
+
+/** Reads and validates the session's global summary preferences once at extension load. */
+export function loadSummarySettings(agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent")): SummarySettings {
+	const defaults: SummarySettings = { summaryLanguage: "ru", appendCompaction: true };
+	let text: string;
+	try {
+		text = readFileSync(join(agentDir, "settings.json"), "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return defaults;
+		throw error;
+	}
+	const settings: unknown = JSON.parse(text);
+	if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Pi settings must be an object");
+	const config = (settings as Record<string, unknown>).contextCompaction;
+	if (config === undefined) return defaults;
+	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("contextCompaction must be an object");
+	const { summaryLanguage: language = "ru", appendCompaction = true } = config as Record<string, unknown>;
+	if (language !== "ru" && language !== "en") throw new Error("contextCompaction.summaryLanguage must be ru or en");
+	if (typeof appendCompaction !== "boolean") throw new Error("contextCompaction.appendCompaction must be a boolean");
+	if (!("compactCapabilities" in config)) return { summaryLanguage: language, appendCompaction };
+	const compactCapabilities = validateCompactCapabilityOverrides((config as Record<string, unknown>).compactCapabilities);
+	return { summaryLanguage: language, appendCompaction, compactCapabilities };
+}
+
+/** Retains the original language-only API for callers. */
+export function loadSummaryLanguage(agentDir?: string): SummaryLanguage {
+	return loadSummarySettings(agentDir).summaryLanguage;
+}
