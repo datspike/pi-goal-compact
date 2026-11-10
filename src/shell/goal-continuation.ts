@@ -244,8 +244,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     if (!session.runIsForeign()) externalRetry.observe(ctx);
   });
   pi.on("message_start", (event, ctx) => {
-    if (session.runIsForeign()) return;
     const message = event.message;
+    // Pi снимает свой предел восстановления на любой реплике пользователя, даже в чужом прогоне.
+    if (message.role === "user") session.clearHostOverflowUserReset();
+    if (session.runIsForeign()) return;
     if (message.role !== "custom" || !RETRY_CARRIERS.has(message.customType) || !externalRetry.ownsContext(ctx)) return;
     if (session.getGoal() && !externalRetry.admit(ctx, message.timestamp)) ctx.abort();
   });

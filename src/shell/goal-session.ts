@@ -13,7 +13,7 @@ import { createGoalReports, holdsContinuation, type GoalReportAction, type GoalR
 import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-runtime-status.js";
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
 import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
-import { beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
+import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
 import type { GoalProgressReport } from "../goal/report-schema.js";
 import { amendGoal as appendAmendment, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
@@ -671,6 +671,13 @@ export function createGoalSession(pi: ExtensionAPI) {
       const persist = active ? beginHostOverflowRecovery(recovery).persistHostOverflowCapReset : requireHostOverflowUserReset(recovery);
       if (active) status.refreshUi(ctx);
       if (persist) pi.appendEntry(CUSTOM_ENTRY_TYPE, hostOverflowCapResetEntry(true));
+    },
+    /**
+     * Обычная реплика пользователя снимает предел восстановления Pi после переполнения окна.
+     * Снятие пишется в журнал, иначе отметка вернётся после перезагрузки.
+     */
+    clearHostOverflowUserReset(): void {
+      if (applyHostOverflowUserResetPersistence(recovery, false)) pi.appendEntry(CUSTOM_ENTRY_TYPE, hostOverflowCapResetEntry(false));
     },
     resetRecovery(): void { resetRecoveryMachine(recovery); },
     hasUnconfirmedWrite: () => unconfirmedWrite() !== null,

@@ -12,7 +12,8 @@ export interface GoalRuntimeRevision {
 
 /** Capture bounded, best-effort Git metadata; packaged installs may have no repository. */
 export function captureGoalRuntimeRevision(
-  extensionRoot = fileURLToPath(new URL("../", import.meta.url)),
+  // Модуль лежит в `src/goal/`: корень расширения на два уровня выше.
+  extensionRoot = fileURLToPath(new URL("../../", import.meta.url)),
 ): Readonly<GoalRuntimeRevision> {
   const capturedAt = new Date().toISOString();
   let gitCommit: string | null = null;
