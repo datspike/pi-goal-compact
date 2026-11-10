@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { resolveCompactCapability, type CompactCapabilityOverride } from "../compaction/compact-budget.js";
 import { ECONOMY_WINDOW, formatFooter, LONG_CHAT_MAXIMUM, resolvePolicy, type ContextMode } from "../compaction/policy.js";
 import { appendMode, restoreMode } from "../compaction/session-mode.js";
-import { STATUS_KEY } from "../records.js";
+import { STATUS_KEY, withCurrentRecordNames } from "../records.js";
 import { notice, type Say } from "./notice.js";
 
 type RegistryDeclaration = { contextWindow?: number; hasLongPricingTier: boolean };
@@ -65,7 +65,7 @@ export function createWindowMode(pi: ExtensionAPI, say: Say, overrides: readonly
 	let footerSuffix = "";
 	const updateFooter = (ctx: ExtensionContext, suffix?: string): void => {
 		if (suffix !== undefined) footerSuffix = suffix;
-		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, formatFooter(ctx.getContextUsage()?.tokens, policy(ctx)) + footerSuffix);
+		if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY.context, formatFooter(ctx.getContextUsage()?.tokens, policy(ctx)) + footerSuffix);
 	};
 	const setMode = (next: ContextMode): void => {
 		if (mode !== next) { mode = next; appendMode(pi, next); }
@@ -131,7 +131,7 @@ export function createWindowMode(pi: ExtensionAPI, say: Say, overrides: readonly
 		isInternalTransition: () => internalModelTransition,
 		updateFooter,
 		async restore(ctx) {
-			mode = restoreMode(ctx.sessionManager.getEntries());
+			mode = restoreMode(withCurrentRecordNames(ctx.sessionManager.getEntries()));
 			await ensureWindow(ctx);
 			updateFooter(ctx);
 		},

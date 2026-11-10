@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { appendAudit, type AuditEntry, type AuditOrigin, type AuditReason } from "../compaction/audit.js";
-import { COMPACT_CARD_TYPE, estimateSummaryTokens, LEGACY_COMPACT_CARD_TYPE, renderCompactCard, type CompactCardData } from "../compaction/card.js";
+import { COMPACT_CARD_TYPE, estimateSummaryTokens, renderCompactCard, type CompactCardData } from "../compaction/card.js";
 import {
 	buildInstructions,
 	buildLedger,
@@ -15,7 +15,7 @@ import type { ContextMode } from "../compaction/policy.js";
 import { russianCompaction, russianTreeSummary } from "../compaction/summary.js";
 import type { CheckpointRequest, CoreEffect, CompactionReason } from "../core/model.js";
 import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from "../request-stage/index.js";
-import { RECORD, STATUS_KEY } from "../records.js";
+import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
 import { notice, sayFor } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
@@ -221,7 +221,10 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const renderCard = (entry: { data?: CompactCardData }, options: { expanded: boolean }, theme: Parameters<typeof renderCompactCard>[2]) =>
 		entry.data ? renderCompactCard(entry.data, options.expanded, theme, language) : undefined;
 	pi.registerEntryRenderer<CompactCardData>(COMPACT_CARD_TYPE, renderCard);
-	pi.registerEntryRenderer<CompactCardData>(LEGACY_COMPACT_CARD_TYPE, renderCard);
+	// Pi рисует запись по имени, сохранённому в файле сессии, поэтому прежнему имени нужен свой рисовальщик.
+	for (const [legacy, current] of Object.entries(LEGACY_RECORD_NAMES)) {
+		if (current === COMPACT_CARD_TYPE) pi.registerEntryRenderer<CompactCardData>(legacy, renderCard);
+	}
 
 	const shared = new Set<RequestStageEvent>(["session_start", "model_select", "turn_end", "agent_settled", "agent_start", "before_agent_start", "session_before_compact", "session_compact", "session_compact_failed", "session_shutdown"]);
 	for (const type of REQUEST_STAGE_EVENTS) {

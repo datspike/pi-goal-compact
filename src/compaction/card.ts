@@ -1,10 +1,8 @@
-import { LEGACY_RECORD, RECORD } from "../records.js";
+import { RECORD } from "../records.js";
 import { Text } from "@earendil-works/pi-tui";
 
 /** Карточка итога compact: сохраняется в сессии после compaction и рисуется в ленте Pi. */
 export const COMPACT_CARD_TYPE = RECORD.card;
-/** Карточки прежнего расширения сжатия показываются тем же видом. */
-export const LEGACY_COMPACT_CARD_TYPE = LEGACY_RECORD.card;
 
 export type CompactCardKind = "append" | "standard";
 

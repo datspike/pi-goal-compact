@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../support/expect.js";
 import { appendMode, MODE_ENTRY, restoreMode } from "../../src/compaction/session-mode.js";
+import { withCurrentRecordNames } from "../../src/records.js";
 
 describe("режим окна в журнале", () => {
 	test("восстанавливает последний именованный режим из append-only записей", () => {
@@ -18,8 +19,9 @@ describe("режим окна в журнале", () => {
 			{ type: "custom", customType: "context-compaction-mode", data: { mode: "long-chat" } },
 			{ type: "custom", customType: MODE_ENTRY, data: { mode: "off" } },
 		];
-		expect(restoreMode(entries)).toBe("off");
-		expect(restoreMode(entries.slice(0, 1))).toBe("long-chat");
+		expect(restoreMode(withCurrentRecordNames(entries))).toBe("off");
+		expect(restoreMode(withCurrentRecordNames(entries.slice(0, 1)))).toBe("long-chat");
+		expect(restoreMode(entries.slice(0, 1))).toBe("economy");
 	});
 
 	test("старый сессионный порог не влияет на режим", () => {

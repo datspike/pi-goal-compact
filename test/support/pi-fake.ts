@@ -25,10 +25,11 @@ let sequence = 0;
  * отправленные сообщения. Записи appendEntry сразу попадают в ветку, как в Pi.
  */
 export function fakePi(options: FakeOptions = {}) {
-  const handlers = new Map<string, (...args: any[]) => any>();
+  const handlers = new Map<string, Array<(...args: any[]) => any>>();
+  const commands = new Map<string, any>();
+  const busListeners = new Map<string, Array<(data: unknown) => void>>();
   const renderers = new Map<string, any>();
   const tools = new Map<string, any>();
-  let command: any;
   let idle = false;
   let branch: any[] = options.branch ?? [{ id: "user-1", type: "message", message: { role: "user", content: "Начать работу" } }];
   let sessionId = options.sessionId ?? `session-${++sequence}`;
@@ -60,10 +61,19 @@ export function fakePi(options: FakeOptions = {}) {
   };
   const pi: any = {
     registerTool(value: any) { tools.set(value.name, value); },
-    registerCommand(_name: string, value: any) { command = value.handler; },
-    on(name: string, value: any) {
-      if (handlers.has(name)) throw new Error(`второй обработчик ${name}`);
-      handlers.set(name, value);
+    registerCommand(name: string, value: any) {
+      if (commands.has(name)) throw new Error(`вторая команда ${name}`);
+      commands.set(name, { name, source: "extension", ...value });
+    },
+    getCommands() { return [...commands.values()]; },
+    // Как в Pi: обработчики одного события вызываются по порядку регистрации на одном объекте события.
+    on(name: string, value: any) { handlers.set(name, [...(handlers.get(name) ?? []), value]); },
+    events: {
+      on(name: string, listener: (data: unknown) => void) {
+        busListeners.set(name, [...(busListeners.get(name) ?? []), listener]);
+        return () => busListeners.set(name, (busListeners.get(name) ?? []).filter((item) => item !== listener));
+      },
+      emit(name: string, data: unknown) { for (const listener of busListeners.get(name) ?? []) listener(data); },
     },
     registerEntryRenderer(type: string, renderer: any) { renderers.set(type, renderer); },
     appendEntry(type: string, data: any) {
@@ -76,7 +86,7 @@ export function fakePi(options: FakeOptions = {}) {
       if (result === false) return false;
       ctx.model = next;
       await modelBarrier?.();
-      if (options.emitModelSelect) await handlers.get("model_select")?.({}, ctx);
+      if (options.emitModelSelect) await emit("model_select", {}, ctx);
       if (result === "reject") throw new Error("session transcript write failed");
       if (options.modelSwitchThinkingLevel) thinkingLevel = options.modelSwitchThinkingLevel;
       return true;
@@ -85,6 +95,17 @@ export function fakePi(options: FakeOptions = {}) {
     setThinkingLevel(value: string) { thinkingLevel = value; },
     sendMessage(message: any, sendOptions: any) { sent.push({ message, options: sendOptions }); },
   };
+  // Результат — последний непустой ответ; `context` передаёт сообщения дальше по цепочке, как Pi.
+  async function emit(name: string, event: any, context: any) {
+    let result: any;
+    for (const handler of handlers.get(name) ?? []) {
+      const value = await handler(event, context);
+      if (value === undefined) continue;
+      result = value;
+      if (name === "context" && value?.messages) event = { ...event, messages: value.messages };
+    }
+    return result;
+  }
   const agentDir = mkdtempSync(join(tmpdir(), "goal-compact-test-profile-"));
   const priorAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
@@ -97,7 +118,7 @@ export function fakePi(options: FakeOptions = {}) {
     rmSync(agentDir, { recursive: true, force: true });
   }
   return {
-    ctx, tools, command, entries, renderers, compactOptions, sent, notices, footers, setModelCalls,
+    ctx, tools, commands, command: commands.get("context")?.handler, entries, renderers, compactOptions, sent, notices, footers, setModelCalls,
     get aborts() { return aborts; },
     get thinkingLevel() { return thinkingLevel; },
     tool(name: string) { return tools.get(name); },
@@ -107,8 +128,9 @@ export function fakePi(options: FakeOptions = {}) {
     setSessionId(value: string) { sessionId = value; },
     audits(origin?: string) { return entries.filter((entry) => entry.type === "goal-compact-audit" && (!origin || entry.data.origin === origin)).map((entry) => entry.data); },
     async flush() { await new Promise<void>((resolve) => setImmediate(resolve)); },
-    async event(name: string, event: any = {}, context: any = ctx) { return handlers.get(name)?.(event, context); },
-    async settle(isNowIdle = true, aborted = false) { idle = isNowIdle; return handlers.get("agent_settled")!({ aborted }, ctx); },
+    async event(name: string, event: any = {}, context: any = ctx) { return emit(name, event, context); },
+    async settle(isNowIdle = true, aborted = false) { idle = isNowIdle; return emit("agent_settled", { aborted }, ctx); },
+    emitBus(name: string, data: unknown) { pi.events.emit(name, data); },
   };
 }
 

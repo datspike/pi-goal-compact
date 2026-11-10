@@ -1,0 +1,1 @@
+export const RUNTIME_PERSIST_INTERVAL_MS = 60_000;
