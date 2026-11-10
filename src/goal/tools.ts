@@ -316,47 +316,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     },
   });
 
-  pi.registerTool({
-    name: "create_goal",
-    label: "Create Goal",
-    description: "Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. After success publish goal_started before substantive work. This does not copy the conversation automatically.",
-    promptSnippet: "Create a durable Goal only on explicit request; preserve the agreed outcome, evidence and done criterion.",
-    promptGuidelines: goalToolGuidelines("create_goal"),
-    parameters: CreateGoalParams,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const current = host.getGoal();
-      const features = host.getFeatures?.() ?? DEFAULT_GOAL_FEATURES;
-      if (!params.agreement) throwToolError("create_goal requires agreement with owner_wants and done_when.");
-      if (features.selfDecidedList && !params.self_decided) throwToolError("create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything.");
-      const agreement: AgreementInput = { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
-        ...(features.selfDecidedList && params.self_decided ? { selfDecided: params.self_decided } : {}) };
-      const replacingNonCompleteGoal = params.replace_existing === true && current !== null && current.status !== "complete";
-      const result = replacingNonCompleteGoal
-        ? replaceGoal(params.objective, params.token_budget ?? null, agreement)
-        : createGoal(current, params.objective, params.token_budget ?? null, agreement);
-      if (!result.ok || !result.goal) {
-        throwToolError(result.message);
-      }
-      let acknowledged = false;
-      try {
-        host.setGoal(result.goal, "tool", ctx);
-        acknowledged = true;
-        await host.waitForGoalProjection?.();
-      } catch (error) {
-        throwToolError(error instanceof Error ? error.message : String(error), {
-          operation: "create_goal", applied: acknowledged ? true : null,
-          goalId: result.goal.goalId, stage: acknowledged ? "projection" : "canonical",
-          retryable: acknowledged && host.getGoal()?.goalId === result.goal.goalId,
-          remediation: acknowledged
-            ? "Read get_goal. The Goal already exists: do not create it again. Once storage is available, the next authorized Goal write rebuilds its document."
-            : "Write acknowledgement is unknown. Reopen the saved session file and selected branch and reconcile the canonical Goal before creating another one; SDK memory and extension reload do not prove persistence.",
-          ...(error instanceof GoalCanonicalWriteError ? { ...error.details, operation: "create_goal",
-            applied: acknowledged ? true : null, stage: acknowledged ? "projection" : "canonical" } : {}),
-        });
-      }
-      return textResult(toToolText(result.goal), result.goal);
-    },
-  });
+  registerCreateGoalTool(pi, host, DEFAULT_GOAL_FEATURES);
 
   pi.registerTool({
     name: "amend_goal",
@@ -528,6 +488,54 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       const unconfirmed = unconfirmedSelfDecided(result.goal);
       const text = JSON.stringify(response, null, 2) + (unconfirmed.length > 0 ? `\n\nНе подтверждено владельцем:\n${renderSelfDecided(unconfirmed)}` : "");
       return { content: [{ type: "text", text }], details: { ...response, ...(unconfirmed.length > 0 ? { unconfirmedSelfDecided: unconfirmed } : {}), error: null } };
+    },
+  });
+}
+
+/** Д5: вопросы до цели. Выключенная доработка возвращает прежнее описание `create_goal`. */
+export const ASK_BEFORE_GOAL_RULE = "Before create_goal, ask the owner in one ask_user batch everything that changes scope, architecture or acceptance and is not already settled in the conversation, files or memory. If the owner said to work without questions, do not ask; record your assumptions in self_decided instead.";
+
+/** Регистрирует `create_goal`; повторная регистрация после загрузки настроек меняет описание в той же сессии. */
+export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: Pick<GoalFeatures, "askBeforeGoal">): void {
+  pi.registerTool({
+    name: "create_goal",
+    label: "Create Goal",
+    description: `Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. After success publish goal_started before substantive work. This does not copy the conversation automatically.${rules.askBeforeGoal ? ` ${ASK_BEFORE_GOAL_RULE}` : ""}`,
+    promptSnippet: "Create a durable Goal only on explicit request; preserve the agreed outcome, evidence and done criterion.",
+    promptGuidelines: goalToolGuidelines("create_goal"),
+    parameters: CreateGoalParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const current = host.getGoal();
+      const features = host.getFeatures?.() ?? DEFAULT_GOAL_FEATURES;
+      if (!params.agreement) throwToolError("create_goal requires agreement with owner_wants and done_when.");
+      if (features.selfDecidedList && !params.self_decided) throwToolError("create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything.");
+      const agreement: AgreementInput = { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
+        ...(features.selfDecidedList && params.self_decided ? { selfDecided: params.self_decided } : {}) };
+      const replacingNonCompleteGoal = params.replace_existing === true && current !== null && current.status !== "complete";
+      const result = replacingNonCompleteGoal
+        ? replaceGoal(params.objective, params.token_budget ?? null, agreement)
+        : createGoal(current, params.objective, params.token_budget ?? null, agreement);
+      if (!result.ok || !result.goal) {
+        throwToolError(result.message);
+      }
+      let acknowledged = false;
+      try {
+        host.setGoal(result.goal, "tool", ctx);
+        acknowledged = true;
+        await host.waitForGoalProjection?.();
+      } catch (error) {
+        throwToolError(error instanceof Error ? error.message : String(error), {
+          operation: "create_goal", applied: acknowledged ? true : null,
+          goalId: result.goal.goalId, stage: acknowledged ? "projection" : "canonical",
+          retryable: acknowledged && host.getGoal()?.goalId === result.goal.goalId,
+          remediation: acknowledged
+            ? "Read get_goal. The Goal already exists: do not create it again. Once storage is available, the next authorized Goal write rebuilds its document."
+            : "Write acknowledgement is unknown. Reopen the saved session file and selected branch and reconcile the canonical Goal before creating another one; SDK memory and extension reload do not prove persistence.",
+          ...(error instanceof GoalCanonicalWriteError ? { ...error.details, operation: "create_goal",
+            applied: acknowledged ? true : null, stage: acknowledged ? "projection" : "canonical" } : {}),
+        });
+      }
+      return textResult(toToolText(result.goal), result.goal);
     },
   });
 }

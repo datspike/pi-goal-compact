@@ -778,6 +778,8 @@ export function createGoalSession(pi: ExtensionAPI) {
         openPaperCuts: projection?.paperCuts.filter((item) => item.status === "open").length ?? 0,
         repairPending: projections.repair() !== null, awaitingUser: reportState.awaitingUser,
         continuationHeld: reports.isContinuationHeld() || hooks.isLimitHeld(), userAnswerReceived: reportState.hasUserDecisionSinceAwaiting,
+        // Пока договорённость стоит в окне, продолжение не повторяет её результат и критерий.
+        agreementOwnsContract: features().singleFactOwner && features().agreementInWindow,
       };
     },
     resumePausedGoal,

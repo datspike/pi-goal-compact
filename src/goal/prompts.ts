@@ -161,6 +161,11 @@ export interface GoalContinuationSnapshot {
   workRevision?: number | undefined;
   workStateStale?: boolean | undefined;
   activeDecisions?: readonly GoalDecisionEntry[] | undefined;
+  /**
+   * Д6: результат и критерий готовности принадлежат договорённости в начале окна, поэтому
+   * выдержка плана их не повторяет.
+   */
+  agreementOwnsContract?: boolean | undefined;
 }
 
 /** A bounded excerpt keeps future obligations visible without replaying the whole document. */
@@ -189,7 +194,7 @@ function workContinuationLines(snapshot: GoalContinuationSnapshot): string[] {
     nextItemId: work.nextItemId, nextItem: selected?.id,
     selectedNextItem: selected ? item(selected) : null,
     compactionSuggested: goalWorkNeedsCompaction(work),
-    outcome: brief(work.outcome), doneWhen: brief(work.doneWhen), summary: brief(work.summary),
+    ...(snapshot.agreementOwnsContract ? {} : { outcome: brief(work.outcome), doneWhen: brief(work.doneWhen) }), summary: brief(work.summary),
     active: active.slice(0, 3).map(item), remaining: remaining.slice(0, 6).map(item),
     achieved: achieved.slice(-3).map(item), cancelled: cancelled.slice(-3).map(item),
     activeDecisions: decisions.slice(0, 4).map((entry) => ({ id: brief(entry.id), title: brief(entry.title), decision: brief(entry.decision), rationale: brief(entry.rationale) })),

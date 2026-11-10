@@ -18,7 +18,7 @@ import {
 } from "../goal/goal-reports.js";
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
 import { isAssistantContextOverflow, isErrorAssistantMessage, reasonFromRecoveryPendingAttention } from "../goal/recovery.js";
-import { registerGoalTools } from "../goal/tools.js";
+import { registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goal/tools.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
@@ -71,7 +71,7 @@ function registerEntryRenderers(pi: ExtensionAPI): void {
  */
 export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   registerEntryRenderers(pi);
-  registerGoalTools(pi, {
+  const toolHost: ToolHost = {
     getGoal: () => session.goalForDisplay(),
     getGoalWorkingState: session.getGoalWorkingState,
     getGoalHistory: session.getGoalHistory,
@@ -91,7 +91,16 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     updateGoalPaperCut: session.updateGoalPaperCut,
     repairGoalNote: session.repairGoalNote,
     loadGoalLanguageGuide: session.loadGoalLanguageGuide,
-  });
+  };
+  registerGoalTools(pi, toolHost);
+  // Описание `create_goal` зависит от выключателя Д5, а настройки читаются при старте сессии.
+  let askBeforeGoal = true;
+  const refreshToolRules = (): void => {
+    const next = session.getFeatures().askBeforeGoal;
+    if (next === askBeforeGoal) return;
+    askBeforeGoal = next;
+    registerCreateGoalTool(pi, toolHost, { askBeforeGoal: next });
+  };
   registerGoalCommand(pi, {
     getGoal: () => session.goalForDisplay(),
     setGoal: session.setGoal,
@@ -126,8 +135,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     if (!ctx.isIdle()) session.accounting.beginAccounting();
   };
 
-  pi.on("session_start", async (_event, ctx) => { await reload(ctx); });
-  pi.on("session_tree", async (_event, ctx) => { await reload(ctx); });
+  pi.on("session_start", async (_event, ctx) => { await reload(ctx); refreshToolRules(); });
+  pi.on("session_tree", async (_event, ctx) => { await reload(ctx); refreshToolRules(); });
 
   pi.on("input", async (event, ctx) => {
     // Слово владельца снимает накопленные попытки восстановления после ошибок.

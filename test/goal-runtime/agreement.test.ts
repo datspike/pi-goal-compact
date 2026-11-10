@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { GoalWorkingState } from "../../src/goal/format.js";
-import { assistantMessage, createRuntimeHarness } from "../support/runtime-harness.js";
+import { assistantMessage, createRuntimeHarness, settleRun } from "../support/runtime-harness.js";
 
 type Harness = ReturnType<typeof createRuntimeHarness>;
 
@@ -161,4 +161,52 @@ test("собранное расширение ставит договорённ�
   assert.equal(messages[0]!.summary, "## Прогресс\n- шаг");
   assert.equal(messages[1]!.customType, "goal-compact-agreement");
   assert.match(String(messages[1]!.content), /Собрать отчёт о продажах за квартал/);
+});
+
+async function continuationAfterPlan(harness: Harness): Promise<string> {
+  const goalId = (await read(harness)).goal!.goalId;
+  const plan = { outcome: "Пересказ результата в плане.", doneWhen: "Пересказ критерия в плане.", summary: "Отчёт собирается.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "active", source: "user" }] };
+  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: plan });
+  await harness.runTool("report_goal_progress", { action: "publish", status: "working", phase: "Собираю отчёт", summary: "Начал сборку отчёта.", changed: "Подключена выгрузка.", nextStep: "Свести итоги." });
+  await harness.emit("agent_start", { type: "agent_start" });
+  await harness.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, message: assistantMessage("stop", { input: 10, output: 2 }), toolResults: [] });
+  const settled = await settleRun(harness);
+  assert.equal(settled.continued, true);
+  return String(settled.entries[0]?.content ?? "");
+}
+
+test("продолжение несёт шаг и план, но не пересказывает результат и критерий из договорённости", async () => {
+  const text = await continuationAfterPlan(await setup());
+  assert.match(text, /Собрать отчёт/);
+  assert.doesNotMatch(text, /Пересказ результата в плане|Пересказ критерия в плане/);
+  const cwd = await mkdtemp(join(tmpdir(), "goal-agreement-features-"));
+  try {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "goal-reports.json"), JSON.stringify({ features: { singleFactOwner: false } }));
+    const legacy = createRuntimeHarness({ cwd });
+    await legacy.emit("session_start", { type: "session_start", reason: "startup" });
+    await legacy.runTool("create_goal", { objective: "Отчёт о продажах", agreement: AGREEMENT, self_decided: [] });
+    assert.match(await continuationAfterPlan(legacy), /Пересказ критерия в плане/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("описание create_goal просит задать вопросы до цели, выключатель возвращает прежнее", async () => {
+  const description = (harness: Harness) => String(harness.getToolMetadata("create_goal")?.description ?? "");
+  const harness = createRuntimeHarness();
+  await harness.emit("session_start", { type: "session_start", reason: "startup" });
+  assert.match(description(harness), /ask the owner in one ask_user batch[\s\S]*record your assumptions in self_decided/);
+  const cwd = await mkdtemp(join(tmpdir(), "goal-agreement-features-"));
+  try {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "goal-reports.json"), JSON.stringify({ features: { askBeforeGoal: false } }));
+    const quiet = createRuntimeHarness({ cwd });
+    await quiet.emit("session_start", { type: "session_start", reason: "startup" });
+    assert.doesNotMatch(description(quiet), /ask_user batch/);
+    assert.match(description(quiet), /Create a durable Goal only after an explicit request/);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
