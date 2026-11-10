@@ -161,7 +161,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		name: "checkpoint_compact_continue",
 		label: "Checkpoint Compact Continue",
 		description: say("Сохраняет checkpoint, сжимает контекст и продолжает ту же цель после успешного compact.", "Saves a checkpoint, compacts context, and continues the same objective after successful compaction."),
-		promptSnippet: "Checkpoint current progress, compact context, and continue the same objective after compaction",
+		promptSnippet: say("Сохранить ход работы, сжать контекст и продолжить ту же цель после сжатия", "Checkpoint current progress, compact context, and continue the same objective after compaction"),
 		promptGuidelines: language === "ru"
 			? ["Используй checkpoint_compact_continue только по явной просьбе пользователя или при инструкции сохранить checkpoint перед сжатием.", "Перед вызовом заверши текущую атомарную работу и вызывай tool последним действием checkpoint.", "Для работы по плану передавай planPath/currentPhase/nextPhase."]
 			: ["Use checkpoint_compact_continue only when the user explicitly asks or instructions require a checkpoint before compaction.", "Finish the current atomic work first and call the tool as the last checkpoint action.", "For plan-based work pass planPath/currentPhase/nextPhase."],
