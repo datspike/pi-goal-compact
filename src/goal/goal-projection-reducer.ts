@@ -177,6 +177,14 @@ export function reduceGoalProjection(state: GoalProjectionState, event: GoalProj
         result.latestReportId = null;
         result.verifiedWorkRevision = null;
         result.workVerification = null;
+      } else if (state.stateSeq > 0 && agreementKey(state.goal) !== agreementKey(event.goal)) {
+        // П8: новая редакция договорённости или смена пунктов «Решаю сам» требует новой проверки.
+        // План при этом остаётся действующим, поэтому его версия не меняется.
+        result.progressInvalidated = true;
+        result.latestProgress = null;
+        result.latestReportId = null;
+        result.verifiedWorkRevision = null;
+        result.workVerification = null;
       }
       return result;
     }
@@ -390,4 +398,8 @@ export function isGoalProjectionEvent(value: unknown): value is GoalProjectionEv
 
 export function projectionEventKey(goalId: string, sequence: string): string {
   return `${goalId}:${sequence}`;
+}
+
+function agreementKey(goal: ThreadGoal): string {
+  return JSON.stringify({ agreement: goal.agreement ?? null, items: (goal.selfDecided ?? []).map((item) => [item.id, item.state, item.text]) });
 }

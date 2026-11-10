@@ -128,6 +128,9 @@ test("правка плана или нового пункта после пер
   await harness.runTool("report_goal_progress", verifying);
   await assert.rejects(complete(harness), /agreement_check/);
   await harness.runTool("record_goal_note", { kind: "decision", title: "Округление", decision: "Округляю суммы до рубля.", rationale: "Так в выгрузке.", self_decided: "assumption" });
+  // Новый пункт делает прежнюю проверку устаревшей (П8), а после новой проверки договорённость возвращается снова.
+  await assert.rejects(complete(harness), /fresh verifying progress report/);
+  await harness.runTool("report_goal_progress", { ...verifying, verification: "Округление сверено с выгрузкой." });
   await assert.rejects(complete(harness), /agreement_check/);
   const plan = { outcome: "Отчёт о продажах.", doneWhen: "Отчёт сходится.", summary: "Отчёт собран.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "done", source: "user" }] };
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: plan });
@@ -239,4 +242,18 @@ test("каждая новая редакция договорённости од
   const overview = harness.entries.filter((entry) => entry.type === "custom" && entry.customType === "goal-compact-observability").at(-1);
   const lines = (overview?.type === "custom" ? overview.data as { lines: string[] } : { lines: [] }).lines.join("\n");
   assert.match(lines, /Договорённость \(ред\. 2\): Отчёт о продажах по регионам\.\nГотово, когда: Отчёт сходится по каждому региону\.\nРешаю сам, не подтверждено:\n  1\. Квартал — календарный\./);
+});
+
+test("после смены пунктов «Решаю сам» прежний отчёт verifying не закрывает цель", async () => {
+  const harness = await setup();
+  const verifying = { action: "publish", status: "verifying", phase: "Проверяю отчёт", summary: "Отчёт собран и сверен.", verification: "Сверено с выгрузкой.", nextStep: "Закрыть цель." };
+  await harness.runTool("report_goal_progress", verifying);
+  const itemId = (await read(harness)).goal!.selfDecided![0]!.id;
+  await ownerSays(harness, "owner-no", "Нет, квартал финансовый.");
+  await harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "rejected" });
+  await assert.rejects(harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  assert.equal((await read(harness)).goal!.status, "active");
+  await harness.runTool("report_goal_progress", { ...verifying, summary: "Отчёт пересобран по финансовому кварталу." });
+  await harness.runTool("update_goal", { status: "complete" });
+  assert.equal((await read(harness)).goal!.status, "complete");
 });
