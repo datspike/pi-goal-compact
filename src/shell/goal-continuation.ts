@@ -12,7 +12,7 @@ import {
   isErrorAssistantMessage,
   isProviderLimitError,
   isRecoveryPendingAttention,
-  reasonFromRecoveryPendingAttention,
+  isSuccessfulAssistantTurn,
   type AssistantErrorMessage,
 } from "../goal/recovery.js";
 import { createSubagentWatch } from "../goal/subagent-watch.js";
@@ -199,20 +199,17 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     rebind(ctx);
     wake(ctx);
   });
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", () => {
     providerLimit.clear();
     subagents.clear();
     externalRetry.detach();
-    const goal = session.getGoal();
-    const pending = goal?.status === "active" ? reasonFromRecoveryPendingAttention(session.recovery.attention) : null;
-    if (pending) session.pauseForShutdown(ctx, pending);
-    else session.resetRecovery();
   });
 
   pi.on("input", (event, ctx) => {
     externalRetry.observe(ctx);
     if (event.source === "extension") return undefined;
     providerLimit.clear();
+    recoveryRuntime.onUserInput();
     // Реплика владельца снимает предел скрытых продолжений и начинает счёт заново.
     hidden = null;
     limitNoticeFor = null;
@@ -221,6 +218,8 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
 
   pi.on("agent_start", () => { agentEndHandled = false; });
   pi.on("turn_start", (_event, ctx) => {
+    // Каждый ход заканчивается своим agent_end; повтор отбрасывается только внутри хода.
+    agentEndHandled = false;
     if (!session.runIsForeign()) externalRetry.observe(ctx);
   });
   pi.on("message_start", (event, ctx) => {
@@ -231,7 +230,12 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   });
   pi.on("turn_end", (event, ctx) => {
     if (session.runIsForeign()) return;
-    externalRetry.result(ctx, event.message as Parameters<typeof externalRetry.result>[1]);
+    const message = event.message as AssistantErrorMessage;
+    externalRetry.result(ctx, message as Parameters<typeof externalRetry.result>[1]);
+    // Удачный ход закрывает восстановление; продолжит его граница перед простоем.
+    if (isSuccessfulAssistantTurn(message) && !isAssistantContextOverflow(message, ctx.model?.contextWindow ?? 0)) {
+      recoveryRuntime.finishSuccessfulAssistantTurn(message, ctx, { continueGoal: false });
+    }
   });
 
   // Итог прогона для восстановления: ошибка, переполнение окна или удачный ход.

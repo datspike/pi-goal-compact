@@ -17,7 +17,7 @@ import {
   isGoalReportEntry,
 } from "../goal/goal-reports.js";
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
-import { isAssistantContextOverflow, isErrorAssistantMessage } from "../goal/recovery.js";
+import { isAssistantContextOverflow, isErrorAssistantMessage, reasonFromRecoveryPendingAttention } from "../goal/recovery.js";
 import { registerGoalTools } from "../goal/tools.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
@@ -287,6 +287,11 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     session.endUserTurn();
     session.accounting.accountProgress(ctx, false, 0, true);
     session.flush("runtime");
+    // Незавершённое восстановление не переживает закрытие: цель уходит на техническую паузу,
+    // а строка статуса очищается уже после неё.
+    const pending = session.getGoal()?.status === "active" ? reasonFromRecoveryPendingAttention(session.recovery.attention) : null;
+    if (pending) session.pauseForShutdown(ctx, pending);
+    else session.resetRecovery();
     session.status.stopStatusRefresh(true);
   });
 }

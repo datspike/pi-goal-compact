@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import assert from "node:assert/strict";
+import { mock } from "node:test";
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 
@@ -9,7 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { compose } from "../../src/index.js";
+import { STATUS_KEY } from "../../src/records.js";
+import { compactContinuationPrompt } from "../../src/goal/prompts.js";
 import { isContextOverflowError } from "../../src/goal/recovery.js";
+import { CONTINUATION_RETRY_MS, PROVIDER_LIMIT_AUTO_RESUME_MS } from "../../src/goal/runtime-config.js";
 import { isGoalCustomEntry, reconstructGoal } from "../../src/goal/state.js";
 import { GOAL_PROJECTION_ENTRY_TYPE } from "../../src/goal/goal-reports.js";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
@@ -77,6 +81,13 @@ export function sessionShutdownEvent(
 }
 
 /**
+ * Каталог проекта для обвязки: свой на каждый процесс тестов, чтобы документы цели
+ * (`.pi/…`) не попадали в общий `/tmp` и не смешивались между прогонами.
+ */
+const harnessCwd = mkdtempSync(join(tmpdir(), "goal-compact-harness-cwd-"));
+process.on("exit", () => rmSync(harnessCwd, { recursive: true, force: true }));
+
+/**
  * Загружает собранное расширение с пустым профилем Pi: настройки сжатия владельца
  * не должны влиять на тесты цели.
  */
@@ -120,7 +131,7 @@ export function createRuntimeHarness(options: {
   failAmendmentProjectionPersists?: number;
   /** Optional real session storage; an exception must reach the public caller. */
   persistEntry?: (customType: string, data: unknown) => void;
-  /** Project directory for `.pi/goal-reports.json`; defaults to `/tmp`. */
+  /** Каталог проекта для `.pi/goal-reports.json`; по умолчанию — временный каталог процесса. */
   cwd?: string;
 } = {}) {
   const entries: ReturnType<ExtensionCommandContext["sessionManager"]["getBranch"]> = [];
@@ -290,14 +301,14 @@ export function createRuntimeHarness(options: {
   const sessionManager = {
     buildContextEntries: () => entries,
     getBranch: () => entries,
-    getCwd: () => "/tmp",
+    getCwd: () => harnessCwd,
     getEntries: () => entries,
     getEntry: () => undefined,
     getHeader: () => null,
     getLabel: () => undefined,
     getLeafEntry: () => undefined,
     getLeafId: () => null,
-    getSessionDir: () => "/tmp",
+    getSessionDir: () => harnessCwd,
     getSessionFile: () => undefined,
     getSessionId: () => "session",
     getSessionName: () => undefined,
@@ -327,8 +338,9 @@ export function createRuntimeHarness(options: {
     setFooter() {},
     setHeader() {},
     setHiddenThinkingLabel() {},
-    setStatus(_key, status) {
-      footerStatuses.push(status);
+    // Строку сжатия ведёт другой ключ; тесты цели смотрят только статус цели.
+    setStatus(key, status) {
+      if (key === STATUS_KEY.goal) footerStatuses.push(status);
     },
     setTheme: () => ({ success: false }),
     setTitle() {},
@@ -344,7 +356,7 @@ export function createRuntimeHarness(options: {
     abort() {
       runtime.abortCount += 1;
     },
-    cwd: options.cwd ?? "/tmp",
+    cwd: options.cwd ?? harnessCwd,
     fork: async () => ({ cancelled: false }),
     getContextUsage: () => runtime.contextUsage,
     getSystemPrompt: () => "",
@@ -443,6 +455,12 @@ export function createRuntimeHarness(options: {
       objective: trimmed,
       ...(before && before.status !== "complete" ? { replace_existing: true } : {}),
     });
+    const goal = reconstructGoal(entries).goal;
+    // Pi уже исчерпал своё восстановление после переполнения: следующую попытку даёт только
+    // обычная реплика пользователя. Обвязка подкладывает её как реплику, с которой начата цель.
+    if (goal && runtime.hostOverflowRecoveryAttempted) {
+      sentUserMessages.push({ content: compactContinuationPrompt(goal), options: { deliverAs: "followUp" } });
+    }
   }
 
   async function emit(event: string, payload: object): Promise<unknown[]> {
@@ -637,7 +655,7 @@ export async function emitPersistentAssistantError(
     type: "agent_end",
     messages: [message],
   });
-  await harness.waitForGoalProjection();
+  await settleRun(harness, "error");
   if (isContextOverflowError(errorMessage)) {
     harness.setHostOverflowRecoveryAttempted(true);
   }
@@ -668,10 +686,79 @@ export async function emitSilentContextOverflow(
     type: "agent_end",
     messages: [message],
   });
+  await settleRun(harness, "completed");
   harness.setHostOverflowRecoveryAttempted(true);
 }
 
 /** Semantic recovery/links scenarios inspect details explicitly, rather than relying on the UI default. */
 export function createExpandedRuntimeHarness(options: Parameters<typeof createRuntimeHarness>[0] = {}) {
   return createRuntimeHarness({ ...options, expandedWidget: true });
+}
+
+type SettleOutcome = "completed" | "aborted" | "error";
+
+/** Записи и решение расширения на границе `agent_before_settle`. */
+export interface SettleResult {
+  /** Записи продолжения, которые расширение добавило перед простоем. */
+  entries: Array<{ customType?: string; content?: unknown; details?: unknown }>;
+  continued: boolean;
+}
+
+/**
+ * Граница перед простоем, как в Pi 1.5: `agent_before_settle`, затем `agent_settled`, если
+ * расширение не продолжило прогон. Возвращает добавленное продолжение.
+ */
+export async function settleRun(harness: RuntimeHarness, outcome: SettleOutcome = "completed", pendingMessages = false): Promise<SettleResult> {
+  const results = await harness.emit("agent_before_settle", {
+    type: "agent_before_settle",
+    entries: [],
+    outcome,
+    context: { pendingMessages: pendingMessages ? [{ role: "user", content: "x", timestamp: 1 }] : [] },
+  }) as Array<{ entries?: SettleResult["entries"]; continue?: boolean } | undefined>;
+  const entries = results.flatMap((result) => result?.entries ?? []);
+  const continued = results.some((result) => result?.continue === true);
+  if (!continued) await harness.emit("agent_settled", { type: "agent_settled", aborted: outcome === "aborted" });
+  await harness.waitForGoalProjection();
+  return { entries, continued };
+}
+
+/**
+ * Проигрывает один прогон из одного хода с данным ответом ассистента до границы перед простоем.
+ * Продолженный прогон остаётся тем же: следующий вызов начинает новый ход без `agent_start`.
+ */
+export async function runTurn(
+  harness: RuntimeHarness,
+  turnIndex: number,
+  message: ReturnType<typeof assistantMessage> = assistantMessage("stop", { input: 10, output: 2 }),
+  options: { newRun?: boolean; pendingMessages?: boolean } = {},
+): Promise<SettleResult> {
+  if (options.newRun ?? true) await harness.emit("agent_start", { type: "agent_start" });
+  await harness.emit("turn_start", { type: "turn_start", turnIndex, timestamp: turnIndex + 1 });
+  await harness.emit("turn_end", { type: "turn_end", turnIndex, message, toolResults: [] });
+  await harness.emit("agent_end", { type: "agent_end", messages: [message] });
+  const outcome: SettleOutcome = message.stopReason === "aborted" ? "aborted" : message.stopReason === "error" ? "error" : "completed";
+  return settleRun(harness, outcome, options.pendingMessages);
+}
+
+/** Продолжения цели, поставленные билетом из простоя. */
+export function goalTickets(harness: RuntimeHarness) {
+  return harness.sentMessages.filter((sent) => sent.message.customType === "goal-compact-ticket" &&
+    (sent.message.details as { kind?: string } | undefined)?.kind === "goal");
+}
+
+/** Доставка билета в начало прогона, как это делает Pi: `before_agent_start`, затем первая сборка окна. */
+export async function deliverTicket(harness: RuntimeHarness, sent: SentMessage): Promise<void> {
+  const message = { role: "custom", customType: sent.message.customType, content: sent.message.content, display: sent.message.display, details: sent.message.details, timestamp: 1 };
+  await harness.emit("before_agent_start", { type: "before_agent_start", messageType: "custom", message, prompt: "", images: [], systemPrompt: "", systemPromptOptions: {} });
+  await harness.emit("agent_start", { type: "agent_start" });
+  await harness.emit("context", { type: "context", messages: [message] });
+}
+
+/** Таймер повторной попытки продолжения и отложенного пробуждения (нужен `mock.timers`). */
+export function flushContinuationScheduler(): void {
+  mock.timers.tick(CONTINUATION_RETRY_MS);
+}
+
+export function fireProviderLimitAutoResume(): void {
+  mock.timers.tick(PROVIDER_LIMIT_AUTO_RESUME_MS);
 }
