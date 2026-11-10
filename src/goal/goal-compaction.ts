@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 
 import { inLanguage, type Language } from "../language.js";
+import { LEGACY_RECORD_NAMES } from "../records.js";
 import { avoidRepeatLine, compactContinuationPrompt, continuationPrompt } from "./prompts.js";
 import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "./types.js";
 
@@ -30,7 +31,10 @@ function withoutBudgetCounters(content: string): string {
 }
 
 function projectContinuation(message: PreparedMessage): PreparedMessage | null {
-  if (message.role !== "custom" || message.customType !== CUSTOM_ENTRY_TYPE || typeof message.content !== "string" ||
+  // Pi отдаёт подготовленные сообщения с исходным типом записи: в сессиях прежнего pi-codex-goal
+  // продолжения лежат под старым именем. Имя переводится только для сравнения, копия сохраняет исходное.
+  if (message.role !== "custom" || (LEGACY_RECORD_NAMES[message.customType] ?? message.customType) !== CUSTOM_ENTRY_TYPE ||
+      typeof message.content !== "string" ||
       !message.details || typeof message.details !== "object") return message;
   const details = message.details as { goalId?: unknown; kind?: unknown };
   if (typeof details.goalId !== "string" || !details.goalId || typeof details.kind !== "string" || ![

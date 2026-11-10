@@ -107,6 +107,21 @@ test("real mixed and legacy continuations keep their facts as projections, witho
   assert.deepEqual(preparation, projected, "projection is idempotent");
 });
 
+test("продолжения из сессии прежнего pi-codex-goal очищаются так же, тип записи не меняется", () => {
+  const { pure, mixed, legacy } = goalCompactionFixture();
+  const current = [pure, mixed, legacy];
+  const old = current.map((message) => ({ ...message, customType: "pi-codex-goal" }));
+  const expected: Input = { messagesToSummarize: current, turnPrefixMessages: [] };
+  const actual: Input = { messagesToSummarize: old, turnPrefixMessages: [] };
+  filterGoalCompactionInput(expected);
+  filterGoalCompactionInput(actual);
+  assert.equal(actual.messagesToSummarize.length, 2, "чистое продолжение убрано");
+  for (const [index, message] of actual.messagesToSummarize.entries()) {
+    assert.equal(message.role === "custom" && message.customType, "pi-codex-goal");
+    assert.deepEqual({ ...message, customType: CUSTOM_ENTRY_TYPE }, expected.messagesToSummarize[index]);
+  }
+});
+
 test("extra evidence inside a recognized frame is preserved rather than normalized away", () => {
   const { pure } = goalCompactionFixture();
   const extended = { ...pure, content: pure.content.replace(/\n\n(Budget|Бюджет):/, "\nKEEP_EXTRA_EVIDENCE: tests passed.\n\n$1:") };
