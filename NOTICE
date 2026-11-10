@@ -1,0 +1,21 @@
+pi-goal-compact
+===============
+
+Расширение продолжает две прежние работы и заменяет их одним пакетом.
+
+1. pi-codex-goal — ведение долгих целей в Pi.
+   - исходный проект: https://github.com/fitchmultz/pi-codex-goal (MIT, Mitch Fultz);
+   - поддерживаемый форк, от которого взято поведение: https://github.com/datspike/pi-codex-goal.
+2. context-compaction — политика окна контекста, сводки сжатия и продолжение
+   после контрольной точки: https://github.com/datspike/context-compaction (MIT, Datspike).
+
+Ядро написано заново. Отдельные модули перенесены из этих проектов вместе
+с тестами; уведомления об авторских правах обоих сохранены в LICENSE.
+
+---
+
+pi-goal-compact continues two earlier projects and replaces them with one
+package: pi-codex-goal (upstream by Mitch Fultz, maintained fork by Datspike)
+and context-compaction (Datspike). The core is written from scratch; selected
+modules are carried over with their tests. Both MIT copyright notices are
+retained in LICENSE.

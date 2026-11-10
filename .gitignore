@@ -1,0 +1,29 @@
+node_modules/
+*.tsbuildinfo
+coverage/
+dist/
+npm-debug.log*
+*.log
+.DS_Store
+
+# Локальные слои: планы, результаты прогонов, состояние Pi и правила этой машины.
+.task_files/
+.runtime/
+.pi/
+/AGENTS.local.md
+
+# Состояние сессий и провайдеров не публикуется ни в каком виде.
+.env
+.env.*
+!.env.example
+sessions/
+*.jsonl
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Скачанный проверяльщик моделей и его рабочие каталоги.
+formal/.cache/
+formal/**/states/
+formal/**/*_TTrace_*

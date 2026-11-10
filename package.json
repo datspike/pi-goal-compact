@@ -1,0 +1,54 @@
+{
+  "name": "pi-goal-compact",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Долгие цели и сжатие контекста для Pi в одном расширении",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "lint:arch": "depcruise src --config .dependency-cruiser.cjs",
+    "lint:dead": "knip --no-config-hints",
+    "lint:dup": "jscpd",
+    "lint:style": "eslint src scripts test",
+    "check:public": "node --import tsx scripts/check-public-tree.ts",
+    "verify": "npm run typecheck && npm run lint:arch && npm run lint:dead && npm test && npm run check:public"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
+    "@types/node": "^22.19.0",
+    "dependency-cruiser": "^18.6.0",
+    "eslint": "^10.12.0",
+    "jscpd": "^5.4.1",
+    "knip": "^6.41.0",
+    "tsx": "^4.22.3",
+    "typebox": "1.3.27",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.2"
+  }
+}

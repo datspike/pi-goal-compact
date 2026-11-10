@@ -1,0 +1,9 @@
+{
+  "path": ["src"],
+  "format": ["typescript", "javascript"],
+  "minLines": 8,
+  "minTokens": 70,
+  "ignore": ["**/node_modules/**"],
+  "reporters": ["console"],
+  "silent": false
+}
