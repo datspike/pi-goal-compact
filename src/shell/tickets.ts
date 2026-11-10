@@ -34,6 +34,8 @@ export function registerTickets(pi: ExtensionAPI, driver: CoreDriver, gate: () =
 	const runtime = randomUUID();
 	const issued = new Set<string>();
 	const admitted = new Set<string>();
+	/** Билеты, которым этот процесс отказал при доставке, в том числе билеты прежнего процесса. */
+	const refused = new Set<string>();
 	let abortRequested = false;
 
 	pi.on("before_agent_start", (event, ctx) => {
@@ -43,6 +45,7 @@ export function registerTickets(pi: ExtensionAPI, driver: CoreDriver, gate: () =
 		const epoch = details && details.runtime === runtime ? details.epoch : -1;
 		const effects = driver.dispatch({ type: "ticket_arrived", ticket: { epoch, kind: details?.kind ?? "checkpoint" }, gate: gate() }, ctx);
 		if (details && effects.some((effect) => effect.type === "admit_ticket")) admitted.add(details.id);
+		else if (details) refused.add(details.id);
 		return undefined;
 	});
 	pi.on("context", (event, ctx) => {
@@ -54,7 +57,10 @@ export function registerTickets(pi: ExtensionAPI, driver: CoreDriver, gate: () =
 		const messages = event.messages.map((message) => {
 			if (message.role !== "custom" || message.customType !== RECORD.ticket) return message;
 			const details = ticketDetails(message.details);
-			if (!details || details.runtime !== runtime || !issued.has(details.id) || admitted.has(details.id)) return message;
+			// Чужой билет из прошлых прогонов уже выполнен и остаётся частью истории; гаснет только тот,
+			// кому отказано в этом процессе. Билет без details допуск не проходит никогда.
+			const stale = !details || refused.has(details.id) || (details.runtime === runtime && issued.has(details.id) && !admitted.has(details.id));
+			if (!stale) return message;
 			changed = true;
 			return { ...message, content: expiredTicket() };
 		});

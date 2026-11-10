@@ -215,3 +215,23 @@ test("цель с каталогом прежнего расширения пи�
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+test("bootstrap цели прежнего расширения скрывает от Git прежний каталог, новой цели — новый", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "goal-artifacts-"));
+  try {
+    await mkdir(join(cwd, ".git", "info"), { recursive: true });
+    const excludePath = join(cwd, ".git", "info", "exclude");
+    await writeFile(excludePath, "# existing\n", "utf8");
+    const legacyGoal = createThreadGoal("прежняя");
+    await mkdir(join(cwd, ".pi", "pohuy-goal", legacyGoal.goalId), { recursive: true });
+    const entries: Array<import("../../src/goal/types.js").SessionEntryLike> = [];
+    const artifacts = createGoalArtifacts({ appendEntry: (_type, data) => entries.push({ type: "custom", customType: "goal-compact-goal", data }), getCurrentGoal: () => legacyGoal });
+    await artifacts.bootstrap(legacyGoal, ctx(cwd, entries));
+    assert.equal(await readFile(excludePath, "utf8"), "# existing\n.pi/pohuy-goal/\n");
+    const freshGoal = createThreadGoal("новая");
+    await artifacts.bootstrap(freshGoal, ctx(cwd, entries));
+    assert.equal(await readFile(excludePath, "utf8"), "# existing\n.pi/pohuy-goal/\n.pi/goal-compact/\n");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

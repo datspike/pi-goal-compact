@@ -183,7 +183,8 @@ export function createGoalArtifacts(pi: ArtifactDeps) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
 
-      const line = `.pi/${ARTIFACT_ROOT}/`;
+      // Скрывается каталог, куда фактически пишет эта цель: у целей прежнего расширения это pohuy-goal.
+      const line = `.pi/${artifactRoot(ctx.cwd, goal.goalId)}/`;
       const current = await readFile(excludePath, "utf8").catch(() => "");
       if (!current.split(/\r?\n/).includes(line)) await writeFile(excludePath, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${line}\n`);
     } catch { /* Git exclusion is best effort and fail-closed. */ }

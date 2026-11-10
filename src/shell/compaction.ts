@@ -8,6 +8,7 @@ import {
 	checkpointParamsSchema,
 	compactedSinceLastUserMessage,
 	continuationPrompt,
+	withoutLegacyServiceTurns,
 } from "../compaction/checkpoint.js";
 import type { SummarySettings } from "../compaction/language.js";
 import type { ContextMode } from "../compaction/policy.js";
@@ -256,8 +257,16 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		const reason = event.reason as CompactionReason;
 		driver.dispatch({ type: "compaction_started", reason, willRetry: event.willRetry }, ctx);
 		if (reason !== "manual" || !manualCorrelation) external(ctx, "contained", reason, event.willRetry, event.preparation.tokensBefore);
+		const branch = ctx.sessionManager.getBranch();
+		const preparation = event.preparation;
+		if (Array.isArray(preparation.messagesToSummarize)) preparation.messagesToSummarize = withoutLegacyServiceTurns(preparation.messagesToSummarize, branch) ?? preparation.messagesToSummarize;
+		if (Array.isArray(preparation.turnPrefixMessages)) preparation.turnPrefixMessages = withoutLegacyServiceTurns(preparation.turnPrefixMessages, branch) ?? preparation.turnPrefixMessages;
 		// Сводку на обоих языках пишет расширение (Т11.3): иначе договорённость некуда вставить.
 		return summarize(event, ctx);
+	});
+	pi.on("context", (event, ctx) => {
+		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
+		return messages ? { messages } : undefined;
 	});
 	pi.on("session_before_tree", async (event, ctx) => {
 		switched(ctx);

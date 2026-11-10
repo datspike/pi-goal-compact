@@ -39,6 +39,30 @@ export function isNativeCompactionMessage(entry: BranchEntry, entries: readonly 
 	return !!id && entries.some((candidate) => candidate.type === "custom" && candidate.customType === "context-compaction-native" && (candidate.data as { id?: unknown; phase?: unknown } | undefined)?.id === id && (candidate.data as { phase?: unknown }).phase === "queued");
 }
 
+type ServiceMessage = { role?: string; customType?: string; content?: unknown };
+
+/**
+ * В сессиях прежнего `context-compaction` мог остаться незавершённый служебный запрос append-сжатия.
+ * Это инструкция расширению, а не модели: вместе с ответами на неё до следующей реплики она убирается
+ * из окна модели и из входа сводки. Возвращает undefined, если убирать нечего.
+ */
+export function withoutLegacyServiceTurns<T extends ServiceMessage>(messages: readonly T[], branch: readonly BranchEntry[]): T[] | undefined {
+	let service = false;
+	let changed = false;
+	const kept = messages.filter((message) => {
+		if (message.role === "user" || message.role === "custom") {
+			const entry: BranchEntry = message.role === "custom"
+				? { type: "custom_message", ...(message.customType === undefined ? {} : { customType: message.customType }), content: message.content }
+				: { type: "message", message: { role: "user", content: message.content } };
+			service = isNativeCompactionMessage(entry, branch);
+		}
+		const drop = service && message.role !== "system";
+		if (drop) changed = true;
+		return !drop;
+	});
+	return changed ? kept : undefined;
+}
+
 /** Отличает продолжение прежнего расширения сжатия от настоящей реплики владельца по его журналу отправки. */
 export function isHumanUserMessage(entry: BranchEntry, entries: readonly BranchEntry[]): boolean {
 	if (entry.type !== "message" || entry.message?.role !== "user") return false;

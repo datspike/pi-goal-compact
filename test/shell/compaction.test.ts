@@ -202,6 +202,44 @@ describe("билет продолжения на входе в прогон", ()
     await runtime.event("context", { messages: [] });
     expect(runtime.aborts).toBe(1);
   });
+
+  test("текст отклонённого билета прежнего процесса гаснет в окне, выполненный билет из истории остаётся", async () => {
+    const runtime = fakePi({ language: "en" });
+    const done = { customType: "goal-compact-ticket", content: "прежний шаг", details: { id: "old", runtime: "other", epoch: 0, kind: "checkpoint" } };
+    const stale = { customType: "goal-compact-ticket", content: "устаревший шаг", details: { id: "new", runtime: "other", epoch: 3, kind: "goal" } };
+    const broken = { customType: "goal-compact-ticket", content: "битый билет" };
+    await arrive(runtime, stale);
+    const context = await runtime.event("context", { messages: [{ role: "custom", ...done }, { role: "custom", ...broken }, { role: "custom", ...stale }] });
+    expect(runtime.aborts).toBe(1);
+    const text = JSON.stringify(context);
+    expect(text).toContain("прежний шаг");
+    expect(text).not.toContain("устаревший шаг");
+    expect(text).not.toContain("битый билет");
+  });
+});
+
+test("незавершённый служебный запрос прежнего append-сжатия убирается из окна и из входа сводки", async () => {
+  const id = "11111111-2222-3333-4444-555555555555";
+  const service = { role: "custom", customType: "context-compaction-native", content: `[context-compaction-native:${id}] Сожми историю` };
+  const reply = { role: "assistant", content: [{ type: "text", text: "служебный ответ" }] };
+  const owner = { role: "user", content: "реплика владельца" };
+  const branch = [
+    { id: "u1", type: "message", message: { role: "user", content: "Начать работу" } },
+    { id: "a1", type: "custom", customType: "context-compaction-native", data: { id, phase: "queued" } },
+  ];
+  const runtime = fakePi({ language: "en", branch });
+  const context = await runtime.event("context", { messages: [{ role: "user", content: "Начать работу" }, service, reply, owner] });
+  const text = JSON.stringify(context);
+  expect(text).not.toContain("Сожми историю");
+  expect(text).not.toContain("служебный ответ");
+  expect(text).toContain("реплика владельца");
+  const preparation = { tokensBefore: 100, messagesToSummarize: [service, reply, owner], turnPrefixMessages: [] };
+  await runtime.event("session_before_compact", { reason: "threshold", willRetry: false, preparation });
+  expect(preparation.messagesToSummarize).toEqual([owner]);
+  // Та же метка без записи об отправке — обычная реплика.
+  const plain = fakePi({ language: "en" });
+  const untouched = await plain.event("context", { messages: [service, reply] });
+  expect(untouched === undefined || JSON.stringify(untouched).includes("Сожми историю")).toBe(true);
 });
 
 test("карточка сжатия пишется после session_compact и читается прежним видом", async () => {
