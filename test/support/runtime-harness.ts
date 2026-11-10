@@ -84,7 +84,7 @@ export function sessionShutdownEvent(
  * Каталог проекта для обвязки: свой на каждый процесс тестов, чтобы документы цели
  * (`.pi/…`) не попадали в общий `/tmp` и не смешивались между прогонами.
  */
-const harnessCwd = mkdtempSync(join(tmpdir(), "goal-compact-harness-cwd-"));
+export const harnessCwd = mkdtempSync(join(tmpdir(), "goal-compact-harness-cwd-"));
 process.on("exit", () => rmSync(harnessCwd, { recursive: true, force: true }));
 
 /**
@@ -435,6 +435,18 @@ export function createRuntimeHarness(options: {
     await goalSession.waitForGoalProjection();
   }
 
+  /**
+   * Возобновление цели на паузе с продолжением — путь, который в новом расширении даёт согласие
+   * владельца при открытии сессии. Прежние `continueGoal` и `resumeGoalWithContinuation` сводятся к нему.
+   * `ok` — ушла ли реплика-продолжение.
+   */
+  async function resumeGoal(goalId: string): Promise<{ ok: boolean }> {
+    const before = sentUserMessages.length;
+    if (reconstructGoal(entries).goal?.goalId !== goalId) return { ok: false };
+    await emit("session_start", { type: "session_start", reason: "resume" });
+    return { ok: sentUserMessages.length > before };
+  }
+
   async function runSlashCommand(name: string, args = ""): Promise<void> {
     const command = commandHandlers.get(name);
     assert.ok(command, `Expected /${name} to be registered.`);
@@ -513,6 +525,8 @@ export function createRuntimeHarness(options: {
       return component?.render(200) ?? null;
     },
     runCommand,
+    resumeGoal,
+    continueGoal: resumeGoal,
     waitForGoalProjection: () => goalSession.waitForGoalProjection(),
     runSlashCommand,
     commandNames: () => [...commandHandlers.keys()],
