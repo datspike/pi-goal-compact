@@ -137,8 +137,10 @@ export function completionReturnMessage(goal: AgreementSource): string {
   return [
     say("Цель ещё не закрыта: сначала сверь работу с договорённостью.", "The goal is not closed yet: first check the work against the agreement."),
     renderAgreement(goal),
-    say("По каждому пункту «Готово, когда» назови доказательство. Назови, что из «Чего хочет владелец» не сделано; если что-то не сделано, продолжай работу.", "Name the evidence for each point of \"Done when\". Name what from \"What the owner wants\" is not done; if anything is not done, keep working."),
+    // Проверенный вариант Д3: ответ по каждому требованию владельца, а не доказательства учёта.
+    say("Ответь текстом: по каждому требованию из «Чего хочет владелец» — что именно в сделанной работе ему отвечает. Счётчики, квитанции и зелёные проверки подтверждают учёт, а не результат. Если хотя бы одному требованию ответить нечем, работа не закончена: продолжай её или спроси владельца; цель остаётся активной.",
+      "Answer in text: for each requirement in \"What the owner wants\", what exactly in the completed work answers it. Counters, receipts and green checks confirm accounting, not the result. If any requirement has no answer, the work is not finished: keep working or ask the owner; the goal stays active."),
     unconfirmed.length > 0 ? say(`Владелец не подтверждал ${unconfirmed.length} пункт(ов) «Решаю сам»; при закрытии он увидит их список.`, `The owner has not confirmed ${unconfirmed.length} \"Decided myself\" item(s); they will see the list at completion.`) : "",
-    say("Если всё сделано, вызови update_goal(complete) ещё раз, не меняя договорённость и план.", "If everything is done, call update_goal(complete) again without changing the agreement or the plan."),
+    say("Если каждому требованию есть ответ, вызови update_goal(complete) ещё раз, не меняя договорённость и план.", "If every requirement has an answer, call update_goal(complete) again without changing the agreement or the plan."),
   ].filter(Boolean).join("\n\n");
 }

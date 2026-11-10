@@ -114,6 +114,9 @@ test("первая попытка закрытия возвращает дого
     assert.match(receipt.message, /Собрать отчёт о продажах за квартал/);
     assert.match(receipt.message, /Квартал — календарный/);
     assert.match(receipt.message, /Отчёт открывается и сходится с выгрузкой/);
+    // Проверенный на модели вариант: ответ по каждому требованию владельца, учёт результатом не считается.
+    assert.match(receipt.message, /по каждому требованию из «Чего хочет владелец» — что именно в сделанной работе ему отвечает/);
+    assert.match(receipt.message, /подтверждают учёт, а не результат/);
     return true;
   });
   assert.equal((await read(harness)).goal!.status, "active");
