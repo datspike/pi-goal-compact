@@ -1,10 +1,11 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { RECORD } from "../records.js";
+import { renderAgreement } from "./agreement.js";
 import { createGoalProgressEntryComponent } from "./goal-reports.js";
 import { formatDuration } from "./format.js";
 import type { GoalWorkingState } from "./format.js";
-import type { SessionEntryLike } from "./types.js";
+import type { SessionEntryLike, ThreadGoal } from "./types.js";
 
 export const GOAL_OBSERVABILITY_ENTRY_TYPE = RECORD.observability;
 
@@ -51,6 +52,17 @@ export function formatGoalSnapshot(state: GoalWorkingState, mode: SnapshotMode):
     return lines;
   }
   const work = state.workState;
+  const agreement = state.goal.agreement;
+  if (agreement) {
+    addOptional(lines, `Договорённость (ред. ${agreement.revision})`, agreement.ownerWants);
+    addOptional(lines, "Готово, когда", agreement.doneWhen);
+    const unconfirmed = (state.goal.selfDecided ?? []).filter((item) => item.state === "unconfirmed");
+    if (unconfirmed.length) {
+      lines.push("Решаю сам, не подтверждено:");
+      unconfirmed.slice(0, 5).forEach((item, index) => lines.push(`  ${index + 1}. ${clean(item.text)}`));
+      if (unconfirmed.length > 5) lines.push(`  Ещё ${unconfirmed.length - 5} — в GOAL.md.`);
+    }
+  }
   addOptional(lines, "Замысел", work?.outcome || state.goal.objective);
   addOptional(lines, "Сейчас", work?.summary || state.currentStep);
   if (work) {
@@ -109,6 +121,18 @@ export function appendGoalSnapshot(
   const key = snapshotKey(goalId, mode, lines);
   if (hasSnapshot(ctx.sessionManager.getBranch(), key)) return;
   pi.appendEntry(GOAL_OBSERVABILITY_ENTRY_TYPE, { version: 1, kind: "snapshot", mode, key, lines, ...(goalId ? { goalId } : {}) } satisfies GoalObservabilityEntry);
+}
+
+/**
+ * Т3.7, Т4.3: каждая новая редакция договорённости появляется в ленте один раз, чтобы владелец
+ * видел, что теперь считается целью. Запись только для показа: модель её не получает.
+ */
+export function appendAgreementEntry(pi: Pick<ExtensionAPI, "appendEntry">, branch: Iterable<SessionEntryLike>, goal: ThreadGoal): void {
+  if (!goal.agreement) return;
+  const key = `agreement\u0000${goal.goalId}\u0000${goal.agreement.revision}`;
+  if (hasSnapshot(branch, key)) return;
+  const lines = renderAgreement(goal).split("\n").filter((line, index, all) => line !== "" || all[index - 1] !== "");
+  pi.appendEntry(GOAL_OBSERVABILITY_ENTRY_TYPE, { version: 1, kind: "snapshot", mode: "details", key, lines, goalId: goal.goalId } satisfies GoalObservabilityEntry);
 }
 
 export function renderGoalObservabilityEntry(entry: { data?: unknown }): { render(width: number): string[]; invalidate(): void } | undefined {

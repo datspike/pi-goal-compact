@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { goalWorkingState, type GoalWorkingState } from "../goal/format.js";
 import { createAccountingState, createGoalAccounting } from "../goal/goal-accounting.js";
 import { createGoalArtifacts } from "../goal/goal-artifacts.js";
-import { appendGoalSnapshot } from "../goal/goal-observability.js";
+import { appendAgreementEntry, appendGoalSnapshot } from "../goal/goal-observability.js";
 import { GoalCanonicalWriteError, createGoalPersistence } from "../goal/goal-persistence.js";
 import { createGoalProjections, readGoalHistory, type GoalHistoryPage, type GoalHistoryQuery, type GoalPaperCutUpdate } from "../goal/goal-projections.js";
 import { goalFeatures, loadGoalReportPolicy, type GoalFeatures } from "../goal/goal-report-config.js";
@@ -366,6 +366,7 @@ export function createGoalSession(pi: ExtensionAPI) {
         if (error instanceof GoalCanonicalWriteError) return { ...canonicalFailure("amend_goal", error), amendmentId };
         throw error;
       }
+      announceAgreement(goal, ctx);
     }
     if (projections.isManaged()) {
       amendmentProjectionPending = true;
@@ -557,6 +558,11 @@ export function createGoalSession(pi: ExtensionAPI) {
     return goalWorkingState(goal, projection, reports.getState(), refs);
   };
 
+  const announceAgreement = (goal: ThreadGoal, ctx: ExtensionContext): void => {
+    if (goal.status === "complete") return;
+    appendAgreementEntry(pi, goalContext(ctx).sessionManager.getBranch(), goal);
+  };
+
   /** Ставит новую цель или новый снимок той же цели; документ строится заново при смене цели. */
   const setGoal = (nextGoal: ThreadGoal, source: GoalEntrySource, ctx: ExtensionContext): void => {
     const previous = getGoal();
@@ -572,6 +578,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       status.refreshUi(ctx);
     }
     if (!sameGoalChanged) watchBootstrap(nextGoal.goalId, initializeDocument(nextGoal, ctx), "bootstrap");
+    announceAgreement(nextGoal, ctx);
   };
 
   const clearGoal = (source: GoalEntrySource, ctx: ExtensionContext): void => {

@@ -224,3 +224,19 @@ test("GOAL.md показывает договорённость и состоя�
   await harness.waitForGoalProjection();
   assert.match(await readFile(path, "utf8"), /\[допущение — подтверждено владельцем\] Квартал — календарный\./);
 });
+
+test("каждая новая редакция договорённости один раз появляется в ленте, /gw показывает договорённость", async () => {
+  const harness = await setup();
+  const agreementEntries = () => harness.entries.filter((entry) => entry.type === "custom" && entry.customType === "goal-compact-observability"
+    && String((entry.data as { key?: unknown }).key).startsWith("agreement")).map((entry) => (entry.type === "custom" ? entry.data as { lines: string[] } : { lines: [] }).lines.join("\n"));
+  assert.equal(agreementEntries().length, 1);
+  assert.match(agreementEntries()[0]!, /редакция 1[\s\S]*Собрать отчёт о продажах за квартал\.[\s\S]*1\. \[допущение\] Квартал — календарный\./);
+  await ownerSays(harness, "owner-region", "Добавь разбивку по регионам.");
+  await harness.runTool("amend_goal", { amendment: "Разбить отчёт по регионам.", agreement: { owner_wants: "Отчёт о продажах по регионам.", done_when: "Отчёт сходится по каждому региону." } }, undefined, { ownerReply: false });
+  assert.equal(agreementEntries().length, 2);
+  assert.match(agreementEntries()[1]!, /редакция 2[\s\S]*по регионам/);
+  await harness.runSlashCommand("gw");
+  const overview = harness.entries.filter((entry) => entry.type === "custom" && entry.customType === "goal-compact-observability").at(-1);
+  const lines = (overview?.type === "custom" ? overview.data as { lines: string[] } : { lines: [] }).lines.join("\n");
+  assert.match(lines, /Договорённость \(ред\. 2\): Отчёт о продажах по регионам\.\nГотово, когда: Отчёт сходится по каждому региону\.\nРешаю сам, не подтверждено:\n  1\. Квартал — календарный\./);
+});

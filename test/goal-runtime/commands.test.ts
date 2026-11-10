@@ -146,8 +146,12 @@ test("/gs and /gw append visible snapshots without entering model context", asyn
   const { harness } = harnessWithStatus("active");
   await loadFixture(harness);
   type SnapshotEntry = Extract<typeof harness.entries[number], { type: "custom" }> & { customType: string; data: unknown };
-  const isSnapshot = (entry: typeof harness.entries[number]): entry is SnapshotEntry =>
+  const isObservability = (entry: typeof harness.entries[number]): entry is SnapshotEntry =>
     entry.type === "custom" && entry.customType === "goal-compact-observability";
+  // Запись новой редакции договорённости идёт в ту же ленту, но не относится к снимкам команд.
+  const isAgreement = (entry: typeof harness.entries[number]): boolean =>
+    isObservability(entry) && String((entry.data as { key?: unknown }).key).startsWith("agreement");
+  const isSnapshot = (entry: typeof harness.entries[number]): entry is SnapshotEntry => isObservability(entry) && !isAgreement(entry);
   const initialCount = harness.entries.filter(isSnapshot).length;
   await harness.runSlashCommand("gs");
   const compact = harness.entries.filter(isSnapshot).at(-1);
@@ -169,6 +173,8 @@ test("/gs and /gw append visible snapshots without entering model context", asyn
   await harness.runTool("create_goal", { objective: "second goal", replace_existing: true });
   await harness.runSlashCommand("gs");
   assert.equal(harness.entries.filter(isSnapshot).length, afterCompact + 2, "new goal gets a distinct status snapshot");
+  const agreement = harness.entries.filter(isAgreement).at(-1) as SnapshotEntry | undefined;
+  assert.match((agreement?.data as { lines: string[] }).lines.join("\n"), /## Договорённость \(редакция 1\)/);
   noTurn(harness);
   assert.equal(initialCount, 0);
 });
