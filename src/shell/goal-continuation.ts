@@ -53,13 +53,17 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
 
   const subagents = createSubagentWatch({ onRelease: () => { if (wakeContext) wake(wakeContext); } });
 
-  const holdReason = (): HoldReason => {
+  /**
+   * explicit — возобновление по решению владельца или по таймеру лимита: оно ждёт только
+   * известных работающих сабагентов, а не ответа на запрос статуса.
+   */
+  const holdReason = (explicit = false): HoldReason => {
     const goal = session.getGoal();
     if (!goal || goal.status === "complete") return "absent";
     if (goal.status !== "active") return "held";
     if (session.hasUnconfirmedWrite() || session.isContinuationHeld() || externalRetry.active() || isLimitHeld() ||
       isRecoveryPendingAttention(session.recovery.attention) || recoveryPhaseBlocksContinuation(session.recovery.phase)) return "held";
-    return subagents.mustHold() ? "subagents" : "runs";
+    return (explicit ? subagents.hasActiveRuns() : subagents.mustHold()) ? "subagents" : "runs";
   };
 
   const noticeIfLimitHeld = (): void => {
@@ -86,10 +90,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   const continuationText = (goal: ThreadGoal): string => compactContinuationPrompt(goal, session.continuationSnapshot());
 
   /** Повод начать работу из простоя. Во время прогона и при сообщениях в очереди решит граница перед простоем. */
-  const wake = (ctx: ExtensionContext): void => {
+  const wake = (ctx: ExtensionContext, explicit = false): void => {
     wakeContext = ctx;
     noticeIfLimitHeld();
-    const reason = holdReason();
+    const reason = holdReason(explicit);
     if (reason === "subagents") {
       subagents.hold();
       return;
@@ -109,7 +113,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     if (blocked) return blocked.message;
     providerLimit.clear();
     session.resumePausedGoal(ctx);
-    if (session.getGoal()?.status === "active") wake(ctx);
+    if (session.getGoal()?.status === "active") wake(ctx, true);
     return null;
   };
 
@@ -296,8 +300,8 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
 
   return {
     hooks,
-    /** Разрешение цели для сверки билета при доставке. */
-    gate: (): GoalGate => asGate(holdReason()),
+    /** Разрешение цели для сверки билета при доставке: уже выданный билет ждёт только известных работающих сабагентов. */
+    gate: (): GoalGate => asGate(holdReason(true)),
     execute(effect: CoreEffect, ctx: ExtensionContext): void {
       if (effect.type !== "send_ticket" || effect.ticket.kind !== "goal") return;
       const goal = session.getGoal();
