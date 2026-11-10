@@ -1,3 +1,4 @@
+import { renderSelfDecided } from "./agreement.js";
 import { goalPreservedContext } from "./goal-projection-state.js";
 import { goalWorkNeedsCompaction, selectNextGoalWork } from "./goal-work-state.js";
 import { createHash } from "node:crypto";
@@ -171,6 +172,12 @@ export function renderGoalDocument(state: GoalProjectionState): string {
   const lines = ["# Цель", "", "Документ обновляется из состояния сессии. Изменения вносите через инструменты цели.", "",
     ...section("Состояние", `${statusLabel(state.status === "active" && progress ? progress.status : state.status)}.`),
   ];
+  if (state.goal.agreement) {
+    // Договорённость — слова владельца в пересказе модели; показываем дословно, как её видит модель.
+    lines.push(`## Договорённость (редакция ${state.goal.agreement.revision})`, "", "**Чего хочет владелец:**", "", verbatimBlock(state.goal.agreement.ownerWants), "",
+      "**Решаю сам — владелец не подтверждал:**", "", verbatimBlock(renderSelfDecided(state.goal.selfDecided ?? [])), "",
+      "**Готово, когда:**", "", verbatimBlock(state.goal.agreement.doneWhen), "");
+  }
   if (work) {
     lines.push(...section("Замысел", work.outcome), ...section("Когда результат достаточен", work.doneWhen), ...section("Где мы сейчас", work.summary));
     if (state.workStateStale) lines.push("**Договорённость изменилась. Рабочую сводку нужно сверить с новым контрактом.**", "");

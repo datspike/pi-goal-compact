@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -209,4 +210,17 @@ test("описание create_goal просит задать вопросы до
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
+});
+
+test("GOAL.md показывает договорённость и состояние пунктов «Решаю сам» после подтверждения владельцем", async () => {
+  const harness = await setup();
+  const state = await read(harness);
+  const path = fileURLToPath(state.artifactRefs.find((ref) => ref.artifact === "GOAL")!.path);
+  const before = await readFile(path, "utf8");
+  assert.match(before, /## Договорённость \(редакция 1\)[\s\S]*Собрать отчёт о продажах за квартал\.[\s\S]*\[допущение\] Квартал — календарный\.[\s\S]*Отчёт открывается и сходится с выгрузкой\./);
+  const itemId = state.goal!.selfDecided![0]!.id;
+  await ownerSays(harness, "owner-quarter", "Да, календарный.");
+  await harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "confirmed" });
+  await harness.waitForGoalProjection();
+  assert.match(await readFile(path, "utf8"), /\[допущение — подтверждено владельцем\] Квартал — календарный\./);
 });
