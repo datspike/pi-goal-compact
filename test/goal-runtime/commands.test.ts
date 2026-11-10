@@ -93,7 +93,7 @@ test("/gc with no goal only reports that no goal is set", async () => {
   const harness = createRuntimeHarness();
   await harness.runSlashCommand("gc");
   assert.equal(harness.entries.length, 0);
-  assert.equal(harness.notifications.at(-1), "No goal is set.");
+  assert.equal(harness.notifications.at(-1), "Цель не задана.");
   noTurn(harness);
 });
 
@@ -107,7 +107,7 @@ test("all controls reject arguments before changing state, especially the former
       await harness.runSlashCommand(command, args);
       assert.deepEqual(harness.snapshot().goal, before);
       assert.equal(harness.entries.length, entryCount);
-      assert.match(harness.notifications.at(-1) ?? "", new RegExp(`Usage: /${command}`));
+      assert.match(harness.notifications.at(-1) ?? "", new RegExp(`Использование: /${command}`));
       noTurn(harness);
     }
   }
@@ -131,7 +131,7 @@ test("model tools create and replace goals without slash preparation", async () 
   await harness.runTool("create_goal", { objective: "first work" });
   const firstGoalId = harness.snapshot().goal?.goalId;
   assert.ok(firstGoalId);
-  await assert.rejects(() => harness.runTool("create_goal", { objective: "unauthorized duplicate" }), /non-complete goal/);
+  await assert.rejects(() => harness.runTool("create_goal", { objective: "unauthorized duplicate" }), /незавершённая цель/);
   await harness.runTool("create_goal", { objective: "approved replacement", replace_existing: true });
   assert.notEqual(harness.snapshot().goal?.goalId, firstGoalId);
   assert.equal(harness.snapshot().goal?.objective, "approved replacement");
@@ -214,5 +214,5 @@ test("a silent resume waiting for projections cannot override a newer stop or in
   await pending;
   assert.equal(writes, 0);
   assert.equal(goal.status, "paused");
-  assert.ok(harness.notifications.some(message => message.includes("stale")));
+  assert.ok(harness.notifications.some(message => message.includes("устарела")));
 });

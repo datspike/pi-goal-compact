@@ -11,7 +11,9 @@ import type { GoalWorkUpdateResult } from "../../src/goal/goal-work-state.js";
 import { isGoalProjectionEvent } from "../../src/goal/goal-projection-reducer.js";
 
 type CompletionReceipt = { applied: boolean | null; stage: string; retryable: boolean };
-import { createRuntimeHarness, passAgreementCheck } from "../support/runtime-harness.js";
+import { createRuntimeHarness, passAgreementCheck, useHarnessLanguage } from "../support/runtime-harness.js";
+
+useHarnessLanguage("en");
 
 async function full(h: ReturnType<typeof createRuntimeHarness>) {
   const state = (await h.runTool("get_goal", {}) as { details: GoalWorkingState }).details;

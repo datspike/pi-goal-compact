@@ -13,8 +13,7 @@ import {
   emitPersistentAssistantError,
   flushContinuationScheduler,
   settleRun,
-  sessionCompactEvent,
-} from "../support/runtime-harness.js";
+  sessionCompactEvent } from "../support/runtime-harness.js";
 import { givenOverflowPausedGoal } from "../support/scenarios.js";
 
 function agentStartEvent(): object {
@@ -205,7 +204,7 @@ test("overflow after compaction and intervening transient error pauses with reco
   await emitPersistentAssistantError(harness, 0, "context_length_exceeded");
   assert.equal(harness.snapshot().goal?.status, "active");
   assert.equal(harness.sentMessages.length, 0);
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 
   await harness.emit("session_compact", sessionCompactEvent({ reason: "overflow", willRetry: true }));
@@ -215,7 +214,7 @@ test("overflow after compaction and intervening transient error pauses with reco
   await emitPersistentAssistantError(harness, 1, "websocket closed");
   assert.equal(harness.snapshot().goal?.status, "active");
   assert.equal(harness.sentMessages.length, 0);
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 
   await emitPersistentAssistantError(harness, 2, "context_length_exceeded");
@@ -223,7 +222,7 @@ test("overflow after compaction and intervening transient error pauses with reco
   assert.equal(harness.compactCalls.length, 0);
   assert.equal(harness.snapshot().goal?.status, "paused");
   assert.equal(harness.sentMessages.length, 0);
-  assert.match(harness.goalNotice() ?? "", /На паузе · .*Goal needs attention/);
+  assert.match(harness.goalNotice() ?? "", /На паузе · .*Цели нужно внимание/);
 });
 
 test("repeated transient errors stay active with pending attention without hidden retries", async () => {
@@ -238,7 +237,7 @@ test("repeated transient errors stay active with pending attention without hidde
 
   assert.equal(harness.sentMessages.length, 0);
   assert.equal(harness.compactCalls.length, 0);
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 });
 
@@ -265,7 +264,7 @@ test("/gp after pending transient error clears recovery attention", async () => 
   await emitPersistentAssistantError(harness, 0, "websocket closed");
 
   assert.equal(harness.snapshot().goal?.status, "active");
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 
   await harness.runSlashCommand("gp");
@@ -283,7 +282,7 @@ test("/gp after pending overflow error clears recovery attention", async () => {
   await emitPersistentAssistantError(harness, 0, "context_length_exceeded");
 
   assert.equal(harness.snapshot().goal?.status, "active");
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 
   await harness.runSlashCommand("gp");
@@ -330,7 +329,7 @@ test("successful turns reset transient error counters and continue active goals"
 
 test("exhausted context overflow retries show recoverable attention in the widget", async () => {
   const { harness, goal } = await givenOverflowPausedGoal("ship it");
-  assert.match(harness.goalNotice() ?? "", /На паузе · .*Goal needs attention/);
+  assert.match(harness.goalNotice() ?? "", /На паузе · .*Цели нужно внимание/);
 });
 
 test("agent_end only counts recovered errors once per failed run", async () => {

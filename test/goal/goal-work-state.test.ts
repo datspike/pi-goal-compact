@@ -80,8 +80,8 @@ test("work snapshots and incoming events do not share mutable references", () =>
 test("stale updates and unknown decision references are rejected", () => {
   const { state, event } = fixture();
   const updated = reduceGoalProjection(state, event);
-  assert.throws(() => reduceGoalProjection(updated, { ...event, idempotencyKey: "work:stale" }), /Stale goal work revision/);
-  assert.throws(() => reduceGoalProjection(state, { ...event, workState: { ...work(), activeDecisionIds: ["missing"] } } as GoalProjectionEvent), /unknown decision/);
+  assert.throws(() => reduceGoalProjection(updated, { ...event, idempotencyKey: "work:stale" }), /Ревизия плана устарела/);
+  assert.throws(() => reduceGoalProjection(state, { ...event, workState: { ...work(), activeDecisionIds: ["missing"] } } as GoalProjectionEvent), /неизвестное решение/);
   assert.equal(isGoalProjectionEvent({ ...event, expectedRevision: -1 }), false);
 });
 
@@ -90,7 +90,7 @@ test("unfinished user work cannot silently vanish, but may be explicitly cancell
   const updated = reduceGoalProjection(state, event);
   const next = { ...event, idempotencyKey: "work:2", expectedRevision: 1 } as Extract<GoalProjectionEvent, { kind: "work_state_updated" }>;
   next.workState = { ...work(), items: work().items.filter((item) => item.id !== "migration") };
-  assert.throws(() => reduceGoalProjection(updated, next), /Unfinished user work cannot disappear/);
+  assert.throws(() => reduceGoalProjection(updated, next), /Незавершённый пункт пользователя не может исчезнуть/);
   next.workState = work();
   next.workState.items[1]!.status = "cancelled";
   assert.equal(reduceGoalProjection(updated, next).workRevision, 2);

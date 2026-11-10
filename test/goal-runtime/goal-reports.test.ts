@@ -23,8 +23,7 @@ import {
   sessionBeforeCompactEvent,
   sessionCompactEvent,
   goalTickets,
-  settleRun,
-} from "../support/runtime-harness.js";
+  settleRun } from "../support/runtime-harness.js";
 import { compactContinuationPrompt } from "../../src/goal/prompts.js";
 import { progressReportParams } from "../../src/goal/tools.js";
 
@@ -131,7 +130,7 @@ test("only the model narrative is visible and repair events never become chat en
   const summary = "Проверил исходное состояние и зафиксировал границы. Теперь проверяю следующий шаг.";
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { ...reportParams(), summary, changed: "Controlled flow validated, блокеры отсутствуют." }),
-    /language repair required/,
+    /Текст документа цели нужно исправить/,
   );
   const repair = harness.entries.find((entry) => entry.type === "custom" && entry.customType === GOAL_PROJECTION_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "language_repair_required");
   assert.ok(repair && repair.type === "custom");
@@ -150,8 +149,8 @@ test("first rejected report blocks completion until a clean retry", async () => 
   const harness = createRuntimeHarness();
   await harness.runCommand("ship reports");
   const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /language repair required/);
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проверка завершена." });
   const completed = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((completed as { details: { status: string } }).details.status, "complete");
@@ -162,18 +161,18 @@ test("semantic checkpoint dedup does not clear a pending language repair", async
   await harness.runCommand("ship reports");
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying" });
   const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /language repair required/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
   const duplicate = await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", eventKind: "progress_checkpoint" }) as { details: { reportId: string | null } };
   assert.equal(duplicate.details.reportId, null);
   assert.equal(harness.entries.filter((entry) => entry.type === "custom" && entry.customType === GOAL_PROJECTION_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "language_repair_cleared").length, 0);
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
 });
 
 test("language repair clears after a clean retry and does not leak into a replacement goal", async () => {
   const harness = createRuntimeHarness();
   await harness.runCommand("ship reports");
   const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /language repair required/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проверка завершена." });
   const completed = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((completed as { details: { status: string } }).details.status, "complete");
@@ -192,7 +191,7 @@ test("amendment repair_required outcome is retryable and does not resume a pause
   await harness.runCommand("Проверить amendment repair");
   const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
   await harness.runTool("report_goal_progress", reportParams());
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /language repair required/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
   await harness.runSlashCommand("gp");
   assert.equal(harness.snapshot().goal?.status, "paused");
   await assert.rejects(
@@ -225,7 +224,7 @@ test("repair_required amendment errors remain bounded after a long report histor
   for (let index = 0; index < 100; index += 1) {
     await harness.runTool("report_goal_progress", { action: "publish", status: "working", phase: "Проверяю", summary: `Проверил шаг ${index}. Перехожу дальше.`, changed: `Изменил шаг ${index}.`, nextStep: "Продолжить." });
   }
-  await assert.rejects(() => harness.runTool("report_goal_progress", { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." }), /language repair required/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." }), /Текст документа цели нужно исправить/);
   await assert.rejects(
     () => harness.runTool("amend_goal", { amendment: "Ограниченное исправление." }),
     (error: unknown) => {
@@ -244,9 +243,9 @@ test("amendment blocks an immediate completion race and requires a new verifying
   await harness.runCommand("ship reports");
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проверка завершена." });
   await harness.runTool("amend_goal", { amendment: "Дополнительно проверить восстановление." });
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
   await new Promise((resolve) => setImmediate(resolve));
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Новая проверка завершена." });
   const completed = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((completed as { details: { status: string } }).details.status, "complete");
@@ -267,7 +266,7 @@ test("new publish requires a reader-facing summary", async () => {
   const before = harness.entries.length;
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { ...reportParams(), summary: "" }),
-    /publish requires status, phase, summary, and nextStep/,
+    /publish требует status, phase, summary и nextStep/,
   );
   assert.equal(harness.entries.length, before);
 });
@@ -279,7 +278,7 @@ test("a report narrative rejects terminal controls before persistence and legacy
   const hostile = `Проверил состояние. \u001b]8;;${pathToFileURL("/etc/passwd").href}\u001b\\Открыть\u001b]8;;\u001b\\ Дальше проверю результат.`;
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { ...reportParams(), summary: hostile }),
-    /summary must not contain terminal control characters/,
+    /summary не может содержать управляющие символы терминала/,
   );
   assert.equal(harness.entries.length, before);
   const rendered = createGoalProgressEntryComponent([hostile, "\u009b31mЦвет\u009b0m"]).render(120).join("\n");
@@ -288,15 +287,15 @@ test("a report narrative rejects terminal controls before persistence and legacy
 
 test("report_goal_progress rejects missing, paused, and completed goals", async () => {
   const harness = createRuntimeHarness();
-  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /active goal/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /активной цели/);
 
   await harness.runCommand("ship reports");
   await harness.runCommand("pause");
-  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /active goal/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /активной цели/);
 
   await harness.runCommand("resume");
   await harness.runTool("update_goal", { status: "complete" });
-  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /active goal/);
+  await assert.rejects(() => harness.runTool("report_goal_progress", reportParams()), /активной цели/);
 });
 
 test("awaiting_user without needUser is rejected before it writes a report or hold", async () => {
@@ -306,7 +305,7 @@ test("awaiting_user without needUser is rejected before it writes a report or ho
 
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { ...reportParams(), status: "awaiting_user" }),
-    /needUser must be non-empty/,
+    /needUser не может быть пустым/,
   );
 
   assert.equal(harness.entries.length, before);
@@ -331,7 +330,7 @@ test("suppress rejects report fields before recording a side effect", async () =
   const before = harness.entries.length;
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { action: "suppress", phase: "лишнее" }),
-    /suppress accepts only action/
+    /suppress принимает только action/
   );
   assert.equal(harness.entries.length, before);
 });
@@ -342,15 +341,15 @@ test("new publish reports require a meaningful status-specific delta", async () 
   await harness.runCommand("ship reports");
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { action: "publish", status: "working", phase: "работа", nextStep: "Продолжить." }),
-    /working requires at least one of changed, completed, problemOrDecision, riskAndComplexity, or verification/,
+    /working требует хотя бы одно из полей changed, completed, problemOrDecision, riskAndComplexity или verification/,
   );
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { action: "publish", status: "verifying", phase: "проверка", nextStep: "Завершить." }),
-    /verifying requires verification/,
+    /verifying требует verification/,
   );
   await assert.rejects(
     () => harness.runTool("report_goal_progress", { action: "publish", status: "blocked", phase: "блокировка", nextStep: "Ждать решения." }),
-    /blocked requires problemOrDecision/,
+    /blocked требует problemOrDecision/,
   );
   await harness.runTool("report_goal_progress", {
     action: "publish",
@@ -1046,7 +1045,7 @@ test("uncertain amendment projection exposes its address and reload repairs with
       assert.equal(payload.stage, "projection");
       assert.equal(payload.retryable, false);
       assert.match(payload.remediation, /amendment_id/);
-      assert.match(payload.remediation, /Reopen/);
+      assert.match(payload.remediation, /аново открой/);
       assert.match(payload.message, /persistence failure/);
       return true;
     },
@@ -1063,8 +1062,8 @@ test("note branches reject fields from the other branch before writing", async (
   const harness = createRuntimeHarness();
   await harness.runCommand("Проверить ветви заметок");
   const before = harness.entries.length;
-  await assert.rejects(() => harness.runTool("record_goal_note", { kind: "decision", title: "x", decision: "y", rationale: "z", severity: "high" }), /decision accepts only/);
-  await assert.rejects(() => harness.runTool("record_goal_note", { kind: "paper_cut", title: "x", impact: "y", severity: "low", rationale: "z" }), /paper_cut accepts only/);
+  await assert.rejects(() => harness.runTool("record_goal_note", { kind: "decision", title: "x", decision: "y", rationale: "z", severity: "high" }), /decision принимает только/);
+  await assert.rejects(() => harness.runTool("record_goal_note", { kind: "paper_cut", title: "x", impact: "y", severity: "low", rationale: "z" }), /paper_cut принимает только/);
   assert.equal(harness.entries.length, before);
 });
 

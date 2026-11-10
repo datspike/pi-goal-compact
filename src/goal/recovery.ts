@@ -1,6 +1,7 @@
 import { isContextOverflow } from "@earendil-works/pi-ai/compat";
 
 import { assistantMessageForOverflowCheck } from "./recovery-adapters.js";
+import { say } from "../language.js";
 
 export const CONTEXT_OVERFLOW_SIGNATURE = "context_overflow";
 
@@ -8,8 +9,10 @@ export const CONTEXT_OVERFLOW_SIGNATURE = "context_overflow";
 export const MAX_CONTEXT_COMPACTION_RETRIES = 1;
 export const HOST_OVERFLOW_RECOVERY_REASON = "recovering from context overflow";
 
-const RECOVERY_PENDING_ATTENTION_SUFFIX =
-  "wait for host retry/compaction or send a new user message if it does not recover.";
+const recoveryPendingAttentionSuffix = (): string => say(
+  "дождись повтора или сжатия от Pi; если цель не восстановится, отправь новое сообщение.",
+  "wait for host retry/compaction or send a new user message if it does not recover.",
+);
 
 export interface AssistantErrorMessage {
   role: string;
@@ -145,11 +148,11 @@ export function createRecoveryPausedAttention(reason: string): RecoveryAttention
 }
 
 export function recoveryPendingAttentionMessage(reason: string): string {
-  return `Goal recovery pending (${reason}); ${RECOVERY_PENDING_ATTENTION_SUFFIX}`;
+  return say(`Цель ждёт восстановления (${reason}); ${recoveryPendingAttentionSuffix()}`, `Goal recovery pending (${reason}); ${recoveryPendingAttentionSuffix()}`);
 }
 
 export function recoveryPausedAttentionMessage(reason: string): string {
-  return `Goal needs attention (${reason}). Use /gr to mark active, then send a message to continue.`;
+  return say(`Цели нужно внимание (${reason}). /gr сделает её активной, затем отправь сообщение, чтобы продолжить.`, `Goal needs attention (${reason}). Use /gr to mark active, then send a message to continue.`);
 }
 
 export function formatRecoveryAttention(attention: RecoveryAttention | null): string | null {

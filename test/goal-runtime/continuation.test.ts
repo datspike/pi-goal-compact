@@ -19,8 +19,7 @@ import {
   goalTickets,
   runTurn,
   settleRun,
-  type SentMessage,
-} from "../support/runtime-harness.js";
+  type SentMessage } from "../support/runtime-harness.js";
 
 /** Скрытое сообщение из отправленного, как его видит Pi в начале хода. */
 function queuedCustomMessage(sent: SentMessage, timestamp = 1) {
@@ -170,7 +169,7 @@ test("successful budget-crossing turn clears stale recovery footer attention", a
 
   await emitPersistentAssistantError(harness, 0, "websocket closed");
   assert.equal(harness.snapshot().goal?.status, "active");
-  assert.match(harness.goalNotice() ?? "", /Goal recovery pending/);
+  assert.match(harness.goalNotice() ?? "", /Цель ждёт восстановления/);
 
   await harness.emit("turn_start", { type: "turn_start", turnIndex: 1, timestamp: 2 });
   await harness.emit("turn_end", {
@@ -467,7 +466,7 @@ test("goal tools return Codex-shaped response details", async () => {
   const completed = (await harness.runTool("update_goal", { status: "complete" })) as {
     details: Record<string, unknown>;
   };
-  assert.match(String(completed.details.completionBudgetReport), /^Goal achieved\. Report final budget usage to the user:/);
+  assert.match(String(completed.details.completionBudgetReport), /^Цель достигнута\. Сообщи пользователю итоговый расход бюджета:/);
 });
 
 test("продолжение даёт граница перед простоем, а не agent_end или agent_settled", async () => {
@@ -678,7 +677,7 @@ test("provider-limit pauses schedule auto-resume", async () => {
 
     const paused = harness.snapshot().goal;
     assert.equal(paused?.status, "paused");
-    assert.match(harness.goalNotice() ?? "", /Auto-resume will retry in about 5 minutes/);
+    assert.match(harness.goalNotice() ?? "", /Автовозобновление попробует примерно через 5 минут/);
     assert.equal(harness.sentUserMessages.length, 0);
 
     fireProviderLimitAutoResume();
@@ -761,7 +760,7 @@ test("provider-limit auto-resume retries instead of resuming while busy", async 
 
     assert.equal(harness.snapshot().goal?.status, "paused");
     assert.equal(harness.sentUserMessages.length, 0);
-    assert.match(harness.goalNotice() ?? "", /Auto-resume will retry/);
+    assert.match(harness.goalNotice() ?? "", /Автовозобновление попробует/);
 
     harness.setIdle(true);
     harness.setPendingMessages(false);

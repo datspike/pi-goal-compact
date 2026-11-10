@@ -10,12 +10,13 @@ import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
 import {
   createExpandedRuntimeHarness as createRuntimeHarness,
   emitPersistentAssistantError,
-  sessionShutdownEvent,
-} from "../support/runtime-harness.js";
+  sessionShutdownEvent, useHarnessLanguage } from "../support/runtime-harness.js";
 import {
   givenOverflowPausedGoal,
   replaceGoalAfterOverflowPause,
 } from "../support/scenarios.js";
+
+useHarnessLanguage("en");
 
 test("/gr after non-retryable pause resets recovery counters without sending a turn", async () => {
   const harness = createRuntimeHarness();

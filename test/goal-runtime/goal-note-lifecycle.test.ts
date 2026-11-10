@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { createRuntimeHarness } from "../support/runtime-harness.js";
+import { createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
 import type { GoalWorkingState } from "../../src/goal/format.js";
 import { isGoalProjectionEvent, type GoalProjectionEvent } from "../../src/goal/goal-projection-reducer.js";
+
+useHarnessLanguage("en");
 
 type NoteReceipt = { noteId: string; noteRevision: number; applied: boolean; stage: string; retryable: boolean };
 

@@ -8,7 +8,9 @@ import { createGoalArtifacts } from "../../src/goal/goal-artifacts.js";
 import { createGoalProjections, readGoalHistory } from "../../src/goal/goal-projections.js";
 import { isGoalProjectionEvent, type GoalProjectionEvent } from "../../src/goal/goal-projection-reducer.js";
 import { createThreadGoal } from "../../src/goal/state.js";
-import { assistantMessage, createRuntimeHarness } from "../support/runtime-harness.js";
+import { assistantMessage, createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
+
+useHarnessLanguage("en");
 
 type Receipt = { operation: string; applied: boolean | null; stage: string; retryable: boolean; goalId: string; noteId: string; eventId: string; remediation: string };
 type Operation = "decision" | "paper_cut" | "update";

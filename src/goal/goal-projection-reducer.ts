@@ -14,6 +14,7 @@ import {
 } from "./goal-projection-state.js";
 import { GOAL_ARTIFACT_NAMES, type ThreadGoal } from "./types.js";
 import type { GoalImportedDocument } from "./goal-projection-state.js";
+import { say } from "../language.js";
 
 export type GoalProjectionEvent =
   | { kind: "goal_created"; idempotencyKey: string; goalId: string; goal: ThreadGoal }
@@ -192,18 +193,18 @@ export function reduceGoalProjection(state: GoalProjectionState, event: GoalProj
       assertGoalMatches(state, event.goalId);
       if (!isGoalWorkState(event.workState)) throw new Error("Malformed goal work state.");
       if (!Number.isSafeInteger(event.expectedRevision) || event.expectedRevision !== state.workRevision) {
-        throw new Error(`Stale goal work revision: expected ${state.workRevision}, received ${event.expectedRevision}.`);
+        throw new Error(say(`Ревизия плана устарела: текущая ${state.workRevision}, получена ${event.expectedRevision}.`, `Stale goal work revision: expected ${state.workRevision}, received ${event.expectedRevision}.`));
       }
       if (event.workState.activeDecisionIds.some((id) => !state.decisions.some((entry) => entry.id === id))) {
-        throw new Error("Goal work state references an unknown decision.");
+        throw new Error(say("План ссылается на неизвестное решение.", "Goal work state references an unknown decision."));
       }
       const nextItems = new Map(event.workState.items.map((item) => [item.id, item]));
       for (const previous of state.workState?.items ?? []) {
         if (previous.source !== "user") continue;
         const next = nextItems.get(previous.id);
-        if (next && next.source !== "user") throw new Error("User work provenance cannot change to agent; retain the user source.");
+        if (next && next.source !== "user") throw new Error(say("Пункт пользователя нельзя переписать на агента; сохрани источник user.", "User work provenance cannot change to agent; retain the user source."));
         if (previous.status !== "done" && previous.status !== "cancelled" && !next) {
-          throw new Error("Unfinished user work cannot disappear; retain it or record its disposition.");
+          throw new Error(say("Незавершённый пункт пользователя не может исчезнуть; оставь его или запиши, что с ним стало.", "Unfinished user work cannot disappear; retain it or record its disposition."));
         }
       }
       const result = nextState(state, event);
@@ -303,10 +304,10 @@ export function reduceGoalProjection(state: GoalProjectionState, event: GoalProj
       assertGoalMatches(state, event.goalId);
       const index = state.paperCuts.findIndex((entry) => entry.id === event.id);
       if (index < 0) {
-        throw new Error(`Unknown paper cut ${event.id}.`);
+        throw new Error(say(`Нет отложенного риска ${event.id}.`, `Unknown paper cut ${event.id}.`));
       }
       if (event.expectedRevision !== undefined && event.expectedRevision !== (state.paperCuts[index]!.revision ?? 0)) {
-        throw new Error(`Stale note revision: expected ${event.expectedRevision}, current ${state.paperCuts[index]!.revision ?? 0}. Read get_goal before retrying.`);
+        throw new Error(say(`Ревизия записи устарела: ожидалась ${event.expectedRevision}, текущая ${state.paperCuts[index]!.revision ?? 0}. Перед повтором прочитай get_goal.`, `Stale note revision: expected ${event.expectedRevision}, current ${state.paperCuts[index]!.revision ?? 0}. Read get_goal before retrying.`));
       }
       const result = nextState(state, event);
       result.paperCuts = result.paperCuts.map((entry) =>

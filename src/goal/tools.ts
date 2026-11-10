@@ -206,7 +206,7 @@ function projectionRepairMessage(value: { language: { errors?: readonly { messag
   const findings = value.language.errors?.map((item) => item.message).filter((item): item is string => Boolean(item)) ?? [];
   const diagnostics = value.state?.languageRepair?.diagnostics;
   const suffix = diagnostics?.length ? ` diagnostics=${JSON.stringify(diagnostics)}` : "";
-  return `Goal projection language repair required${findings.length ? `: ${findings.join("; ")}` : "."}${suffix}`;
+  return `${say("Текст документа цели нужно исправить", "Goal projection language repair required")}${findings.length ? `: ${findings.join("; ")}` : "."}${suffix}`;
 }
 
 function projectionArtifactRefs(value: unknown): GoalArtifactRef[] {
@@ -240,7 +240,7 @@ function requiredReport(params: {
   needUser?: string;
 }): GoalProgressReport {
   if (!params.status || !params.phase?.trim() || !params.summary?.trim() || !params.nextStep?.trim()) {
-    throwToolError("publish requires status, phase, summary, and nextStep.");
+    throwToolError(say("publish требует status, phase, summary и nextStep.", "publish requires status, phase, summary, and nextStep."));
   }
   const result: GoalProgressReport = {
     ...(params.eventKind ? { eventKind: params.eventKind } : {}),
@@ -279,7 +279,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     promptGuidelines: goalToolGuidelines("resume_goal"),
     parameters: resumeGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      if (!host.resumeGoal) throwToolError("This host does not support resume_goal.");
+      if (!host.resumeGoal) throwToolError(say("Эта среда не поддерживает resume_goal.", "This host does not support resume_goal."));
       const result = await host.resumeGoal(ctx, _signal, _params.user_decision_confirmed === true);
       if (!result.ok) throwToolError(result.message, { code: "goal_resume_blocked", workingState: host.getGoalWorkingState(ctx),
         ...(result.applied !== undefined ? { operation: "resume_goal", applied: result.applied, stage: result.stage,
@@ -298,9 +298,9 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     promptGuidelines: goalToolGuidelines("get_goal"),
     parameters: getGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.view !== "history" && [params.event_id, params.offset, params.limit, params.content_offset, params.content_limit].some((value) => value !== undefined)) throwToolError("History ranges require view=history.");
+      if (params.view !== "history" && [params.event_id, params.offset, params.limit, params.content_offset, params.content_limit].some((value) => value !== undefined)) throwToolError(say("Диапазон истории требует view=history.", "History ranges require view=history."));
       const workingState = host.getGoalWorkingState(ctx);
-      if (params.view === "history" && !host.getGoalHistory) throwToolError("This host does not support goal history.");
+      if (params.view === "history" && !host.getGoalHistory) throwToolError(say("Эта среда не поддерживает историю цели.", "This host does not support goal history."));
       const response = params.view === "history" ? host.getGoalHistory!(params, ctx) : params.view === "status" ? goalStatusWorkingState(workingState) : workingState;
       return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: { ...response, error: null } };
     },
@@ -332,10 +332,10 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     parameters: amendGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if ((params.amendment !== undefined) === (params.amendment_id !== undefined)) {
-        throwToolError("Supply exactly one of amendment or amendment_id.");
+        throwToolError(say("Передай ровно одно из полей: amendment или amendment_id.", "Supply exactly one of amendment or amendment_id."));
       }
-      if (params.amendment_id !== undefined && (params.agreement || params.self_decided)) throwToolError("amendment_id repairs an applied amendment; omit agreement and self_decided.");
-      if (params.amendment !== undefined && host.getGoal()?.agreement && !params.agreement) throwToolError("This goal has an agreement: pass agreement with the complete new owner_wants and done_when together with amendment.");
+      if (params.amendment_id !== undefined && (params.agreement || params.self_decided)) throwToolError(say("amendment_id исправляет уже применённое изменение; не передавай agreement и self_decided.", "amendment_id repairs an applied amendment; omit agreement and self_decided."));
+      if (params.amendment !== undefined && host.getGoal()?.agreement && !params.agreement) throwToolError(say("У цели есть договорённость: вместе с amendment передай agreement с полными новыми owner_wants и done_when.", "This goal has an agreement: pass agreement with the complete new owner_wants and done_when together with amendment."));
       const agreement: AgreementInput | undefined = params.agreement ? { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when, ...(params.self_decided ? { selfDecided: params.self_decided } : {}) } : undefined;
       const result = await host.amendGoal(params.amendment ?? "", "tool", ctx, params.amendment_id, agreement);
       const receipt = {
@@ -379,45 +379,45 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       if (action === "update" || action === "repair") {
         const selfDecidedUpdate = action === "update" && params.kind === "decision";
         const allowed = new Set(action === "repair" ? ["kind", "action", "note_id"] : selfDecidedUpdate ? ["kind", "action", "note_id", "confirmation"] : ["kind", "action", "note_id", "expected_revision", "status", "resolution"]);
-        if (Object.keys(params).some((key) => !allowed.has(key))) throwToolError("Unexpected note fields for " + action + "; use note_id and only the fields for this action.");
-        if (!params.note_id?.trim()) throwToolError("note_id is required for update/repair.");
+        if (Object.keys(params).some((key) => !allowed.has(key))) throwToolError(say(`Лишние поля записи для ${action}; передай note_id и только поля этого действия.`, `Unexpected note fields for ${action}; use note_id and only the fields for this action.`));
+        if (!params.note_id?.trim()) throwToolError(say("Для update и repair нужен note_id.", "note_id is required for update/repair."));
         if (selfDecidedUpdate) {
-          if (params.confirmation !== "confirmed" && params.confirmation !== "rejected") throwToolError("update kind=decision requires confirmation=confirmed or rejected for a Self-decided item.");
-          if (!host.setSelfDecidedState) throwToolError("Self-decided updates are unavailable.");
+          if (params.confirmation !== "confirmed" && params.confirmation !== "rejected") throwToolError(say("update kind=decision требует confirmation=confirmed или rejected для пункта «Решаю сам».", "update kind=decision requires confirmation=confirmed or rejected for a Self-decided item."));
+          if (!host.setSelfDecidedState) throwToolError(say("Изменение пунктов «Решаю сам» недоступно.", "Self-decided updates are unavailable."));
           const outcome = await host.setSelfDecidedState(params.note_id, params.confirmation, ctx);
           if (!outcome.ok) throwToolError(outcome.message, { operation: "record_goal_note", action, kind: params.kind, noteId: params.note_id, applied: false, retryable: false });
           const response = { operation: "record_goal_note", action, noteId: params.note_id, kind: params.kind, applied: true, stage: "complete", retryable: false, confirmation: params.confirmation };
           return { content: [{ type: "text", text: JSON.stringify(response) }], details: response };
         }
         if (action === "update") {
-          if (params.kind !== "paper_cut") throwToolError("Only paper_cut supports update.");
-          if (!params.resolution?.trim()) throwToolError("resolution is required for update.");
-          if (params.expected_revision === undefined || !Number.isSafeInteger(params.expected_revision) || params.expected_revision < 0) throwToolError("expected_revision is required; use the note revision from get_goal.");
-          if (params.status !== "resolved" && params.status !== "wont_fix") throwToolError("update requires status=resolved or wont_fix.");
-          if (!host.updateGoalPaperCut) throwToolError("Paper-cut updates are unavailable.");
+          if (params.kind !== "paper_cut") throwToolError(say("update поддерживает только paper_cut.", "Only paper_cut supports update."));
+          if (!params.resolution?.trim()) throwToolError(say("Для update нужно поле resolution.", "resolution is required for update."));
+          if (params.expected_revision === undefined || !Number.isSafeInteger(params.expected_revision) || params.expected_revision < 0) throwToolError(say("Нужен expected_revision — ревизия записи из get_goal.", "expected_revision is required; use the note revision from get_goal."));
+          if (params.status !== "resolved" && params.status !== "wont_fix") throwToolError(say("update требует status=resolved или wont_fix.", "update requires status=resolved or wont_fix."));
+          if (!host.updateGoalPaperCut) throwToolError(say("Изменение отложенных рисков недоступно.", "Paper-cut updates are unavailable."));
           result = await host.updateGoalPaperCut({ id: params.note_id, expectedRevision: params.expected_revision, status: params.status, resolution: params.resolution.trim() }, ctx, toolCallId);
         } else {
-          if (!host.repairGoalNote) throwToolError("Note projection repair is unavailable.");
+          if (!host.repairGoalNote) throwToolError(say("Исправление документа записи недоступно.", "Note projection repair is unavailable."));
           result = await host.repairGoalNote(params.kind, params.note_id, ctx);
         }
       } else {
-        if (action !== "record") throwToolError("Unknown note action.");
-        if (["note_id", "expected_revision", "status", "resolution", "confirmation"].some((key) => key in params)) throwToolError("record does not accept update/repair fields.");
-        if (!params.title?.trim()) throwToolError("title is required for record.");
+        if (action !== "record") throwToolError(say("Неизвестное действие с записью.", "Unknown note action."));
+        if (["note_id", "expected_revision", "status", "resolution", "confirmation"].some((key) => key in params)) throwToolError(say("record не принимает поля update и repair.", "record does not accept update/repair fields."));
+        if (!params.title?.trim()) throwToolError(say("Для record нужно поле title.", "title is required for record."));
         if (params.kind === "decision") {
-          if (["impact", "severity", "revisit"].some((key) => key in params)) throwToolError("decision accepts only kind, title, decision, rationale, and optional consequence and self_decided.");
-          if (!params.decision?.trim() || !params.rationale?.trim()) throwToolError("decision requires decision and rationale.");
+          if (["impact", "severity", "revisit"].some((key) => key in params)) throwToolError(say("decision принимает только kind, title, decision, rationale и необязательные consequence и self_decided.", "decision accepts only kind, title, decision, rationale, and optional consequence and self_decided."));
+          if (!params.decision?.trim() || !params.rationale?.trim()) throwToolError(say("decision требует decision и rationale.", "decision requires decision and rationale."));
           if (params.self_decided) {
-            if (!host.addSelfDecided) throwToolError("Self-decided items are unavailable.");
+            if (!host.addSelfDecided) throwToolError(say("Пункты «Решаю сам» недоступны.", "Self-decided items are unavailable."));
             const added = await host.addSelfDecided(params.self_decided, `${params.title.trim()}: ${params.decision.trim()}`, ctx);
             if (!added.ok) throwToolError(added.message);
             selfDecidedId = added.itemId ?? null;
           }
           result = await host.recordGoalDecision({ title: params.title, decision: params.decision, rationale: params.rationale, ...(params.consequence === undefined ? {} : { consequence: params.consequence }) }, ctx, toolCallId);
         } else {
-          if (params.kind !== "paper_cut") throwToolError("Unknown note kind.");
-          if (["decision", "rationale", "consequence", "self_decided"].some((key) => key in params)) throwToolError("paper_cut accepts only kind, title, impact, severity, and optional revisit.");
-          if (!params.impact?.trim() || !params.severity) throwToolError("paper_cut requires impact and severity.");
+          if (params.kind !== "paper_cut") throwToolError(say("Неизвестный вид записи.", "Unknown note kind."));
+          if (["decision", "rationale", "consequence", "self_decided"].some((key) => key in params)) throwToolError(say("paper_cut принимает только kind, title, impact, severity и необязательное revisit.", "paper_cut accepts only kind, title, impact, severity, and optional revisit."));
+          if (!params.impact?.trim() || !params.severity) throwToolError(say("paper_cut требует impact и severity.", "paper_cut requires impact and severity."));
           result = await host.recordGoalPaperCut({ title: params.title, impact: params.impact, severity: params.severity, ...(params.revisit === undefined ? {} : { revisit: params.revisit }) }, ctx, toolCallId);
         }
       }
@@ -425,7 +425,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       if (isProjectionRepairResult(result)) throwToolError(projectionRepairMessage(result), {
         operation: "record_goal_note", action, kind: params.kind, noteId: noteId ?? params.note_id ?? null,
         applied: noteId !== null, stage: noteId ? "projection" : "canonical", retryable: true,
-        remediation: noteId ? "Read get_goal and load_goal_language_guide; repair existing data, then use action=repair with note_id. Do not record another note." : "Fix rejected fields using load_goal_language_guide, then retry this unapplied request.",
+        remediation: noteId ? say("Прочитай get_goal и load_goal_language_guide; исправь существующие данные, затем вызови action=repair с note_id. Новую запись не создавай.", "Read get_goal and load_goal_language_guide; repair existing data, then use action=repair with note_id. Do not record another note.") : say("Исправь отклонённые поля по load_goal_language_guide и повтори этот непримененный запрос.", "Fix rejected fields using load_goal_language_guide, then retry this unapplied request."),
       });
       const fullState = host.getGoalWorkingState(ctx);
       const note = fullState.paperCuts?.find((entry) => entry.id === noteId);
@@ -448,7 +448,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     parameters: progressReportParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (params.action === "suppress" && Object.keys(params).some((key) => key !== "action")) {
-        throwToolError("suppress accepts only action; use publish for report fields.");
+        throwToolError(say("suppress принимает только action; поля отчёта передавай с publish.", "suppress accepts only action; use publish for report fields."));
       }
       const report = params.action === "publish" ? requiredReport(params) : null;
       const result = await host.reportGoal(params.action, report, ctx, toolCallId);
@@ -475,7 +475,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
         throwToolError(result.message, {
           operation: "update_goal", applied: result.applied === undefined ? false : result.applied,
           goalId: result.goal?.goalId ?? null, stage: result.stage ?? "canonical", retryable: result.retryable ?? false,
-          remediation: result.remediation ?? "Read get_goal before another completion attempt.",
+          remediation: result.remediation ?? say("Перед новой попыткой завершения прочитай get_goal.", "Read get_goal before another completion attempt."),
           eventId: result.eventId, reportId: result.reportId, projectionEvent: result.projectionEvent,
         });
       }
@@ -512,8 +512,8 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const current = host.getGoal();
       const features = host.getFeatures?.() ?? DEFAULT_GOAL_FEATURES;
-      if (!params.agreement) throwToolError("create_goal requires agreement with owner_wants and done_when.");
-      if (features.selfDecidedList && !params.self_decided) throwToolError("create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything.");
+      if (!params.agreement) throwToolError(say("create_goal требует agreement с owner_wants и done_when.", "create_goal requires agreement with owner_wants and done_when."));
+      if (features.selfDecidedList && !params.self_decided) throwToolError(say("create_goal требует self_decided: перечисли, что решил сам; если владелец подтвердил всё, передай [].", "create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything."));
       const agreement: AgreementInput = { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
         ...(features.selfDecidedList && params.self_decided ? { selfDecided: params.self_decided } : {}) };
       const replacingNonCompleteGoal = params.replace_existing === true && current !== null && current.status !== "complete";
@@ -534,8 +534,8 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
           goalId: result.goal.goalId, stage: acknowledged ? "projection" : "canonical",
           retryable: acknowledged && host.getGoal()?.goalId === result.goal.goalId,
           remediation: acknowledged
-            ? "Read get_goal. The Goal already exists: do not create it again. Once storage is available, the next authorized Goal write rebuilds its document."
-            : "Write acknowledgement is unknown. Reopen the saved session file and selected branch and reconcile the canonical Goal before creating another one; SDK memory and extension reload do not prove persistence.",
+            ? say("Прочитай get_goal. Цель уже существует, не создавай её снова. Когда хранилище станет доступно, следующая разрешённая запись цели пересоберёт её документ.", "Read get_goal. The Goal already exists: do not create it again. Once storage is available, the next authorized Goal write rebuilds its document.")
+            : say("Неизвестно, сохранилась ли запись. Прежде чем создавать другую цель, заново открой сохранённый файл сессии и выбранную ветку и сверь цель; память SDK и перезагрузка расширения не доказывают сохранения.", "Write acknowledgement is unknown. Reopen the saved session file and selected branch and reconcile the canonical Goal before creating another one; SDK memory and extension reload do not prove persistence."),
           ...(error instanceof GoalCanonicalWriteError ? { ...error.details, operation: "create_goal",
             applied: acknowledged ? true : null, stage: acknowledged ? "projection" : "canonical" } : {}),
         });

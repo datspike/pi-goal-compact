@@ -439,12 +439,12 @@ export function reportDueReasons(
 
 export function goalProgressInstruction(dueReason: GoalReportDueReason): string {
   return [
-    "A progress report is due for the active goal.",
-    `Call report_goal_progress with action \"publish\" or \"suppress\" before or alongside further work (reason: ${dueReason}).`,
-    "Report only the factual delta. Write summary for the returning user: 1–3 connected sentences linking what changed since the previous report, what it means now, and what happens next. Do not include harness/tool activity or repeat the objective. Write phase as the short current meaningful action in present tense.",
-    "For awaiting_user, state the needed decision. After an ordinary user answer, append an approved amendment if needed, then publish working; suppress and other statuses do not release the hidden-continuation hold.",
-    "Do not include chain-of-thought, hidden reasoning, or a narrative of internal deliberation.",
-    "This applies to the current moment only: ignore it if a progress report was published after this message.",
+    say("Пора отчитаться о ходе активной цели.", "A progress report is due for the active goal."),
+    say(`Вызови report_goal_progress с action \"publish\" или \"suppress\" до продолжения работы или вместе с ним (reason: ${dueReason}).`, `Call report_goal_progress with action \"publish\" or \"suppress\" before or alongside further work (reason: ${dueReason}).`),
+    say("Сообщай только фактические изменения. summary пиши для вернувшегося пользователя: 1–3 связных предложения о том, что изменилось с прошлого отчёта, что это значит сейчас и что будет дальше. Не описывай работу инструментов и не повторяй цель. В phase коротко назови текущее содержательное действие в настоящем времени.", "Report only the factual delta. Write summary for the returning user: 1–3 connected sentences linking what changed since the previous report, what it means now, and what happens next. Do not include harness/tool activity or repeat the objective. Write phase as the short current meaningful action in present tense."),
+    say("Для awaiting_user назови нужное решение. После обычного ответа пользователя при необходимости добавь согласованное изменение, затем опубликуй working; suppress и другие статусы не снимают удержание скрытого продолжения.", "For awaiting_user, state the needed decision. After an ordinary user answer, append an approved amendment if needed, then publish working; suppress and other statuses do not release the hidden-continuation hold."),
+    say("Не пересказывай ход рассуждений и внутренние размышления.", "Do not include chain-of-thought, hidden reasoning, or a narrative of internal deliberation."),
+    say("Это относится только к текущему моменту: если после этого сообщения отчёт уже опубликован, не обращай внимания.", "This applies to the current moment only: ignore it if a progress report was published after this message."),
   ].join(" ");
 }
 

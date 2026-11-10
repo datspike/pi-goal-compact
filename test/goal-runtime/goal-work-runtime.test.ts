@@ -7,7 +7,9 @@ import { goalFilePath } from "../../src/goal/goal-artifacts.js";
 
 import type { GoalWorkingState } from "../../src/goal/format.js";
 import type { GoalWorkState } from "../../src/goal/goal-work-state.js";
-import { createRuntimeHarness } from "../support/runtime-harness.js";
+import { createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
+
+useHarnessLanguage("en");
 
 function work(): GoalWorkState {
   return { outcome: "Понимать оставшийся путь цели.", doneWhen: "Обзор и подробная сводка согласованы.",

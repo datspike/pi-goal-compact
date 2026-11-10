@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createExpandedRuntimeHarness as createRuntimeHarness } from "../support/runtime-harness.js";
+import { createExpandedRuntimeHarness as createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
 import { renderDecisions } from "../../src/goal/goal-projection-renderer.js";
 import type { GoalDecisionEntry } from "../../src/goal/goal-projection-state.js";
+
+useHarnessLanguage("en");
 
 const progress = {
   action: "publish", status: "working", phase: "Проверяю восстановление",

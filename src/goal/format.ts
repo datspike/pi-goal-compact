@@ -7,6 +7,7 @@ import type { GoalReportState } from "./goal-reports.js";
 import type { GoalProgressReport } from "./report-schema.js";
 import { goalPreservedContext, type GoalProjectionState } from "./goal-projection-state.js";
 import type { GoalArtifactRef, GoalStatus, ThreadGoal } from "./types.js";
+import { say } from "../language.js";
 
 const COMPACT_TOKEN_UNITS = [
   { suffix: "T", value: 1_000_000_000_000 },
@@ -138,11 +139,14 @@ export function formatBudget(goal: ThreadGoal): string {
   if (goal.tokenBudget === null) {
     return `${formatTokenValue(goal.usage.tokensUsed)} tokens`;
   }
-  return `${formatTokenValue(goal.usage.tokensUsed)}/${formatTokenValue(goal.tokenBudget)} tokens`;
+  return `${formatTokenValue(goal.usage.tokensUsed)}/${formatTokenValue(goal.tokenBudget)} ${say("токенов", "tokens")}`;
 }
 
 function statusLabel(status: GoalStatus): string {
-  return status === "budgetLimited" ? "limited by budget" : status;
+  return say<Record<GoalStatus, string>>(
+    { active: "активна", paused: "на паузе", complete: "завершена", budgetLimited: "исчерпан бюджет" },
+    { active: "active", paused: "paused", complete: "complete", budgetLimited: "limited by budget" },
+  )[status];
 }
 
 function commandHint(status: GoalStatus): string {
@@ -150,34 +154,34 @@ function commandHint(status: GoalStatus): string {
     return "/gp, /gc";
   }
   if (status === "paused") {
-    return "/gr (silent resume), /gc";
+    return say("/gr (тихое возобновление), /gc", "/gr (silent resume), /gc");
   }
-  return "/gc; ask the agent to create or replace a goal";
+  return say("/gc; попроси агента создать или заменить цель", "/gc; ask the agent to create or replace a goal");
 }
 
 export function formatGoalSummary(goal: ThreadGoal | null): string {
   if (!goal) {
-    return "No goal is currently set. Ask the agent to create a goal.";
+    return say("Цель сейчас не задана. Попроси агента создать цель.", "No goal is currently set. Ask the agent to create a goal.");
   }
 
   const lines = [
-    `Status: ${statusLabel(goal.status)}`,
-    `Objective: ${goal.objective}`,
-    `Time used: ${formatDuration(goal.usage.activeSeconds)}`,
-    `Tokens used: ${formatTokenValue(goal.usage.tokensUsed)}`,
+    `${say("Статус", "Status")}: ${statusLabel(goal.status)}`,
+    `${say("Цель", "Objective")}: ${goal.objective}`,
+    `${say("Время работы", "Time used")}: ${formatDuration(goal.usage.activeSeconds)}`,
+    `${say("Использовано токенов", "Tokens used")}: ${formatTokenValue(goal.usage.tokensUsed)}`,
   ];
 
   if (goal.tokenBudget !== null) {
-    lines.push(`Token budget: ${formatTokenValue(goal.tokenBudget)}`);
+    lines.push(`${say("Бюджет токенов", "Token budget")}: ${formatTokenValue(goal.tokenBudget)}`);
   }
 
-  lines.push(`Hint: ${commandHint(goal.status)}`);
+  lines.push(`${say("Подсказка", "Hint")}: ${commandHint(goal.status)}`);
   return lines.join("\n");
 }
 
 function compactBudgetUsage(goal: ThreadGoal): string {
   if (goal.tokenBudget === null) {
-    return `${formatCompactTokenValue(goal.usage.tokensUsed)} tokens`;
+    return `${formatCompactTokenValue(goal.usage.tokensUsed)} ${say("токенов", "tokens")}`;
   }
   return `${formatCompactTokenValue(goal.usage.tokensUsed)} / ${formatCompactTokenValue(goal.tokenBudget)}`;
 }
@@ -193,13 +197,13 @@ export function formatFooterStatus(
 
   if (goal.status === "budgetLimited") {
     if (goal.tokenBudget !== null) {
-      return `Goal unmet (${compactBudgetUsage(goal)} tokens)`;
+      return say(`Цель не достигнута (${compactBudgetUsage(goal)} токенов)`, `Goal unmet (${compactBudgetUsage(goal)} tokens)`);
     }
-    return "Goal abandoned";
+    return say("Цель оставлена", "Goal abandoned");
   }
 
   if (goal.status === "paused" && providerLimitAutoResumeScheduled) {
-    return "Goal paused because the provider usage limit was reached. Auto-resume will retry in about 5 minutes. Use /gr to mark active without starting a turn, or /gc to clear the goal and stop auto-resume.";
+    return say("Цель на паузе: исчерпан лимит провайдера. Автовозобновление попробует примерно через 5 минут. /gr сделает цель активной без нового хода, /gc очистит цель и остановит автовозобновление.", "Goal paused because the provider usage limit was reached. Auto-resume will retry in about 5 minutes. Use /gr to mark active without starting a turn, or /gc to clear the goal and stop auto-resume.");
   }
 
   const recoveryAttentionMessage = formatRecoveryAttention(recoveryAttention);
@@ -209,25 +213,25 @@ export function formatFooterStatus(
 
   if (goal.status === "active") {
     if (goal.tokenBudget !== null) {
-      return `Pursuing goal (${compactBudgetUsage(goal)})`;
+      return say(`Работаю над целью (${compactBudgetUsage(goal)})`, `Pursuing goal (${compactBudgetUsage(goal)})`);
     }
     if (goal.usage.activeSeconds > 0) {
-      return `Pursuing goal (${formatDuration(goal.usage.activeSeconds)})`;
+      return say(`Работаю над целью (${formatDuration(goal.usage.activeSeconds)})`, `Pursuing goal (${formatDuration(goal.usage.activeSeconds)})`);
     }
-    return "Pursuing goal";
+    return say("Работаю над целью", "Pursuing goal");
   }
 
   if (goal.status === "paused") {
-    return "Goal paused (/gr to mark active; then send a message to continue)";
+    return say("Цель на паузе (/gr сделает её активной; затем отправь сообщение, чтобы продолжить)", "Goal paused (/gr to mark active; then send a message to continue)");
   }
 
   if (goal.tokenBudget !== null) {
-    return `Goal achieved (${formatCompactTokenValue(goal.usage.tokensUsed)} tokens)`;
+    return say(`Цель достигнута (${formatCompactTokenValue(goal.usage.tokensUsed)} токенов)`, `Goal achieved (${formatCompactTokenValue(goal.usage.tokensUsed)} tokens)`);
   }
   if (goal.usage.activeSeconds > 0) {
-    return `Goal achieved (${formatDuration(goal.usage.activeSeconds)})`;
+    return say(`Цель достигнута (${formatDuration(goal.usage.activeSeconds)})`, `Goal achieved (${formatDuration(goal.usage.activeSeconds)})`);
   }
-  return "Goal achieved";
+  return say("Цель достигнута", "Goal achieved");
 }
 
 export function toToolGoal(goal: ThreadGoal): GoalToolRecord {
@@ -263,15 +267,15 @@ export function completionBudgetReport(goal: ThreadGoal | null): string | null {
 
   const parts: string[] = [];
   if (goal.usage.activeSeconds > 0) {
-    parts.push(`time used: ${formatDuration(goal.usage.activeSeconds)}.`);
+    parts.push(say(`время работы: ${formatDuration(goal.usage.activeSeconds)}.`, `time used: ${formatDuration(goal.usage.activeSeconds)}.`));
   }
   if (goal.tokenBudget !== null) {
-    parts.push(`tokens used: ${formatInteger(goal.usage.tokensUsed)} of ${formatInteger(goal.tokenBudget)}.`);
+    parts.push(say(`использовано токенов: ${formatInteger(goal.usage.tokensUsed)} из ${formatInteger(goal.tokenBudget)}.`, `tokens used: ${formatInteger(goal.usage.tokensUsed)} of ${formatInteger(goal.tokenBudget)}.`));
   } else if (goal.usage.tokensUsed > 0) {
-    parts.push(`tokens used: ${formatInteger(goal.usage.tokensUsed)}.`);
+    parts.push(say(`использовано токенов: ${formatInteger(goal.usage.tokensUsed)}.`, `tokens used: ${formatInteger(goal.usage.tokensUsed)}.`));
   }
 
-  return `Goal achieved. Report final budget usage to the user: ${parts.join(" ")}`;
+  return say(`Цель достигнута. Сообщи пользователю итоговый расход бюджета: ${parts.join(" ")}`, `Goal achieved. Report final budget usage to the user: ${parts.join(" ")}`);
 }
 
 /** Merge canonical projection and replayed legacy report state, returning the current report and last useful verification. */
@@ -360,7 +364,7 @@ export function goalStatusWorkingState(workingState: GoalWorkingState): GoalStat
     ...goalActionWorkingState(workingState),
     goal: identity,
     omitted: ["goal.objective", "workState", "activeDecisions", "paperCuts"],
-    fullStateRequiredFor: "Read get_goal without view=status for the contract, plan, decisions or completion audit. No read grants permission to change a hold.",
+    fullStateRequiredFor: say("Для контракта, плана, решений и проверки завершения читай get_goal без view=status. Никакое чтение не даёт права снять удержание.", "Read get_goal without view=status for the contract, plan, decisions or completion audit. No read grants permission to change a hold."),
   };
 }
 

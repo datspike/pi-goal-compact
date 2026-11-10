@@ -259,10 +259,10 @@ export function createGoalSession(pi: ExtensionAPI) {
   // Каждый путь активации держит те же ворота, что и инструмент модели.
   const resumeGateFailure = (allowAnsweredUserHold = false, lifecycleOnly = false): GoalResult | null => {
     const goal = getGoal();
-    if (awaitingDecision(reports.getState()) && !allowAnsweredUserHold) return { ok: false, message: "Goal is awaiting an ordinary user decision before it can continue.", goal };
+    if (awaitingDecision(reports.getState()) && !allowAnsweredUserHold) return { ok: false, message: say("Цель ждёт обычного решения пользователя и без него не продолжится.", "Goal is awaiting an ordinary user decision before it can continue."), goal };
     const projected = projections.current();
     if (!canRecover(allowAnsweredUserHold, lifecycleOnly) || !projected || projected.goalId !== goal?.goalId || projected.stateSeq !== projected.currentProjectionSeq) {
-      return { ok: false, message: "Goal state requires repair or projection synchronization before activation. Inspect get_goal and load_goal_language_guide.", goal };
+      return { ok: false, message: say("Перед возобновлением состояние цели нужно исправить или синхронизировать документ. Посмотри get_goal и load_goal_language_guide.", "Goal state requires repair or projection synchronization before activation. Inspect get_goal and load_goal_language_guide."), goal };
     }
     return null;
   };
@@ -285,19 +285,19 @@ export function createGoalSession(pi: ExtensionAPI) {
     const decisionReportId = reports.getState().lastReportId;
     const failure = (message: string): GoalResult => ({ ok: false, message, goal: getGoal() });
     const cancelled = (): boolean => Boolean(signal?.aborted || ctx.signal?.aborted);
-    if (cancelled()) return failure("Resume cancelled before activation.");
-    if (!original || original.status === "complete") return failure("No resumable goal exists; completed and cleared goals are terminal.");
-    if (original.status === "budgetLimited" || (original.tokenBudget !== null && original.usage.tokensUsed >= original.tokenBudget)) return failure("Goal token budget is exhausted; resume_goal cannot override it.");
-    if (original.status === "active") return { ok: true, message: "Goal already active.", goal: original };
-    if (userInstructionGoalId !== original.goalId) return failure("resume_goal requires an explicit user instruction in the current user turn; background retries are not user approval.");
+    if (cancelled()) return failure(say("Возобновление отменено до запуска.", "Resume cancelled before activation."));
+    if (!original || original.status === "complete") return failure(say("Нет цели, которую можно возобновить: завершённые и очищенные цели окончательны.", "No resumable goal exists; completed and cleared goals are terminal."));
+    if (original.status === "budgetLimited" || (original.tokenBudget !== null && original.usage.tokensUsed >= original.tokenBudget)) return failure(say("Бюджет токенов цели исчерпан; resume_goal не может его обойти.", "Goal token budget is exhausted; resume_goal cannot override it."));
+    if (original.status === "active") return { ok: true, message: say("Цель уже активна.", "Goal already active."), goal: original };
+    if (userInstructionGoalId !== original.goalId) return failure(say("resume_goal требует явного указания пользователя в текущем ходе; фоновые повторы не считаются согласием пользователя.", "resume_goal requires an explicit user instruction in the current user turn; background retries are not user approval."));
     const unconfirmedDecision = (): boolean => !userDecisionConfirmed || (userInputGeneration <= awaitingInputGeneration && !reports.getState().questionAnswerPending);
-    if (awaitingDecision(reports.getState()) && unconfirmedDecision()) return failure("The pending user decision is not confirmed. Set user_decision_confirmed only after interpreting the required answer, never for a status inquiry or continuation alone.");
-    if (!canRecover(userDecisionConfirmed || answeredBlockedHold())) return failure("Goal continuation is held by a user decision, recovery gate, or projection repair. Inspect get_goal and load_goal_language_guide.");
+    if (awaitingDecision(reports.getState()) && unconfirmedDecision()) return failure(say("Ожидаемое решение пользователя не подтверждено. Ставь user_decision_confirmed только после того, как истолковал нужный ответ, и никогда — ради вопроса о статусе или простого продолжения.", "The pending user decision is not confirmed. Set user_decision_confirmed only after interpreting the required answer, never for a status inquiry or continuation alone."));
+    if (!canRecover(userDecisionConfirmed || answeredBlockedHold())) return failure(say("Продолжение цели удерживает решение пользователя, восстановление или исправление документа. Посмотри get_goal и load_goal_language_guide.", "Goal continuation is held by a user decision, recovery gate, or projection repair. Inspect get_goal and load_goal_language_guide."));
     await bootstrap;
-    if (cancelled()) return failure("Resume cancelled before activation.");
-    if (getGoal()?.goalId !== original.goalId || userInputGeneration !== inputGeneration || userInstructionGoalId !== original.goalId) return failure("Resume instruction is stale after session or goal replacement.");
-    if (awaitingDecision(reports.getState()) && (unconfirmedDecision() || reports.getState().lastReportId !== decisionReportId)) return failure("The pending decision changed before activation.");
-    if (userDecisionConfirmed && awaitingDecision(reports.getState()) && reports.getState().lastReportId !== decisionReportId) return failure("Decision confirmation is stale after a newer report.");
+    if (cancelled()) return failure(say("Возобновление отменено до запуска.", "Resume cancelled before activation."));
+    if (getGoal()?.goalId !== original.goalId || userInputGeneration !== inputGeneration || userInstructionGoalId !== original.goalId) return failure(say("Указание возобновить устарело: сессия или цель сменились.", "Resume instruction is stale after session or goal replacement."));
+    if (awaitingDecision(reports.getState()) && (unconfirmedDecision() || reports.getState().lastReportId !== decisionReportId)) return failure(say("Ожидаемое решение изменилось до запуска.", "The pending decision changed before activation."));
+    if (userDecisionConfirmed && awaitingDecision(reports.getState()) && reports.getState().lastReportId !== decisionReportId) return failure(say("Подтверждение решения устарело: после него вышел новый отчёт.", "Decision confirmation is stale after a newer report."));
     const blocked = resumeGateFailure(userDecisionConfirmed || answeredBlockedHold());
     if (blocked) return blocked;
     if (awaitingDecision(reports.getState()) && userDecisionConfirmed) reports.noteOrdinaryUserDecision(original);
@@ -311,10 +311,10 @@ export function createGoalSession(pi: ExtensionAPI) {
     catch (error) {
       if (error instanceof GoalCanonicalWriteError) return canonicalFailure("resume_goal", error, true);
       return { ok: false, operation: "resume_goal", applied: true, stage: "projection", retryable: true,
-        message: `Goal resumed but projection failed: ${error instanceof Error ? error.message : String(error)}`, goal: getGoal(),
-        remediation: "Read get_goal and repair the saved Goal document; do not replace its contract or start another model request." };
+        message: say(`Цель возобновлена, но документ не обновился: ${error instanceof Error ? error.message : String(error)}`, `Goal resumed but projection failed: ${error instanceof Error ? error.message : String(error)}`), goal: getGoal(),
+        remediation: say("Прочитай get_goal и исправь сохранённый документ цели; не заменяй её контракт и не запускай новый запрос к модели.", "Read get_goal and repair the saved Goal document; do not replace its contract or start another model request.") };
     }
-    return { ok: true, message: "Goal resumed without changing its contract or sending another model request.", goal: getGoal() };
+    return { ok: true, message: say("Цель возобновлена без изменения контракта и без нового запроса к модели.", "Goal resumed without changing its contract or sending another model request."), goal: getGoal() };
   };
 
   const amendmentIdFor = (key: string): string => `amendment-${createHash("sha256").update(key).digest("hex")}`;
@@ -323,7 +323,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     outcome.language.verdict === "repair_required" || outcome.state.languageRepair !== null || outcome.state.currentProjectionSeq !== outcome.state.stateSeq;
   const amendmentProjectionFailure = (goal: ThreadGoal, outcome: AmendmentOutcome, amendmentId: string): GoalResult => ({
     ok: false, operation: "amend_goal", applied: true, stage: "projection", retryable: true, amendmentId, remediation: amendmentRemediation(),
-    message: `Goal amendment already applied; projection repair remains pending (artifact=${outcome.state.languageRepair?.artifact ?? "projection"}, currentCheck=${outcome.language.verdict}, stateSeq=${outcome.state.stateSeq}, currentProjectionSeq=${outcome.state.currentProjectionSeq}).`, goal,
+    message: say(`Изменение цели уже применено; документ всё ещё нужно исправить (artifact=${outcome.state.languageRepair?.artifact ?? "projection"}, currentCheck=${outcome.language.verdict}, stateSeq=${outcome.state.stateSeq}, currentProjectionSeq=${outcome.state.currentProjectionSeq}).`, `Goal amendment already applied; projection repair remains pending (artifact=${outcome.state.languageRepair?.artifact ?? "projection"}, currentCheck=${outcome.language.verdict}, stateSeq=${outcome.state.stateSeq}, currentProjectionSeq=${outcome.state.currentProjectionSeq}).`), goal,
   });
 
   /**
@@ -337,16 +337,16 @@ export function createGoalSession(pi: ExtensionAPI) {
     if (!current || (current.status !== "active" && current.status !== "paused")) return appendAmendment(current, amendment, agreement);
     // Восстановление по `amendment_id` цель не меняет, поэтому реплики владельца не требует (Т7.3).
     if (recoveryId === undefined && features().amendNeedsOwner && ownerReplySeq <= ownerReplySeqAtGoalChange) {
-      return { ok: false, message: "amend_goal needs a real owner reply after the goal was created or last amended. Ask the owner; do not change the goal on your own.", goal: current };
+      return { ok: false, message: say("amend_goal нужен настоящий ответ владельца после создания цели или прошлого изменения. Спроси владельца; не меняй цель сам.", "amend_goal needs a real owner reply after the goal was created or last amended. Ask the owner; do not change the goal on your own."), goal: current };
     }
     if (current.status === "paused" && reports.isContinuationHeld()) {
-      return { ok: false, message: "Goal is awaiting an ordinary user decision before it can continue.", goal: current };
+      return { ok: false, message: say("Цель ждёт обычного решения пользователя и без него не продолжится.", "Goal is awaiting an ordinary user decision before it can continue."), goal: current };
     }
     let text = amendment.trim();
     let key = `${current.goalId}\u0000${text}`;
     if (recoveryId !== undefined) {
       const saved = current.appliedAmendments?.find((item) => item.startsWith(`${current.goalId}\u0000`) && amendmentIdFor(item) === recoveryId);
-      if (!saved) return { ok: false, message: "Amendment ID not found in the current goal.", goal: current };
+      if (!saved) return { ok: false, message: say("В текущей цели нет изменения с таким ID.", "Amendment ID not found in the current goal."), goal: current };
       key = saved;
       text = saved.slice(current.goalId.length + 1);
     } else if (text.length === 0) {
@@ -385,9 +385,9 @@ export function createGoalSession(pi: ExtensionAPI) {
         if (needsRepair(decision)) return amendmentProjectionFailure(goal, decision, amendmentId);
       } catch (error) {
         if (error instanceof GoalCanonicalWriteError) return { ...canonicalFailure("amend_goal", error, true), amendmentId,
-          remediation: `${error.details.remediation} Once the saved contract is confirmed, repair with only amendment_id=${amendmentId}; never reword or resend the amendment.` };
+          remediation: say(`${error.details.remediation} Когда сохранённый контракт подтверждён, исправляй только через amendment_id=${amendmentId}; не переформулируй и не отправляй изменение заново.`, `${error.details.remediation} Once the saved contract is confirmed, repair with only amendment_id=${amendmentId}; never reword or resend the amendment.`) };
         return { ok: false, operation: "amend_goal", applied: true, stage: "projection", retryable: true, amendmentId,
-          remediation: amendmentRemediation(), message: `Goal amendment applied but projection retryable: ${error instanceof Error ? error.message : String(error)}`, goal };
+          remediation: amendmentRemediation(), message: say(`Изменение цели применено, но документ нужно обновить повторно: ${error instanceof Error ? error.message : String(error)}`, `Goal amendment applied but projection retryable: ${error instanceof Error ? error.message : String(error)}`), goal };
       } finally {
         amendmentProjectionPending = false;
       }
@@ -402,7 +402,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       goal = getGoal() ?? goal;
     }
     return { ok: true, operation: "amend_goal", applied: true, stage: "projection", retryable: false, amendmentId,
-      message: alreadyApplied ? "Goal amendment projections restored; saved contract unchanged." : "Goal amended.", goal };
+      message: alreadyApplied ? say("Документы изменения цели восстановлены; сохранённый контракт не изменился.", "Goal amendment projections restored; saved contract unchanged.") : "Goal amended.", goal };
   };
 
   /** Записывает закрытие; неудачная запись оставляет снимок, и повтор пишет именно его. */
@@ -428,17 +428,17 @@ export function createGoalSession(pi: ExtensionAPI) {
       try { await bootstrap; }
       catch (error) {
         if (initialGoal.status !== "complete") return { ok: false, operation: "update_goal", applied: false, stage: "projection", retryable: true,
-          message: `Goal projection bootstrap failed: ${error instanceof Error ? error.message : String(error)}`, goal: getGoal(),
-          remediation: "Read get_goal and repair the document before completing." };
+          message: say(`Не удалось построить документ цели: ${error instanceof Error ? error.message : String(error)}`, `Goal projection bootstrap failed: ${error instanceof Error ? error.message : String(error)}`), goal: getGoal(),
+          remediation: say("Прочитай get_goal и исправь документ до завершения.", "Read get_goal and repair the document before completing.") };
       }
     }
     const goal = getGoal();
     if (initialGoal?.goalId !== goal?.goalId) return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
-      message: "Goal changed while waiting for completion.", goal, remediation: "Read the current contract; do not complete a different goal from an old request." };
+      message: "Goal changed while waiting for completion.", goal, remediation: say("Прочитай текущий контракт; не завершай другую цель по старому запросу.", "Read the current contract; do not complete a different goal from an old request.") };
     if (goal && goal.status !== "complete" && (amendmentProjectionPending || projections.repair() !== null || (projections.isManaged() && !projections.isCompletionReady()))) {
       return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
-        message: "Managed goals require a fresh verifying progress report before completion.", goal,
-        remediation: "Resolve the repair or approval hold and publish a fresh verifying report after satisfying the contract." };
+        message: say("Перед завершением цели нужен свежий отчёт со статусом verifying.", "Managed goals require a fresh verifying progress report before completion."), goal,
+        remediation: say("Сними удержание из-за исправления или согласования и после выполнения контракта опубликуй свежий отчёт verifying.", "Resolve the repair or approval hold and publish a fresh verifying report after satisfying the contract.") };
     }
     // Первая попытка при этих договорённости и плане возвращает договорённость (Д3). Правка любого
     // из них меняет отпечаток, и сверка нужна заново (Т6.3).
@@ -454,7 +454,7 @@ export function createGoalSession(pi: ExtensionAPI) {
         }
         return { ok: false, operation: "update_goal", applied: false, stage: "agreement_check", retryable: true, goal: checked,
           message: completionReturnMessage(checked),
-          remediation: "Check the work against the agreement. If something is missing, keep working; otherwise call update_goal(complete) again without changing the agreement or the plan." };
+          remediation: say("Сверь работу с договорённостью. Если чего-то не хватает, продолжай работу; иначе снова вызови update_goal(complete), не меняя договорённость и план.", "Check the work against the agreement. If something is missing, keep working; otherwise call update_goal(complete) again without changing the agreement or the plan.") };
       }
     }
     if (goal?.status !== "complete") accounting.accountProgress(ctx, false, 0, true);
@@ -463,22 +463,22 @@ export function createGoalSession(pi: ExtensionAPI) {
     catch (error) {
       if (error instanceof GoalCanonicalWriteError) return canonicalFailure("update_goal", error);
       return { ok: false, operation: "update_goal", applied: null, stage: "canonical", retryable: false,
-        message: `Goal completion persistence failed: ${error instanceof Error ? error.message : String(error)}`, goal: getGoal(),
-        remediation: "Canonical write acknowledgement is unknown. Reload the session to reconcile the persisted branch before retrying; an in-memory complete status is not proof of persistence." };
+        message: say(`Не удалось сохранить завершение цели: ${error instanceof Error ? error.message : String(error)}`, `Goal completion persistence failed: ${error instanceof Error ? error.message : String(error)}`), goal: getGoal(),
+        remediation: say("Неизвестно, сохранилась ли запись. Перед повтором перезагрузи сессию и сверь сохранённую ветку; статус complete в памяти не доказывает сохранения.", "Canonical write acknowledgement is unknown. Reload the session to reconcile the persisted branch before retrying; an in-memory complete status is not proof of persistence.") };
     }
     if (!persisted.ok || !persisted.goal) return { ...persisted, operation: "update_goal", applied: false, stage: "canonical", retryable: false };
     try {
       const projection = await projections.completeGoal(persisted.goal, goalContext(ctx), `complete:${persisted.goal.updatedAt}`);
       if (projection.language.verdict === "repair_required" || projection.state.languageRepair || projection.state.currentProjectionSeq !== projection.state.stateSeq) {
         return { ok: false, operation: "update_goal", applied: true, stage: "projection", retryable: true, goal: persisted.goal,
-          message: "Goal completion was saved, but its document still requires repair.",
-          remediation: "Read get_goal and load_goal_language_guide; repair the named data without undoing completion, then retry update_goal." };
+          message: say("Завершение цели сохранено, но её документ ещё нужно исправить.", "Goal completion was saved, but its document still requires repair."),
+          remediation: say("Прочитай get_goal и load_goal_language_guide; исправь названные данные, не отменяя завершения, затем повтори update_goal.", "Read get_goal and load_goal_language_guide; repair the named data without undoing completion, then retry update_goal.") };
       }
     } catch (error) {
       if (error instanceof GoalCanonicalWriteError) return canonicalFailure("update_goal", error, true);
       return { ok: false, operation: "update_goal", applied: true, stage: "projection", retryable: true,
-        message: `Goal completion projection failed: ${error instanceof Error ? error.message : String(error)}`, goal: persisted.goal,
-        remediation: "Completion is already saved. Repair the document and retry update_goal; do not recreate, amend or resume this completed goal." };
+        message: say(`Не удалось обновить документ завершённой цели: ${error instanceof Error ? error.message : String(error)}`, `Goal completion projection failed: ${error instanceof Error ? error.message : String(error)}`), goal: persisted.goal,
+        remediation: say("Завершение уже сохранено. Исправь документ и повтори update_goal; не создавай заново, не меняй и не возобновляй эту завершённую цель.", "Completion is already saved. Repair the document and retry update_goal; do not recreate, amend or resume this completed goal.") };
     }
     return { ...persisted, operation: "update_goal", applied: true, stage: "complete", retryable: false };
   };
@@ -501,8 +501,8 @@ export function createGoalSession(pi: ExtensionAPI) {
     if (!goal || (goal.status !== "active" && !releasesBudgetHold)) {
       throw new Error(JSON.stringify({
         code: "goal_not_active", lifecycle: goal?.status ?? null, pause: goal?.pause ?? null,
-        message: "Progress reports require an active goal, except the working release after an answered awaiting_user hold.",
-        nextStep: goal?.status === "paused" ? "Use resume_goal after an explicit user instruction; do not amend the contract just to resume. Inspect get_goal for repair or hold gates." : "Inspect get_goal; terminal goals and exhausted budgets cannot be resumed.",
+        message: say("Отчёт о ходе требует активной цели; исключение — отчёт working после ответа на awaiting_user.", "Progress reports require an active goal, except the working release after an answered awaiting_user hold."),
+        nextStep: goal?.status === "paused" ? say("Используй resume_goal после явного указания пользователя; не меняй контракт только ради возобновления. Посмотри в get_goal, нет ли исправлений или удержаний.", "Use resume_goal after an explicit user instruction; do not amend the contract just to resume. Inspect get_goal for repair or hold gates.") : say("Посмотри get_goal: завершённые цели и цели с исчерпанным бюджетом не возобновляются.", "Inspect get_goal; terminal goals and exhausted budgets cannot be resumed."),
       }));
     }
     if (action === "suppress") {
@@ -520,7 +520,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       if (projection.language.verdict === "repair_required") {
         rejectedBeforeWrite = true;
         const diagnostics = projection.state.languageRepair?.diagnostics ?? projection.language.diagnostics;
-        throw new Error(`Goal projection language repair required: ${projection.language.errors.map((item) => item.message).join("; ")} diagnostics=${JSON.stringify(diagnostics)}`);
+        throw new Error(say(`Текст документа цели нужно исправить: ${projection.language.errors.map((item) => item.message).join("; ")} diagnostics=${JSON.stringify(diagnostics)}`, `Goal projection language repair required: ${projection.language.errors.map((item) => item.message).join("; ")} diagnostics=${JSON.stringify(diagnostics)}`));
       }
       if (projection.eventApplied === false) return { reportId: null, state: reports.getState(), projection };
       if (holdsContinuation(report.status)) awaitingInputGeneration = publicationInputGeneration;
@@ -544,9 +544,9 @@ export function createGoalSession(pi: ExtensionAPI) {
         retryable: rejectedBeforeWrite || (saved && sameGoal),
         message: error instanceof Error ? error.message : String(error),
         remediation: saved
-          ? "Read get_goal and verify goalId before repair. Do not republish this saved report. An identical reconciled update_goal_work or record_goal_note action=repair for an existing note can rebuild the document; otherwise the next authorized Goal write repairs it."
-          : rejectedBeforeWrite ? "Load the language guide, fix the rejected text and retry."
-            : "Write acknowledgement is unknown. Reopen the saved session file and selected branch before reconciling this report. SDK memory and extension reload are not persistence proof; do not republish until its absence is confirmed.",
+          ? say("Перед исправлением прочитай get_goal и сверь goalId. Не публикуй этот сохранённый отчёт повторно. Документ пересоберёт такой же сверенный update_goal_work или record_goal_note action=repair для существующей записи; иначе его исправит следующая разрешённая запись цели.", "Read get_goal and verify goalId before repair. Do not republish this saved report. An identical reconciled update_goal_work or record_goal_note action=repair for an existing note can rebuild the document; otherwise the next authorized Goal write repairs it.")
+          : rejectedBeforeWrite ? say("Загрузи языковое руководство, исправь отклонённый текст и повтори.", "Load the language guide, fix the rejected text and retry.")
+            : say("Неизвестно, сохранилась ли запись. Перед сверкой этого отчёта заново открой сохранённый файл сессии и выбранную ветку. Память SDK и перезагрузка расширения не доказывают сохранения; не публикуй повторно, пока не подтверждено, что отчёта нет.", "Write acknowledgement is unknown. Reopen the saved session file and selected branch before reconciling this report. SDK memory and extension reload are not persistence proof; do not republish until its absence is confirmed."),
       }));
     }
   };
@@ -603,17 +603,17 @@ export function createGoalSession(pi: ExtensionAPI) {
   /** Агент добавляет пункт «Решаю сам» в любой момент; подтвердить его за владельца нельзя (Т4.5). */
   const addSelfDecided = async (kind: SelfDecidedKind, text: string, ctx: ExtensionContext): Promise<{ ok: boolean; message: string; itemId?: string }> => {
     const goal = getGoal();
-    if (!goal || (goal.status !== "active" && goal.status !== "paused")) return { ok: false, message: "Self-decided items need an active or paused goal." };
+    if (!goal || (goal.status !== "active" && goal.status !== "paused")) return { ok: false, message: say("Пункты «Решаю сам» требуют активной цели или цели на паузе.", "Self-decided items need an active or paused goal.") };
     const error = validateSelfDecidedText(text);
     if (error) return { ok: false, message: error };
     const id = selfDecidedItemId(goal.goalId, kind, text);
-    if (goal.selfDecided?.some((item) => item.id === id)) return { ok: true, message: "Self-decided item already recorded.", itemId: id };
-    if ((goal.selfDecided?.length ?? 0) >= MAX_SELF_DECIDED_ITEMS) return { ok: false, message: `The Self-decided list already has ${MAX_SELF_DECIDED_ITEMS} items.` };
+    if (goal.selfDecided?.some((item) => item.id === id)) return { ok: true, message: say("Этот пункт «Решаю сам» уже записан.", "Self-decided item already recorded."), itemId: id };
+    if ((goal.selfDecided?.length ?? 0) >= MAX_SELF_DECIDED_ITEMS) return { ok: false, message: say(`В списке «Решаю сам» уже ${MAX_SELF_DECIDED_ITEMS} пунктов.`, `The Self-decided list already has ${MAX_SELF_DECIDED_ITEMS} items.`) };
     const next = cloneGoal(goal);
     next.selfDecided = [...(goal.selfDecided ?? []), { id, kind, text: text.trim(), state: "unconfirmed", createdAt: Date.now() }];
     next.updatedAt = nonDecreasingUpdatedAt(goal);
     await saveGoalChange(next, "tool", ctx);
-    return { ok: true, message: "Self-decided item recorded.", itemId: id };
+    return { ok: true, message: say("Пункт «Решаю сам» записан.", "Self-decided item recorded."), itemId: id };
   };
 
   /**
@@ -623,9 +623,9 @@ export function createGoalSession(pi: ExtensionAPI) {
   const setSelfDecidedState = async (itemId: string, state: "confirmed" | "rejected", ctx: ExtensionContext): Promise<{ ok: boolean; message: string }> => {
     const goal = getGoal();
     const item = goal?.selfDecided?.find((candidate) => candidate.id === itemId);
-    if (!goal || !item) return { ok: false, message: `Unknown Self-decided item ${itemId}; read get_goal for the list.` };
-    if (features().selfDecidedList && !ownerTurnOpen) return { ok: false, message: "Only the owner confirms or rejects a Self-decided item: this turn was not started by a real owner reply. Ask the owner." };
-    if (item.state === state) return { ok: true, message: "Self-decided item already has this state." };
+    if (!goal || !item) return { ok: false, message: say(`Нет пункта «Решаю сам» ${itemId}; список — в get_goal.`, `Unknown Self-decided item ${itemId}; read get_goal for the list.`) };
+    if (features().selfDecidedList && !ownerTurnOpen) return { ok: false, message: say("Подтверждает или отклоняет пункт «Решаю сам» только владелец, а этот ход начат не его ответом. Спроси владельца.", "Only the owner confirms or rejects a Self-decided item: this turn was not started by a real owner reply. Ask the owner.") };
+    if (item.state === state) return { ok: true, message: say("У пункта «Решаю сам» уже такое состояние.", "Self-decided item already has this state.") };
     const ownerEntryId = latestOwnerEntryId(goalContext(ctx).sessionManager.getBranch());
     const next = cloneGoal(goal);
     next.selfDecided = (goal.selfDecided ?? []).map((candidate) => candidate.id !== itemId ? { ...candidate }
@@ -637,13 +637,13 @@ export function createGoalSession(pi: ExtensionAPI) {
 
   const requireGoal = (): ThreadGoal => {
     const goal = getGoal();
-    if (!goal) throw new Error("No active goal exists.");
+    if (!goal) throw new Error(say("Активной цели нет.", "No active goal exists."));
     return goal;
   };
 
   const loadGoalLanguageGuide = (): unknown => {
     const repair = projections.repair();
-    if (!repair) return { active: false, message: "No language repair is pending." };
+    if (!repair) return { active: false, message: say("Исправлять текст не требуется.", "No language repair is pending.") };
     return {
       active: true, artifact: repair.artifact, fields: repair.fields, findings: repair.findings, diagnostics: repair.diagnostics ?? [],
       guide: language() === "ru" ? [
@@ -825,7 +825,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     getGoalWorkingState,
     getGoalHistory(query: GoalHistoryQuery, ctx: ExtensionContext): GoalHistoryPage {
       const goal = goalForDisplay();
-      if (!goal) throw new Error("No active goal exists.");
+      if (!goal) throw new Error(say("Активной цели нет.", "No active goal exists."));
       return readGoalHistory(goalContext(ctx).sessionManager.getBranch(), goal.goalId, query);
     },
     async updateGoalWork(goalId: string, workState: GoalWorkState, expectedRevision: number, ctx: ExtensionContext, callId: string): Promise<GoalWorkUpdateResult> {

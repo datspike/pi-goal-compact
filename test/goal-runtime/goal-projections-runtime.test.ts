@@ -163,7 +163,7 @@ test("rejected first report keeps a durable repair gate across reload before cle
   await assert.rejects(
     () => harness.runTool("report_goal_progress", badReport),
     (error: unknown) => {
-      assert.match(String(error), /language repair required/);
+      assert.match(String(error), /Текст документа цели нужно исправить/);
       assert.match(String(error), /diagnostics=/);
       assert.doesNotMatch(String(error), /Controlled flow validated/);
       return true;
@@ -177,7 +177,7 @@ test("rejected first report keeps a durable repair gate across reload before cle
   assert.ok(guideResult.diagnostics.every((diagnostic) => !Object.prototype.hasOwnProperty.call(diagnostic, "excerpt")));
   assert.ok(guideResult.guide.some((line) => line.includes("Markdown")));
   await harness.reloadSession("reload");
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying progress report/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
 
   await harness.runTool("report_goal_progress", {
     action: "publish",

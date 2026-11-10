@@ -27,7 +27,7 @@ function assertStatus(full: GoalWorkingState, status: GoalStatusWorkingState) {
   const { omitted, fullStateRequiredFor, ...metadata } = status;
   assert.deepEqual(metadata, expectedMetadata(full));
   assert.deepEqual(omitted, ["goal.objective", "workState", "activeDecisions", "paperCuts"]);
-  assert.ok(fullStateRequiredFor.includes("get_goal without view=status"));
+  assert.ok(fullStateRequiredFor.includes("get_goal без view=status"));
   assert.ok(!("workState" in status));
   assert.ok(!("activeDecisions" in status));
   assert.ok(!("paperCuts" in status));

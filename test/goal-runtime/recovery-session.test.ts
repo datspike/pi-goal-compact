@@ -9,8 +9,7 @@ import {
   goalTickets,
   sessionBeforeCompactEvent,
   sessionCompactEvent,
-  sessionShutdownEvent,
-} from "../support/runtime-harness.js";
+  sessionShutdownEvent, useHarnessLanguage } from "../support/runtime-harness.js";
 import {
   emitPendingRecoveryShutdown,
   givenPendingOverflowRecovery,
@@ -18,6 +17,8 @@ import {
   givenPendingTransientRecovery,
   replaceHarnessBranchWithGoal,
 } from "../support/scenarios.js";
+
+useHarnessLanguage("en");
 
 test("pending overflow shutdown persists paused goal with valid resume guidance", async () => {
   const harness = await givenPendingOverflowRecovery();

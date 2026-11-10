@@ -173,7 +173,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     const messages = event.messages.map((message) => {
       if (message.role !== "custom" || message.customType !== GOAL_PROGRESS_INSTRUCTION_CUSTOM_TYPE) return message;
       changed = true;
-      return { ...message, content: "This expired run-scoped progress reminder must be ignored.", display: false };
+      return { ...message, content: say("Это напоминание об отчёте устарело, не обращай на него внимания.", "This expired run-scoped progress reminder must be ignored."), display: false };
     });
     const assembled = assembleWindow(messages, {
       goal: session.getGoal(),

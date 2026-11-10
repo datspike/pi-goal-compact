@@ -19,6 +19,7 @@ import {
   type GoalProjectionLanguageRepair,
   type GoalProjectionState,
 } from "./goal-projection-state.js";
+import { say } from "../language.js";
 
 
 
@@ -186,7 +187,7 @@ export function createGoalProjections(
 
   const current = (): GoalProjectionState => {
     const goal = getCurrentGoal();
-    if (!goal) throw new Error("No active goal exists.");
+    if (!goal) throw new Error(say("Активной цели нет.", "No active goal exists."));
     if (!state || state.goalId !== goal.goalId) {
       state = createGoalProjectionState(goal);
     }
@@ -232,7 +233,7 @@ export function createGoalProjections(
           goalId: event.goalId, eventId: event.idempotencyKey, projectionEvent: event.kind, ...note,
           ...(event.kind === "progress_reported" ? { reportId: event.reportId } : {}),
           message: error instanceof Error ? error.message : String(error),
-          remediation: "Write acknowledgement is unknown. Reopen the saved session file and selected branch, then reconcile eventId with get_goal(view=history). SDK memory, get_goal before reopening and extension reload do not prove file persistence. Do not repeat or continue Goal writes before reconciliation. If saved, rebuild projections without republishing a report or duplicating a note or amendment; retry an approved operation only after confirming its absence.",
+          remediation: say("Неизвестно, сохранилась ли запись. Заново открой сохранённый файл сессии и выбранную ветку, затем сверь eventId через get_goal(view=history). Память SDK, get_goal до повторного открытия и перезагрузка расширения не доказывают сохранения в файле. До сверки не повторяй и не продолжай записи цели. Если запись сохранена, пересобери документы, не публикуя отчёт повторно и не дублируя запись или изменение; согласованную операцию повторяй, только убедившись, что её нет.", "Write acknowledgement is unknown. Reopen the saved session file and selected branch, then reconcile eventId with get_goal(view=history). SDK memory, get_goal before reopening and extension reload do not prove file persistence. Do not repeat or continue Goal writes before reconciliation. If saved, rebuild projections without republishing a report or duplicating a note or amendment; retry an approved operation only after confirming its absence."),
         });
         throw unconfirmedWrite;
       }
@@ -406,7 +407,7 @@ export function createGoalProjections(
   const updateWork = (goalId: string, workState: GoalWorkState, expectedRevision: number, ctx: GoalArtifactContext, callId: string): Promise<GoalWorkUpdateResult> => enqueue(ctx, async (ctx) => {
     const goal = getCurrentGoal();
     if (!goal || goal.goalId !== goalId) throw new Error("Goal changed while updating work state.");
-    if (goal.status !== "active" && goal.status !== "paused") throw new Error("Terminal goals cannot update work state.");
+    if (goal.status !== "active" && goal.status !== "paused") throw new Error(say("У завершённой цели нельзя менять план работы.", "Terminal goals cannot update work state."));
     restore(ctx.sessionManager.getBranch(), goal);
     const key = createHash("sha256").update(JSON.stringify({ callId, goalId, expectedRevision, workState })).digest("hex");
     const event = { kind: "work_state_updated" as const, idempotencyKey: `work:${key}`, goalId, expectedRevision, workState };
@@ -434,7 +435,7 @@ export function createGoalProjections(
   const publish = (goal: ThreadGoal, report: GoalProgressReport, reportId: string, ctx: GoalArtifactContext, reportAnchor?: { turnIndex: number | null; activeSeconds: number; tokensUsed: number; assistantTurns: number }): Promise<GoalProjectionOutcome> => enqueue(ctx, async (ctx) => {
     const liveGoal = getCurrentGoal();
     if (!liveGoal || liveGoal.goalId !== goal.goalId || liveGoal.objective !== goal.objective || liveGoal.tokenBudget !== goal.tokenBudget) {
-      throw new Error("Goal contract changed while publishing projection; read the current goal before reporting.");
+      throw new Error(say("Контракт цели изменился во время обновления документа; перед отчётом прочитай текущую цель.", "Goal contract changed while publishing projection; read the current goal before reporting."));
     }
     const eventKey = `report:${reportId}`;
     let currentState = current();
@@ -483,7 +484,7 @@ export function createGoalProjections(
         operation: "record_goal_note", applied: true, stage: "projection",
         retryable: getCurrentGoal()?.goalId === goal.goalId, goalId: goal.goalId,
         noteId: id, kind, message: error instanceof Error ? error.message : String(error),
-        remediation: "Read get_goal. Repair the existing document via record_goal_note(action=repair, kind, note_id); do not record another note. For text diagnostics use load_goal_language_guide and repair the named data first.",
+        remediation: say("Прочитай get_goal. Исправь существующий документ через record_goal_note(action=repair, kind, note_id); новую запись не создавай. Для замечаний к тексту сначала открой load_goal_language_guide и исправь названные данные.", "Read get_goal. Repair the existing document via record_goal_note(action=repair, kind, note_id); do not record another note. For text diagnostics use load_goal_language_guide and repair the named data first."),
       }));
     }
   };
@@ -532,15 +533,15 @@ export function createGoalProjections(
   const updatePaperCut = (goal: ThreadGoal, update: GoalPaperCutUpdate, ctx: GoalArtifactContext, callId: string): Promise<GoalProjectionOutcome> => enqueue(ctx, async (ctx) => {
     if (getCurrentGoal()?.goalId !== goal.goalId) throw new Error("Goal changed while updating projection note.");
     const stored = current().paperCuts.find((entry) => entry.id === update.id);
-    if (!stored) throw new Error(`Unknown paper cut ${update.id}.`);
-    if (!Number.isSafeInteger(update.expectedRevision) || update.expectedRevision < 0) throw new Error("expected_revision must be a non-negative note revision from get_goal.");
-    if (!update.resolution.trim()) throw new Error("resolution is required when closing a paper cut.");
+    if (!stored) throw new Error(say(`Нет отложенного риска ${update.id}.`, `Unknown paper cut ${update.id}.`));
+    if (!Number.isSafeInteger(update.expectedRevision) || update.expectedRevision < 0) throw new Error(say("expected_revision — неотрицательная ревизия записи из get_goal.", "expected_revision must be a non-negative note revision from get_goal."));
+    if (!update.resolution.trim()) throw new Error(say("Чтобы закрыть отложенный риск, нужно поле resolution.", "resolution is required when closing a paper cut."));
     const revision = stored.revision ?? 0;
     const unchanged = stored.status === update.status && stored.resolution === update.resolution;
     // A retry may carry the previous revision after the canonical event was
     // saved. Accept only the exact effect, never overwrite a newer verdict.
     if (update.expectedRevision !== revision && !(unchanged && update.expectedRevision + 1 === revision)) {
-      throw new Error(`Stale note revision: expected ${update.expectedRevision}, current ${revision}. Read get_goal before retrying.`);
+      throw new Error(say(`Ревизия записи устарела: ожидалась ${update.expectedRevision}, текущая ${revision}. Перед повтором прочитай get_goal.`, `Stale note revision: expected ${update.expectedRevision}, current ${revision}. Read get_goal before retrying.`));
     }
     if (unchanged) return syncNoteProjection(goal, "paper_cut", update.id, ctx);
     const key = createHash("sha256").update(JSON.stringify({ callId, update })).digest("hex");

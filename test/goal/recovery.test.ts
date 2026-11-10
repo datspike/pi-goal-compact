@@ -155,12 +155,12 @@ test("recovery pending attention helpers round-trip structured reasons", () => {
   assert.equal(reasonFromRecoveryPendingAttention(attention), reason);
   assert.equal(
     recoveryPendingAttentionMessage(attention.reason),
-    `Goal recovery pending (${reason}); wait for host retry/compaction or send a new user message if it does not recover.`,
+    `Цель ждёт восстановления (${reason}); дождись повтора или сжатия от Pi; если цель не восстановится, отправь новое сообщение.`,
   );
   assert.equal(isRecoveryPendingAttention({ kind: "paused", reason }), false);
   assert.equal(isRecoveryPendingAttention(null), false);
   assert.equal(reasonFromRecoveryPendingAttention(null), null);
-  assert.equal(recoveryAttentionMessage(reason), `Goal needs attention (${reason}). Use /gr to mark active, then send a message to continue.`);
+  assert.equal(recoveryAttentionMessage(reason), `Цели нужно внимание (${reason}). /gr сделает её активной, затем отправь сообщение, чтобы продолжить.`);
 });
 
 test("changing context overflow messages share one recovery signature and reach the host cap", () => {

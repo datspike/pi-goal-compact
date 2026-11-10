@@ -125,10 +125,10 @@ test("verification belongs to its work revision and old evidence cannot complete
   assert.equal((await current(harness)).latestUsefulVerification, "Тесты проходят.");
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), summary: "Добавлена новая работа" } });
   assert.equal((await current(harness)).latestUsefulVerification, null);
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт/);
   await harness.reloadSession("reload");
   assert.equal((await current(harness)).latestUsefulVerification, null);
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /fresh verifying/);
+  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт/);
   await verify("Повторная проверка пройдена.");
   assert.equal((await current(harness)).latestUsefulVerification, "Повторная проверка пройдена.");
   await harness.runTool("update_goal", { status: "complete" });
@@ -182,9 +182,9 @@ test("user provenance cannot be downgraded to erase work from any consumer", asy
   const before = await readFile(goalFilePath(harnessCwd, goalId), "utf8");
   for (const status of ["planned", "active", "blocked", "done", "cancelled"] as const) {
     const downgraded = { ...plan(), items: plan().items.map((item) => item.id === "live" ? { ...item, status, source: "agent" as const } : item) };
-    await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: downgraded }), /User work provenance/);
+    await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: downgraded }), /Пункт пользователя нельзя переписать/);
   }
-  await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), items: plan().items.filter((item) => item.id !== "live") } }), /Unfinished user work/);
+  await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), items: plan().items.filter((item) => item.id !== "live") } }), /Незавершённый пункт пользователя/);
   assert.equal((await current(harness)).workRevision, 1);
   assert.deepEqual((await current(harness)).workState, plan());
   assert.equal(await readFile(goalFilePath(harnessCwd, goalId), "utf8"), before);

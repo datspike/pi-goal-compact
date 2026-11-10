@@ -51,16 +51,16 @@ const stateLabel = (state: SelfDecidedState): string => ({
 const chars = (text: string): number => [...text].length;
 
 export function validateAgreement(ownerWants: string, doneWhen: string): string | null {
-  if (!ownerWants.trim()) return "agreement.owner_wants must not be empty.";
-  if (!doneWhen.trim()) return "agreement.done_when must not be empty.";
+  if (!ownerWants.trim()) return say("agreement.owner_wants не может быть пустым.", "agreement.owner_wants must not be empty.");
+  if (!doneWhen.trim()) return say("agreement.done_when не может быть пустым.", "agreement.done_when must not be empty.");
   const total = chars(ownerWants.trim()) + chars(doneWhen.trim());
-  if (total > MAX_AGREEMENT_CHARS) return `agreement.owner_wants and agreement.done_when together must be ${MAX_AGREEMENT_CHARS} characters or fewer (got ${total}).`;
+  if (total > MAX_AGREEMENT_CHARS) return say(`agreement.owner_wants и agreement.done_when вместе должны быть не длиннее ${MAX_AGREEMENT_CHARS} знаков (сейчас ${total}).`, `agreement.owner_wants and agreement.done_when together must be ${MAX_AGREEMENT_CHARS} characters or fewer (got ${total}).`);
   return null;
 }
 
 export function validateSelfDecidedText(text: string): string | null {
-  if (!text.trim()) return "self_decided item text must not be empty.";
-  if (chars(text.trim()) > MAX_SELF_DECIDED_ITEM_CHARS) return `self_decided item text must be ${MAX_SELF_DECIDED_ITEM_CHARS} characters or fewer.`;
+  if (!text.trim()) return say("Текст пункта self_decided не может быть пустым.", "self_decided item text must not be empty.");
+  if (chars(text.trim()) > MAX_SELF_DECIDED_ITEM_CHARS) return say(`Текст пункта self_decided должен быть не длиннее ${MAX_SELF_DECIDED_ITEM_CHARS} знаков.`, `self_decided item text must be ${MAX_SELF_DECIDED_ITEM_CHARS} characters or fewer.`);
   return null;
 }
 

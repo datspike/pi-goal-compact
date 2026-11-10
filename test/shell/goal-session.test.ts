@@ -92,7 +92,7 @@ test("обрыв хода ставит активную цель на паузу
     await fake.event("agent_end", { messages: [{ role: "assistant", stopReason: "aborted", content: [], usage: { input: 1, output: 1 } }] });
     assert.match(text(await call(fake, "get_goal", { view: "status" })), /paused/);
 
-    await assert.rejects(call(fake, "resume_goal", {}), /explicit user instruction/);
+    await assert.rejects(call(fake, "resume_goal", {}), /явного указания пользователя/);
     await fake.event("input", { source: "interactive", text: "продолжай работу по цели" });
     const resumed = await call(fake, "resume_goal", {});
     assert.match(text(resumed), /active/);

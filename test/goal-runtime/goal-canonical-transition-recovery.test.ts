@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
 import { reconstructGoal } from "../../src/goal/state.js";
-import { assistantMessage, createRuntimeHarness, passAgreementCheck } from "../support/runtime-harness.js";
+import { assistantMessage, createRuntimeHarness, passAgreementCheck, useHarnessLanguage } from "../support/runtime-harness.js";
+
+useHarnessLanguage("en");
 
 type Receipt = { operation: string; applied: boolean | null; stage: string; retryable: boolean; goalId: string; amendment_id?: string; remediation: string };
 const working = { action: "publish", status: "working", phase: "Проверяю сохранение", summary: "Проверяю сохранение цели.", changed: "Подготовлена проверка сохранения.", nextStep: "Сверить результат." };

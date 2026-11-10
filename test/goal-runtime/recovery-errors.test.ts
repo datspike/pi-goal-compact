@@ -15,8 +15,7 @@ import {
   emitSilentContextOverflow,
   flushContinuationScheduler,
   sessionBeforeCompactEvent,
-  sessionCompactEvent,
-} from "../support/runtime-harness.js";
+  sessionCompactEvent } from "../support/runtime-harness.js";
 
 test("non-retryable provider errors pause active goals immediately", async () => {
   const harness = createRuntimeHarness();
@@ -43,7 +42,7 @@ test("terminal provider-limit 429 errors pause active goals immediately", async 
 
   assert.equal(harness.snapshot().goal?.status, "paused");
   assert.equal(harness.sentMessages.length, 0);
-  assert.match(harness.goalNotice() ?? "", /На паузе · .*provider usage limit/);
+  assert.match(harness.goalNotice() ?? "", /На паузе · .*лимит провайдера/);
   assert.doesNotMatch(harness.goalNotice() ?? "", /Goal recovery pending/);
 });
 
@@ -240,7 +239,7 @@ test("repeated silent stop overflow after host compaction pauses without blockin
 
   assert.equal(harness.snapshot().goal?.status, "paused");
   assert.equal(harness.sentMessages.length, 0);
-  assert.match(harness.goalNotice() ?? "", /Goal needs attention/);
+  assert.match(harness.goalNotice() ?? "", /Цели нужно внимание/);
 
   const manualCompaction = await harness.emit("session_before_compact", sessionBeforeCompactEvent());
   assert.notDeepEqual(manualCompaction[0], { cancel: true });

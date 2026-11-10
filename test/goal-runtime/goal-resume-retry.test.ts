@@ -149,7 +149,7 @@ test("budget and cleared states are not reopened by resume_goal or retry", async
   h.emitBusEvent("pi-retry:completed", { retryId: 21 });
   assert.equal(h.snapshot().goal?.status, "budgetLimited");
   await h.runCommand("clear");
-  await assert.rejects(() => h.runTool("resume_goal", {}), /terminal|resumable/i);
+  await assert.rejects(() => h.runTool("resume_goal", {}), /окончательны|возобновить/i);
 });
 
 test("aborted turn during retry is a durable manual pause", async () => {
@@ -194,7 +194,7 @@ test("terminal completion is not reopened by resume or a delayed retry", async (
   await h.runTool("report_goal_progress", { ...report, status: "verifying", verification: "Проверки завершены." });
   await h.runTool("update_goal", { status: "complete" });
   await h.emit("input", { type: "input", source: "interactive", text: "Продолжи" });
-  await assert.rejects(() => h.runTool("resume_goal", {}), /terminal|resumable/i);
+  await assert.rejects(() => h.runTool("resume_goal", {}), /окончательны|возобновить/i);
   h.emitBusEvent("pi-retry:started", { retryId: 26 });
   h.emitBusEvent("pi-retry:completed", { retryId: 26 });
   assert.equal(h.snapshot().goal?.status, "complete");
@@ -203,7 +203,7 @@ test("terminal completion is not reopened by resume or a delayed retry", async (
 test("projection repair blocks resume but remains repairable without another amendment", async () => {
   const h = await goal();
   const note = { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем исходные ограничения." };
-  await assert.rejects(() => h.runTool("record_goal_note", note), /language repair/i);
+  await assert.rejects(() => h.runTool("record_goal_note", note), /нужно исправить/i);
   await h.runCommand("pause");
   await h.emit("input", { type: "input", source: "interactive", text: "Возобнови согласованную работу" });
   await assert.rejects(() => h.runTool("resume_goal", {}), /repair/i);
@@ -228,7 +228,7 @@ test("manual pause revokes permission from the preceding user turn", async () =>
   const h = await goal();
   await h.emit("input", { type: "input", source: "interactive", text: "Продолжай реализацию по плану" });
   await h.runCommand("pause");
-  await assert.rejects(() => h.runTool("resume_goal", {}), /user instruction/i);
+  await assert.rejects(() => h.runTool("resume_goal", {}), /указания пользователя/i);
   assert.equal(h.snapshot().goal?.status, "paused");
 });
 
@@ -239,7 +239,7 @@ test("cancelled resume tool preserves manual pause and sends no request", async 
   await h.emit("input", { type: "input", source: "interactive", text: "Вернись к текущей работе." });
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(() => h.runTool("resume_goal", {}, controller.signal), /Resume cancelled/);
+  await assert.rejects(() => h.runTool("resume_goal", {}, controller.signal), /Возобновление отменено/);
   assert.equal(h.snapshot().goal?.status, "paused");
   assert.equal(h.sentMessages.length, 0);
   assert.equal(h.sentUserMessages.length, 0);
@@ -247,7 +247,7 @@ test("cancelled resume tool preserves manual pause and sends no request", async 
 
 test("session resume and internal continuation preserve durable projection repair", async () => {
   const h = await goal();
-  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /language repair/i);
+  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /нужно исправить/i);
   await h.runCommand("pause");
   await h.reloadSession("resume");
   assert.equal(h.snapshot().goal?.status, "paused");
@@ -256,7 +256,7 @@ test("session resume and internal continuation preserve durable projection repai
   assert.equal((await h.continueGoal(h.snapshot().goal!.goalId)).ok, false);
   assert.equal(h.sentMessages.length, 0);
   assert.equal(h.sentUserMessages.length, 0);
-  assert.ok(h.notifications.some(n => /repair|synchronization/.test(n)));
+  assert.ok(h.notifications.some(n => /исправ|синхрониз/.test(n)));
 });
 
 test("anonymous child lifecycle cannot activate a technical pause or cancel an executing main retry", async () => {
@@ -297,7 +297,7 @@ test("provider-limit auto resume cannot bypass durable projection repair", async
   mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => mock.timers.reset());
   const h = await goal();
-  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /language repair/i);
+  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /нужно исправить/i);
   await emitPersistentAssistantError(h, 0, "usage limit has been reached");
   fireProviderLimitAutoResume();
   assert.equal(h.snapshot().goal?.status, "paused");
@@ -418,7 +418,7 @@ test("explicit model resume after an answer activates but keeps the hold until w
 test("silent command resume cannot bypass repair, but works after verified repair", async () => {
   const h = await goal();
   const note = { kind: "decision", title: "Выбор пути", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем исходные ограничения." };
-  await assert.rejects(() => h.runTool("record_goal_note", note), /language repair/i);
+  await assert.rejects(() => h.runTool("record_goal_note", note), /нужно исправить/i);
   await h.runCommand("pause");
   await h.runSlashCommand("gr");
   assert.equal(h.snapshot().goal?.status, "paused");
@@ -447,7 +447,7 @@ test("ordinary answer cannot activate a technical pause while projections still 
   await h.runTool("report_goal_progress", awaiting);
   await emitPersistentAssistantError(h, 0, flagError);
   assert.equal(h.snapshot().goal?.pause?.kind, "recovery");
-  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /language repair/i);
+  await assert.rejects(() => h.runTool("record_goal_note", { kind: "decision", title: "Выбор", decision: "Controlled flow validated, блокеры отсутствуют.", rationale: "Сохраняем ограничения." }), /нужно исправить/i);
   await h.emit("input", { type: "input", source: "interactive", text: "Выбираю А" });
   assert.equal(h.snapshot().goal?.status, "paused");
   assert.match(JSON.stringify(await h.runTool("get_goal", {})), /"repairPending":true/);
@@ -506,5 +506,5 @@ test("an unconfirmed inquiry survives reload as data but cannot authorize silent
   await h.runSlashCommand("gr");
   assert.equal(h.snapshot().goal?.status, "paused");
   assert.match(JSON.stringify(await h.runTool("get_goal", {})), /"userAnswerReceived":false/);
-  await assert.rejects(() => h.runTool("resume_goal", { user_decision_confirmed: true }), /instruction/i);
+  await assert.rejects(() => h.runTool("resume_goal", { user_decision_confirmed: true }), /указани/i);
 });

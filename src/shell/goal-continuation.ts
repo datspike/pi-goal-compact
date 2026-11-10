@@ -201,9 +201,9 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     const goal = session.getGoal();
     // При возобновлении сессии приостановленная цель сама не оживает: владелец решает в диалоге (Ц35).
     if (event.reason === "resume" && goal?.status === "paused" && ctx.hasUI) {
-      if (!(await ctx.ui.confirm("Resume paused goal?", `Goal: ${goal.objective}`))) return;
+      if (!(await ctx.ui.confirm(say("Возобновить цель с паузы?", "Resume paused goal?"), `Goal: ${goal.objective}`))) return;
       try { await session.waitForGoalProjection(); }
-      catch { ctx.ui.notify("Goal projection synchronization failed; inspect get_goal before resuming.", "warning"); return; }
+      catch { ctx.ui.notify(say("Не удалось синхронизировать документ цели; перед возобновлением посмотри get_goal.", "Goal projection synchronization failed; inspect get_goal before resuming."), "warning"); return; }
       const failure = resumeWithContinuation(ctx);
       if (failure) ctx.ui.notify(failure, "warning");
       return;

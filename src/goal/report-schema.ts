@@ -105,28 +105,28 @@ export function goalProgressEventLabel(kind: GoalProgressEventKind): string {
 
 export function validateGoalProgressReport(value: unknown): string | null {
   if (!isRecord(value)) {
-    return "Report must be an object.";
+    return say("Отчёт должен быть объектом.", "Report must be an object.");
   }
   if (value.eventKind !== undefined && !isGoalProgressEventKind(value.eventKind)) {
-    return "Report eventKind is invalid.";
+    return say("Недопустимый eventKind отчёта.", "Report eventKind is invalid.");
   }
   if (!isGoalProgressStatus(value.status)) {
-    return "Report status is invalid.";
+    return say("Недопустимый status отчёта.", "Report status is invalid.");
   }
   if (typeof value.phase !== "string" || value.phase.trim().length === 0 || [...value.phase.trim()].length > MAX_REPORT_PHASE_CHARS) {
-    return `phase must contain 1 to ${MAX_REPORT_PHASE_CHARS} characters.`;
+    return say(`phase должно содержать от 1 до ${MAX_REPORT_PHASE_CHARS} знаков.`, `phase must contain 1 to ${MAX_REPORT_PHASE_CHARS} characters.`);
   }
   if (value.summary !== undefined && (typeof value.summary !== "string" || !value.summary.trim() || [...value.summary].length > MAX_REPORT_SUMMARY_CHARS)) {
-    return `summary must contain 1 to ${MAX_REPORT_SUMMARY_CHARS} characters.`;
+    return say(`summary должно содержать от 1 до ${MAX_REPORT_SUMMARY_CHARS} знаков.`, `summary must contain 1 to ${MAX_REPORT_SUMMARY_CHARS} characters.`);
   }
   if (typeof value.summary === "string" && TERMINAL_CONTROL.test(value.summary)) {
-    return "summary must not contain terminal control characters.";
+    return say("summary не может содержать управляющие символы терминала.", "summary must not contain terminal control characters.");
   }
   if (typeof value.nextStep !== "string" || value.nextStep.trim().length === 0 || [...value.nextStep.trim()].length > MAX_REPORT_NEXT_STEP_CHARS) {
-    return `nextStep must contain 1 to ${MAX_REPORT_NEXT_STEP_CHARS} characters.`;
+    return say(`nextStep должно содержать от 1 до ${MAX_REPORT_NEXT_STEP_CHARS} знаков.`, `nextStep must contain 1 to ${MAX_REPORT_NEXT_STEP_CHARS} characters.`);
   }
   if (value.status === "awaiting_user" && (typeof value.needUser !== "string" || value.needUser.trim().length === 0)) {
-    return "needUser must be non-empty when status is awaiting_user.";
+    return say("При status awaiting_user поле needUser не может быть пустым.", "needUser must be non-empty when status is awaiting_user.");
   }
   const optionalFields: Array<[keyof Omit<GoalProgressReport, "status" | "phase" | "nextStep">, number]> = [
     ["changed", MAX_REPORT_CHANGED_CHARS],
@@ -138,7 +138,7 @@ export function validateGoalProgressReport(value: unknown): string | null {
   ];
   for (const [field, maxLength] of optionalFields) {
     if (!isOptionalText(value[field], maxLength)) {
-      return `${field} must be a string of at most ${maxLength} characters.`;
+      return say(`${field} должно быть строкой не длиннее ${maxLength} знаков.`, `${field} must be a string of at most ${maxLength} characters.`);
     }
   }
   return null;
@@ -148,35 +148,35 @@ export function validateGoalProgressReport(value: unknown): string | null {
 export function validateNewGoalProgressReport(value: unknown): string | null {
   const structuralError = validateGoalProgressReport(value);
   if (structuralError) return structuralError;
-  if (!isRecord(value)) return "Report must be an object.";
+  if (!isRecord(value)) return say("Отчёт должен быть объектом.", "Report must be an object.");
   const hasMeaningfulDelta = ["changed", "completed", "problemOrDecision", "riskAndComplexity", "verification"]
     .some((field) => typeof value[field] === "string" && value[field].trim().length > 0);
   const eventKind = isGoalProgressEventKind(value.eventKind) ? value.eventKind : "progress_checkpoint";
   const has = (field: keyof GoalProgressReport): boolean => typeof value[field] === "string" && value[field].trim().length > 0;
   switch (eventKind) {
     case "goal_started":
-      if (!has("changed") && !has("completed")) return "goal_started requires changed or completed.";
+      if (!has("changed") && !has("completed")) return say("goal_started требует changed или completed.", "goal_started requires changed or completed.");
       break;
     case "phase_changed":
-      if (!has("changed")) return "phase_changed requires changed.";
+      if (!has("changed")) return say("phase_changed требует changed.", "phase_changed requires changed.");
       break;
     case "verification":
-      if (!has("verification")) return "verification requires verification.";
+      if (!has("verification")) return say("verification требует поле verification.", "verification requires verification.");
       break;
     case "blocker_opened":
-      if (!has("problemOrDecision")) return "blocker_opened requires problemOrDecision.";
+      if (!has("problemOrDecision")) return say("blocker_opened требует problemOrDecision.", "blocker_opened requires problemOrDecision.");
       break;
     case "blocker_resolved":
-      if (!has("problemOrDecision") && !has("completed")) return "blocker_resolved requires problemOrDecision or completed.";
+      if (!has("problemOrDecision") && !has("completed")) return say("blocker_resolved требует problemOrDecision или completed.", "blocker_resolved requires problemOrDecision or completed.");
       break;
     case "decision_recorded":
-      if (!has("problemOrDecision")) return "decision_recorded requires problemOrDecision.";
+      if (!has("problemOrDecision")) return say("decision_recorded требует problemOrDecision.", "decision_recorded requires problemOrDecision.");
       break;
     case "artifact_updated":
-      if (!has("changed") && !has("completed")) return "artifact_updated requires changed or completed.";
+      if (!has("changed") && !has("completed")) return say("artifact_updated требует changed или completed.", "artifact_updated requires changed or completed.");
       break;
     case "goal_completed":
-      if (!has("verification") && !has("completed")) return "goal_completed requires verification or completed.";
+      if (!has("verification") && !has("completed")) return say("goal_completed требует verification или completed.", "goal_completed requires verification or completed.");
       break;
     case "progress_checkpoint":
       break;
@@ -185,21 +185,21 @@ export function validateNewGoalProgressReport(value: unknown): string | null {
     case "verifying":
       return typeof value.verification === "string" && value.verification.trim().length > 0
         ? null
-        : "verifying requires verification.";
+        : say("verifying требует verification.", "verifying requires verification.");
     case "blocked":
       return typeof value.problemOrDecision === "string" && value.problemOrDecision.trim().length > 0
         ? null
-        : "blocked requires problemOrDecision.";
+        : say("blocked требует problemOrDecision.", "blocked requires problemOrDecision.");
     case "awaiting_user":
       return typeof value.needUser === "string" && value.needUser.trim().length > 0
         ? null
-        : "needUser must be non-empty when status is awaiting_user.";
+        : say("При status awaiting_user поле needUser не может быть пустым.", "needUser must be non-empty when status is awaiting_user.");
     case "working":
       return hasMeaningfulDelta
         ? null
-        : "working requires at least one of changed, completed, problemOrDecision, riskAndComplexity, or verification.";
+        : say("working требует хотя бы одно из полей changed, completed, problemOrDecision, riskAndComplexity или verification.", "working requires at least one of changed, completed, problemOrDecision, riskAndComplexity, or verification.");
     default:
-      return "Report status is invalid.";
+      return say("Недопустимый status отчёта.", "Report status is invalid.");
   }
 }
 

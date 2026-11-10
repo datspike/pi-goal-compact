@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createExpandedRuntimeHarness } from "../support/runtime-harness.js";
+import { createExpandedRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
+
+useHarnessLanguage("en");
 
 test("each corrected note clears its own repair under the same progress report", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "goal-clean-retry-"));

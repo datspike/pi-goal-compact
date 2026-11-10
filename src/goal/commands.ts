@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 
 import { updateGoalStatus } from "./state.js";
 import type { GoalEntrySource, GoalResult, ThreadGoal } from "./types.js";
+import { say } from "../language.js";
 
 export interface CommandHost {
   getGoal(): ThreadGoal | null;
@@ -42,20 +43,20 @@ export function handleSilentGoalResume(host: CommandHost, ctx: GoalCommandContex
 /** Registers lifecycle and read-only observability controls; creation belongs to model tools. */
 export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void {
   pi.registerCommand("gs", {
-    description: "Show the compact current goal status.",
+    description: say("Показать краткий статус текущей цели.", "Show the compact current goal status."),
     async handler(args, ctx) {
       if (args.trim()) {
-        ctx.ui.notify("Usage: /gs", "warning");
+        ctx.ui.notify(say("Использование: /gs", "Usage: /gs"), "warning");
         return;
       }
       host.showGoalSnapshot?.(ctx, "status");
     },
   });
   pi.registerCommand("gp", {
-    description: "Pause the active goal.",
+    description: say("Поставить активную цель на паузу.", "Pause the active goal."),
     async handler(args, ctx) {
       if (args.trim()) {
-        ctx.ui.notify("Usage: /gp", "warning");
+        ctx.ui.notify(say("Использование: /gp", "Usage: /gp"), "warning");
         return;
       }
       host.invalidateResumeInstructions();
@@ -70,16 +71,16 @@ export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void 
     },
   });
   pi.registerCommand("gr", {
-    description: "Resume a paused goal without a follow-up prompt.",
+    description: say("Возобновить цель с паузы без нового запроса к модели.", "Resume a paused goal without a follow-up prompt."),
     async handler(args, ctx) {
       if (args.trim()) {
-        ctx.ui.notify("Usage: /gr", "warning");
+        ctx.ui.notify(say("Использование: /gr", "Usage: /gr"), "warning");
         return;
       }
       const epoch = host.getGoalResumeEpoch();
       await host.waitForGoalProjection?.();
       if (host.getGoalResumeEpoch() !== epoch) {
-        ctx.ui.notify("Resume command is stale after a new input, stop, or session/goal replacement.", "warning");
+        ctx.ui.notify(say("Команда возобновления устарела: был новый ввод, остановка или смена сессии либо цели.", "Resume command is stale after a new input, stop, or session/goal replacement."), "warning");
         return;
       }
       handleSilentGoalResume(host, ctx);
@@ -87,15 +88,15 @@ export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void 
     },
   });
   pi.registerCommand("gc", {
-    description: "Clear the current goal.",
+    description: say("Очистить текущую цель.", "Clear the current goal."),
     async handler(args, ctx) {
       // The former /gc accepted a continuation comment; never treat that input as clear.
       if (args.trim()) {
-        ctx.ui.notify("Usage: /gc (clears the goal; comments are not accepted)", "warning");
+        ctx.ui.notify(say("Использование: /gc (очищает цель; комментарий не принимается)", "Usage: /gc (clears the goal; comments are not accepted)"), "warning");
         return;
       }
       if (!host.getGoal()) {
-        ctx.ui.notify("No goal is set.", "warning");
+        ctx.ui.notify(say("Цель не задана.", "No goal is set."), "warning");
         return;
       }
       host.clearGoal("command", ctx);
@@ -103,10 +104,10 @@ export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void 
     },
   });
   pi.registerCommand("gw", {
-    description: "Show the short work overview and goal document link.",
+    description: say("Показать краткий обзор работы и ссылку на документ цели.", "Show the short work overview and goal document link."),
     async handler(args, ctx) {
       if (args.trim()) {
-        ctx.ui.notify("Usage: /gw", "warning");
+        ctx.ui.notify(say("Использование: /gw", "Usage: /gw"), "warning");
         return;
       }
       host.showGoalSnapshot?.(ctx, "details");

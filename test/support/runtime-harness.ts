@@ -19,6 +19,7 @@ import { GOAL_PROJECTION_ENTRY_TYPE } from "../../src/goal/goal-reports.js";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
 import { asPi } from "./as-pi.js";
 import { withAgreementDefaults } from "./agreement-defaults.js";
+import { setLanguage, type Language } from "../../src/language.js";
 
 type EventHandler = (event: object, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
@@ -89,6 +90,18 @@ export function sessionShutdownEvent(
 export const harnessCwd = mkdtempSync(join(tmpdir(), "goal-compact-harness-cwd-"));
 process.on("exit", () => rmSync(harnessCwd, { recursive: true, force: true }));
 
+let harnessLanguage: Language = "ru";
+
+/**
+ * Язык расширения для всего файла тестов. Тесты контракта инструментов, перенесённые из
+ * `pi-codex-goal`, сверяют английские сообщения и потому идут на английском; каждый файл
+ * выполняется в своём процессе, поэтому выбор не влияет на соседние файлы.
+ */
+export function useHarnessLanguage(language: Language): void {
+  harnessLanguage = language;
+  setLanguage(language);
+}
+
 /**
  * Загружает собранное расширение с пустым профилем Pi: настройки сжатия владельца
  * не должны влиять на тесты цели.
@@ -97,7 +110,7 @@ function loadExtension(pi: ExtensionAPI) {
   const agentDir = mkdtempSync(join(tmpdir(), "goal-compact-harness-profile-"));
   const prior = process.env.PI_CODING_AGENT_DIR;
   try {
-    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ contextCompaction: { summaryLanguage: "ru" } }));
+    writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ contextCompaction: { summaryLanguage: harnessLanguage } }));
     process.env.PI_CODING_AGENT_DIR = agentDir;
     return compose(pi).goal;
   } finally {

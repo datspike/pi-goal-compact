@@ -291,7 +291,7 @@ test("applyUsage accumulates supplied token deltas", () => {
   assert.equal(secondTurn?.status, "budgetLimited");
 });
 
-test("formatters produce Codex-style compact summaries", () => {
+test("formatters produce Codex-style compact summaries", () => inLanguage("en", () => {
   const created = createGoal(null, "finish", 10).goal;
   assert.ok(created);
 
@@ -311,7 +311,7 @@ test("formatters produce Codex-style compact summaries", () => {
     assert.match(formatGoalSummary(goal), /Hint: .*\/gc/);
     assert.doesNotMatch(formatGoalSummary(goal), /\/goal\b/);
   }
-});
+}));
 
 test("token formatting uses commas and compact abbreviations", () => {
   assert.equal(formatTokenValue(12_345), "12,345");
@@ -320,7 +320,7 @@ test("token formatting uses commas and compact abbreviations", () => {
   assert.equal(formatTokenValue(1_234_567_890), "1.23B (1,234,567,890)");
 });
 
-test("budget and footer include formatted tokens and active time", () => {
+test("budget and footer include formatted tokens and active time", () => inLanguage("en", () => {
   const created = createGoal(null, "finish", 2_000_000).goal;
   assert.ok(created);
   const used = applyUsage(created, 123_456, 65).goal;
@@ -328,7 +328,7 @@ test("budget and footer include formatted tokens and active time", () => {
 
   assert.equal(formatBudget(used), "123K (123,456)/2M (2,000,000) tokens");
   assert.equal(formatFooterStatus(used), "Pursuing goal (123K / 2M)");
-});
+}));
 
 test("goalWithLiveUsage adds in-progress active time for display", () => {
   const created = createGoal(null, "finish").goal;
@@ -353,7 +353,7 @@ test("updateGoalStatus rejects pause and resume on completed goals", () => {
   assert.equal(completed.status, "complete");
 
   assert.equal(updateGoalStatus(completed, "complete").ok, true);
-  assert.equal(updateGoalStatus(completed, "complete").message, "Goal already complete.");
+  assert.equal(updateGoalStatus(completed, "complete").message, "Цель уже завершена.");
   assert.equal(updateGoalStatus(completed, "paused").ok, false);
   assert.equal(updateGoalStatus(completed, "active").ok, false);
 });
@@ -376,7 +376,7 @@ test("updateGoalStatus only allows pause from active and resume from paused", ()
   assert.equal(updateGoalStatus(resumed, "active").ok, false);
 });
 
-test("createGoal replaces completed goals and rejects non-complete duplicates", () => {
+test("createGoal replaces completed goals and rejects non-complete duplicates", () => inLanguage("en", () => {
   const created = createGoal(null, "finish").goal;
   assert.ok(created);
   const completed = updateGoalStatus(created, "complete").goal;
@@ -396,7 +396,7 @@ test("createGoal replaces completed goals and rejects non-complete duplicates", 
   assert.equal(limited.status, "budgetLimited");
   assert.equal(createGoal(limited, "next").ok, false);
   assert.match(createGoal(limited, "next").message ?? "", /non-complete goal/);
-});
+}));
 
 test("model-facing create_goal guidance matches create-after-complete semantics", () => inLanguage("en", () => {
   const guidance = toolPromptGuidelines().join("\n");

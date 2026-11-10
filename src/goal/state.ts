@@ -17,6 +17,7 @@ import {
   type SessionEntryLike,
   type ThreadGoal,
 } from "./types.js";
+import { say } from "../language.js";
 
 export interface ApplyUsageOptions {
   expectedGoalId?: string | null;
@@ -66,10 +67,10 @@ export function goalsEquivalent(left: ThreadGoal, right: ThreadGoal): boolean {
 export function validateObjective(objective: string): string | null {
   const trimmed = objective.trim();
   if (trimmed.length === 0) {
-    return "Objective must not be empty.";
+    return say("Цель не может быть пустой.", "Objective must not be empty.");
   }
   if ([...trimmed].length > MAX_OBJECTIVE_CHARS) {
-    return `Objective must be ${MAX_OBJECTIVE_CHARS} characters or fewer.`;
+    return say(`Цель должна быть не длиннее ${MAX_OBJECTIVE_CHARS} знаков.`, `Objective must be ${MAX_OBJECTIVE_CHARS} characters or fewer.`);
   }
   return null;
 }
@@ -79,7 +80,7 @@ export function validateTokenBudget(tokenBudget: number | null | undefined): str
     return null;
   }
   if (!Number.isInteger(tokenBudget) || tokenBudget <= 0) {
-    return "Token budget must be a positive integer.";
+    return say("Бюджет токенов должен быть положительным целым числом.", "Token budget must be a positive integer.");
   }
   return null;
 }
@@ -101,7 +102,7 @@ export interface AgreementInput {
 export function validateAgreementInput(input: AgreementInput): string | null {
   const error = validateAgreement(input.ownerWants, input.doneWhen);
   if (error) return error;
-  if ((input.selfDecided?.length ?? 0) > MAX_SELF_DECIDED_ITEMS) return `self_decided must have ${MAX_SELF_DECIDED_ITEMS} items or fewer.`;
+  if ((input.selfDecided?.length ?? 0) > MAX_SELF_DECIDED_ITEMS) return say(`В self_decided должно быть не больше ${MAX_SELF_DECIDED_ITEMS} пунктов.`, `self_decided must have ${MAX_SELF_DECIDED_ITEMS} items or fewer.`);
   for (const item of input.selfDecided ?? []) {
     const itemError = validateSelfDecidedText(item.text);
     if (itemError) return itemError;
@@ -344,7 +345,7 @@ export function createGoal(current: ThreadGoal | null, objective: string, tokenB
     return {
       ok: false,
       message:
-        "cannot create a new goal because this thread already has a non-complete goal; use /gc to clear it or create_goal with replace_existing: true after an explicit user request",
+        say("нельзя создать новую цель: в этой сессии уже есть незавершённая цель; очисти её через /gc или по явной просьбе пользователя вызови create_goal с replace_existing: true", "cannot create a new goal because this thread already has a non-complete goal; use /gc to clear it or create_goal with replace_existing: true after an explicit user request"),
       goal: current,
     };
   }
@@ -376,14 +377,14 @@ export function amendGoal(current: ThreadGoal | null, amendment: string, agreeme
   if (!current || (current.status !== "active" && current.status !== "paused")) {
     return {
       ok: false,
-      message: "Only active or paused goals can be amended.",
+      message: say("Изменить можно только активную цель или цель на паузе.", "Only active or paused goals can be amended."),
       goal: current,
     };
   }
 
   const trimmedAmendment = amendment.trim();
   if (trimmedAmendment.length === 0) {
-    return { ok: false, message: "Amendment must not be empty.", goal: current };
+    return { ok: false, message: say("Изменение не может быть пустым.", "Amendment must not be empty."), goal: current };
   }
 
   const agreementError = agreement ? validateAgreementInput(agreement) : null;
@@ -431,7 +432,7 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
   if (!current) {
     return {
       ok: false,
-      message: "No active goal exists.",
+      message: say("Активной цели нет.", "No active goal exists."),
       goal: null,
     };
   }
@@ -440,13 +441,13 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
     if (status === "complete") {
       return {
         ok: true,
-        message: "Goal already complete.",
+        message: say("Цель уже завершена.", "Goal already complete."),
         goal: current,
       };
     }
     return {
       ok: false,
-      message: "Completed goals are terminal; ask the agent to create a new goal or use /gc to clear it.",
+      message: say("Завершённая цель окончательна; попроси агента создать новую цель или очисти её через /gc.", "Completed goals are terminal; ask the agent to create a new goal or use /gc to clear it."),
       goal: current,
     };
   }
@@ -458,7 +459,7 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
     goal.updatedAt = nonDecreasingUpdatedAt(current);
     return {
       ok: true,
-      message: "Goal marked complete.",
+      message: say("Цель отмечена завершённой.", "Goal marked complete."),
       goal,
     };
   }
@@ -466,7 +467,7 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
   if (status === "paused" && current.status !== "active" && !(current.status === "paused" && current.pause?.kind === "recovery")) {
     return {
       ok: false,
-      message: "Only active goals can be paused.",
+      message: say("Приостановить можно только активную цель.", "Only active goals can be paused."),
       goal: current,
     };
   }
@@ -474,7 +475,7 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
   if (status === "active" && current.status !== "paused") {
     return {
       ok: false,
-      message: "Only paused goals can be resumed.",
+      message: say("Возобновить можно только цель на паузе.", "Only paused goals can be resumed."),
       goal: current,
     };
   }

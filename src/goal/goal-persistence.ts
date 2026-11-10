@@ -11,6 +11,7 @@ import {
   setEntry,
 } from "./state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type ThreadGoal } from "./types.js";
+import { say } from "../language.js";
 
 interface GoalPersistenceDeps {
   pi: Pick<ExtensionAPI, "appendEntry">;
@@ -94,8 +95,8 @@ export function createGoalPersistence(deps: GoalPersistenceDeps) {
     } catch (error) {
       unconfirmedWrite = new GoalCanonicalWriteError({
         applied: null, stage: "canonical", retryable: false, goalId: goal.goalId, snapshotUpdatedAt: goal.updatedAt,
-        message: `Goal snapshot write acknowledgement is unknown: ${error instanceof Error ? error.message : String(error)}`,
-        remediation: "Reopen the saved session file and selected branch, then reconcile this goalId, contract, amendment ID and status before another write. SDK memory, get_goal in this process and extension reload do not prove persistence. If saved, repair projections without repeating the change; repeat an approved operation only after confirming its absence in the file.",
+        message: say(`Неизвестно, сохранился ли снимок цели: ${error instanceof Error ? error.message : String(error)}`, `Goal snapshot write acknowledgement is unknown: ${error instanceof Error ? error.message : String(error)}`),
+        remediation: say("Заново открой сохранённый файл сессии и выбранную ветку и перед следующей записью сверь goalId, контракт, ID изменения и статус. Память SDK, get_goal в этом процессе и перезагрузка расширения не доказывают сохранения. Если запись сохранена, исправь документы, не повторяя изменения; согласованную операцию повторяй, только убедившись, что её нет в файле.", "Reopen the saved session file and selected branch, then reconcile this goalId, contract, amendment ID and status before another write. SDK memory, get_goal in this process and extension reload do not prove persistence. If saved, repair projections without repeating the change; repeat an approved operation only after confirming its absence in the file."),
       });
       throw unconfirmedWrite;
     }

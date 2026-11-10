@@ -21,8 +21,7 @@ import {
   emitToolExecutionEnd,
   sessionBeforeCompactEvent,
   sessionCompactEvent,
-  sessionShutdownEvent,
-} from "../support/runtime-harness.js";
+  sessionShutdownEvent } from "../support/runtime-harness.js";
 
 const COMPACTION_RECORDS = new Set<string>([RECORD.audit, RECORD.standard, RECORD.card]);
 
@@ -443,5 +442,5 @@ test("failed create_goal throws so pi marks the tool result as an error", async 
   const harness = createRuntimeHarness();
   await harness.runCommand("ship it");
 
-  await assert.rejects(() => harness.runTool("create_goal", { objective: "duplicate" }), /already has a non-complete goal/);
+  await assert.rejects(() => harness.runTool("create_goal", { objective: "duplicate" }), /уже есть незавершённая цель/);
 });
