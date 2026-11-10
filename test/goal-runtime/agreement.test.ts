@@ -61,6 +61,8 @@ test("правка цели принимается только после ре�
   const goal = (await read(harness)).goal!;
   assert.equal(goal.agreement!.revision, 2);
   assert.match(goal.agreement!.ownerWants, /по регионам/);
+  // Ссылку на реплику владельца ставит расширение, а не модель (Т7.1).
+  assert.equal(goal.agreement!.ownerEntryId, "owner-1");
   // Одна реплика разрешает одну правку: следующая ждёт новую реплику.
   await assert.rejects(harness.runTool("amend_goal", { ...amendment, amendment: "Ещё и по менеджерам." }, undefined, { ownerReply: false }), /нужен настоящий ответ владельца/);
   // Восстановление документа по amendment_id цель не меняет и реплики не требует.

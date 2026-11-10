@@ -21,6 +21,12 @@ import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEqui
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { goalContext } from "./goal-context.js";
 
+/** Новая редакция договорённости, принятая по реплике владельца, несёт ссылку на эту реплику (Т7.1). */
+function withOwnerReference(before: ThreadGoal, after: ThreadGoal, ownerEntryId: string | null): ThreadGoal {
+  if (!ownerEntryId || !after.agreement || after.agreement.revision === before.agreement?.revision) return after;
+  return { ...after, agreement: { ...after.agreement, ownerEntryId } };
+}
+
 // managedRefs отдаёт только GOAL; прочие имена показываются как есть.
 const artifactLinkLabel = (artifact: string): string => artifact === "GOAL" ? say("Сводка", "Summary") : artifact;
 const STALE_PROJECTION = /no longer current|belongs to goal|stale after session replacement/i;
@@ -361,7 +367,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       accounting.accountProgress(ctx, false);
       const result = appendAmendment(getGoal(), amendment, agreement);
       if (!result.ok || !result.goal) return result;
-      goal = result.goal;
+      goal = withOwnerReference(current, result.goal, latestOwnerEntryId(goalContext(ctx).sessionManager.getBranch()));
       ownerReplySeqAtGoalChange = ownerReplySeq;
       try { applyTransition({ kind: "set", nextGoal: goal, source }, ctx); }
       catch (error) {

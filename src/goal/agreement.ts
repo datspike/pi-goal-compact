@@ -12,6 +12,8 @@ export interface GoalAgreement {
   doneWhen: string;
   /** Номер редакции; растёт с каждой правкой цели. */
   revision: number;
+  /** Запись журнала с репликой владельца, по которой принята правка (Т7.1); ставит расширение. */
+  ownerEntryId?: string;
 }
 
 export const SELF_DECIDED_KINDS = ["assumption", "deferred_by_owner", "proposal"] as const;
@@ -71,7 +73,8 @@ export function selfDecidedItemId(goalId: string, kind: SelfDecidedKind, text: s
 export function isGoalAgreement(value: unknown): value is GoalAgreement {
   if (!value || typeof value !== "object") return false;
   const candidate = value as GoalAgreement;
-  return typeof candidate.ownerWants === "string" && typeof candidate.doneWhen === "string" && Number.isSafeInteger(candidate.revision) && candidate.revision >= 1;
+  return typeof candidate.ownerWants === "string" && typeof candidate.doneWhen === "string" && Number.isSafeInteger(candidate.revision) && candidate.revision >= 1 &&
+    (candidate.ownerEntryId === undefined || typeof candidate.ownerEntryId === "string");
 }
 
 export function isSelfDecidedItem(value: unknown): value is SelfDecidedItem {
