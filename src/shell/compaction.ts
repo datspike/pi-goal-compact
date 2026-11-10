@@ -8,12 +8,11 @@ import {
 	checkpointParamsSchema,
 	compactedSinceLastUserMessage,
 	continuationPrompt,
-	type CheckpointParams,
 } from "../compaction/checkpoint.js";
 import type { SummarySettings } from "../compaction/language.js";
 import type { ContextMode } from "../compaction/policy.js";
 import { russianCompaction, russianTreeSummary } from "../compaction/summary.js";
-import type { CheckpointRequest, CoreEffect, CompactionReason } from "../core/model.js";
+import type { CoreEffect, CompactionReason } from "../core/model.js";
 import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from "../request-stage/index.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
@@ -116,7 +115,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		switch (effect.type) {
 			case "compact": {
 				manual(ctx, "running");
-				const params = effect.request as unknown as CheckpointParams;
+				const params = effect.request;
 				ctx.compact({
 					customInstructions: buildInstructions(buildLedger(params, language), language),
 					onComplete: () => {
@@ -130,8 +129,9 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 				return;
 			}
 			case "send_ticket": {
-				if (effect.ticket.kind !== "checkpoint") return;
-				const sent = tickets.send(effect, continuationPrompt(effect.request as unknown as CheckpointParams, language));
+				// Билет контрольной точки ядро выдаёт только вместе с её запросом.
+				if (effect.ticket.kind !== "checkpoint" || !effect.request) return;
+				const sent = tickets.send(effect, continuationPrompt(effect.request, language));
 				if (sent) {
 					manual(ctx, "continuation-claimed");
 					manual(ctx, "send-attempted");
@@ -166,7 +166,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 			: ["Use checkpoint_compact_continue only when the user explicitly asks or instructions require a checkpoint before compaction.", "Finish the current atomic work first and call the tool as the last checkpoint action.", "For plan-based work pass planPath/currentPhase/nextPhase."],
 		parameters: checkpointParamsSchema(language),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const effects = driver.dispatch({ type: "checkpoint_requested", request: params as unknown as CheckpointRequest, alreadyCompacted: compactedSinceLastUserMessage(ctx) }, ctx);
+			const effects = driver.dispatch({ type: "checkpoint_requested", request: params, alreadyCompacted: compactedSinceLastUserMessage(ctx) }, ctx);
 			const refused = effects.find((effect) => effect.type === "checkpoint_refused");
 			if (refused?.type === "checkpoint_refused" && refused.reason === "in_progress") {
 				return { content: [{ type: "text" as const, text: say("Compact уже ожидает или выполняется.", "Compaction is already pending or running.") }], details: { reason: "manual", params, result: "in_progress" }, terminate: true };

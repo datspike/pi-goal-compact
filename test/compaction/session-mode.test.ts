@@ -9,7 +9,7 @@ describe("режим окна в журнале", () => {
 			{ type: "custom", customType: MODE_ENTRY, data: { mode: "long-chat" } },
 		];
 		expect(restoreMode(entries)).toBe("long-chat");
-		const appended: any[] = [];
+		const appended: Array<{ type: string; data: unknown }> = [];
 		appendMode({ appendEntry(type, data) { appended.push({ type, data }); } }, "long-once");
 		expect(appended).toEqual([{ type: MODE_ENTRY, data: { mode: "long-once" } }]);
 	});

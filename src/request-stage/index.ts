@@ -1,7 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-// @ts-ignore -- plain ESM modules moved from the request-stage extension unchanged; they are tested with node:test.
 import { RequestStageController } from "./request-stage-controller.mjs";
-// @ts-ignore
 import { GenerationTelemetry } from "./generation-telemetry.mjs";
 import { createRateBorder } from "./rate-border.js";
 

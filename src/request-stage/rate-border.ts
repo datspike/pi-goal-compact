@@ -1,16 +1,19 @@
 import { CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
+/** Часть интерфейса Pi, через которую рамка подменяет редактор. */
+export type EditorHost = Pick<ExtensionContext["ui"], "getEditorComponent" | "setEditorComponent">;
+
 /** Places the readout on the existing top border without changing editor geometry. */
 export function createRateBorder() {
 	let rate: string | undefined;
 	let redraw: (() => void) | undefined;
-	let installedUi: ExtensionContext["ui"] | undefined;
-	let installedFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
-	let previousFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
+	let installedUi: EditorHost | undefined;
+	let installedFactory: ReturnType<EditorHost["getEditorComponent"]>;
+	let previousFactory: ReturnType<EditorHost["getEditorComponent"]>;
 
 	return {
-		install(ui: ExtensionContext["ui"]) {
+		install(ui: EditorHost) {
 			if (installedFactory && ui.getEditorComponent?.() === installedFactory) { installedUi = ui; return; }
 			if (typeof ui.setEditorComponent !== "function" || typeof ui.getEditorComponent !== "function") return;
 			previousFactory = ui.getEditorComponent();
@@ -25,8 +28,10 @@ export function createRateBorder() {
 					const base = proto && Object.getPrototypeOf(proto);
 					if (proto?.constructor?.name !== "InlineSlashEditor" || base?.constructor?.name !== "CustomEditor"
 						|| Object.hasOwn(proto, "render") || Object.hasOwn(proto, "renderTopBorder")
-						|| !("embedWorkingStatus" in editor) || typeof (editor as any).setWorkingStatusIndicator !== "function") return editor;
-					try { (editor as any).embedWorkingStatus = true; } catch { return editor; }
+						|| !("embedWorkingStatus" in editor) || !("setWorkingStatusIndicator" in editor)
+						|| typeof editor.setWorkingStatusIndicator !== "function") return editor;
+					// В типах Pi поле только для чтения, но редактор читает его при отрисовке; ставим до первого кадра.
+					try { if (!Reflect.set(editor, "embedWorkingStatus", true)) return editor; } catch { return editor; }
 				}
 				const render = editor.render.bind(editor);
 				redraw = () => tui.requestRender();

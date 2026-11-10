@@ -1,28 +1,34 @@
 import { describe, expect, test } from "../support/expect.js";
-import { compactionOf } from "../support/compaction.js";
-import { collectFileLists, FILE_HINTS_MAX_CHARS, formatFileHints, withoutFileTracking, withoutMessageFileTracking } from "../../src/compaction/file-hints.js";
-import { russianCompaction, russianTreeSummary } from "../../src/compaction/summary.js";
+import { compactedWith, compactWith, treeSummaryWith, type FakeCompactEvent, type FakeContext, type FakeEntry, type FakeTreeEvent } from "../support/compaction.js";
+import { assistantToolCall as tool, fileListsOf } from "../support/pi-messages.js";
+import { collectFileLists, FILE_HINTS_MAX_CHARS, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "../../src/compaction/file-hints.js";
 
 const BODY = "## Цель\nСохранить смысл задачи.\n## Ограничения и предпочтения\nНе менять production.\n## Прогресс\nИсправить src/current.ts.\n## Следующие шаги\nПроверить tests/current.test.ts; старый результат не повторять.";
 const OLD = `${BODY}\n\n<read-files>\narchive/old.ts\n</read-files>\n\n<modified-files>\narchive/changed.ts\n</modified-files>`;
 const usage = { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30 };
-const tool = (path: string, name = "read") => ({ role: "assistant", content: [{ type: "toolCall", name, arguments: { path } }] });
+
+const compact = compactWith;
+const compacted = compactedWith;
+const treeSummary = treeSummaryWith;
+
 function fixture(texts = [BODY]) {
 	const prompts: string[] = [];
-	const options: any[] = [];
-	const ctx: any = {
-		model: { maxTokens: 16384, contextWindow: 272000 },
-		modelRegistry: { complete: async (_model: any, context: any, opts: any) => {
-			prompts.push(context.messages[0].content[0].text); options.push(opts);
+	const options: Array<{ signal?: AbortSignal } | undefined> = [];
+	const model = { maxTokens: 16384, contextWindow: 272000 };
+	const ctx: FakeContext = {
+		model,
+		modelRegistry: { complete: async (_model, context, opts) => {
+			const block = context.messages[0]?.content[0];
+			prompts.push(typeof block === "object" && block.type === "text" ? block.text : ""); options.push(opts);
 			return { stopReason: "stop", content: [{ type: "text", text: texts.shift() ?? BODY }], usage };
 		} },
 	};
-	const event: any = { signal: new AbortController().signal, branchEntries: [{ type: "compaction", details: { readFiles: ["archive/old.ts"], modifiedFiles: ["archive/changed.ts"] } }], preparation: {
+	const event: FakeCompactEvent = { signal: new AbortController().signal, branchEntries: [{ type: "compaction", details: { readFiles: ["archive/old.ts"], modifiedFiles: ["archive/changed.ts"] } }], preparation: {
 		previousSummary: OLD, messagesToSummarize: [tool("src/current.ts", "edit")], turnPrefixMessages: [],
 		fileOps: { read: new Set(["tests/current.test.ts"]), edited: new Set(["src/current.ts"]), written: new Set() },
 		settings: { reserveTokens: 16384 }, firstKeptEntryId: "retained", tokensBefore: 256000, isSplitTurn: false,
 	} };
-	return { ctx, event, prompts, options };
+	return { ctx, model, event, prompts, options };
 }
 
 describe("bounded file navigation", () => {
@@ -37,10 +43,16 @@ describe("bounded file navigation", () => {
 	});
 
 	test("never sanitizes user/tool contents; copies summary messages only", () => {
-		const input = [{ role: "user", content: OLD }, { role: "toolResult", content: OLD }, { role: "branchSummary", summary: OLD }];
+		const summary = { role: "branchSummary", summary: OLD, fromId: "a", timestamp: 0 } as const;
+		const input: AgentMessage[] = [
+			{ role: "user", content: OLD, timestamp: 0 },
+			{ role: "toolResult", toolCallId: "call", toolName: "read", content: [{ type: "text", text: OLD }], isError: false, timestamp: 0 },
+			summary,
+		];
 		const result = withoutMessageFileTracking(input);
 		expect(result[0]).toBe(input[0]); expect(result[1]).toBe(input[1]);
-		expect(result[2]?.summary).toBe(BODY); expect(input[2]?.summary).toBe(OLD);
+		const cleaned = result[2];
+		expect(cleaned?.role === "branchSummary" ? cleaned.summary : undefined).toBe(BODY); expect(summary.summary).toBe(OLD);
 	});
 
 	test("keeps cumulative metadata exact, filters malformed details, and preserves roots", () => {
@@ -76,14 +88,14 @@ describe("summary integration", () => {
 	test("normal compact excludes the historical appendix from input and output but preserves metadata and prose", async () => {
 		const { ctx, event, prompts, options } = fixture();
 		const original = JSON.stringify(event, (_key, value) => value instanceof Set ? [...value] : value);
-		const result = compactionOf(await russianCompaction(event, ctx));
+		const result = await compacted(event, ctx);
 		expect(prompts[0]).not.toContain("archive/old.ts");
 		expect(prompts[0]).toContain(BODY);
 		expect(result.summary.startsWith(BODY + "\n\n<file-hints>")).toBe(true);
 		expect(result.summary).not.toContain("<read-files>");
 		expect(result.details).toEqual({ readFiles: ["archive/old.ts", "tests/current.test.ts"], modifiedFiles: ["archive/changed.ts", "src/current.ts"] });
 		expect(result.firstKeptEntryId).toBe("retained"); expect(result.usage).toEqual(usage);
-		expect(options[0].signal).toBe(event.signal);
+		expect(options[0]?.signal).toBe(event.signal);
 		expect(JSON.stringify(event, (_key, value) => value instanceof Set ? [...value] : value)).toBe(original);
 	});
 
@@ -93,7 +105,7 @@ describe("summary integration", () => {
 		event.preparation.isSplitTurn = true;
 		event.preparation.messagesToSummarize = [];
 		event.preparation.turnPrefixMessages = [tool("src/current.ts")];
-		const result = compactionOf(await russianCompaction(event, ctx));
+		const result = await compacted(event, ctx);
 		expect(prompts.length).toBe(1);
 		expect(result.summary).toContain(BODY);
 		expect(result.summary).toContain(prefix);
@@ -106,34 +118,34 @@ describe("summary integration", () => {
 		event.preparation.isSplitTurn = true;
 		event.preparation.messagesToSummarize.push({ role: "compactionSummary", summary: OLD, tokensBefore: 256000, timestamp: 0 });
 		event.preparation.turnPrefixMessages = [tool("src/current.ts")];
-		const result = compactionOf(await russianCompaction(event, ctx));
+		const result = await compacted(event, ctx);
 		expect(prompts.length).toBe(2); expect(prompts[0]).not.toContain("archive/old.ts");
-		expect(result.usage.totalTokens).toBe(60);
+		expect(result.usage?.totalTokens).toBe(60);
 	});
 
 	test("50 compacts keep hints bounded and all historical paths in details", async () => {
 		const { ctx, event } = fixture();
 		for (let i = 0; i < 50; i++) {
 			event.preparation.fileOps.edited.add(`.runtime/run-${i}/result.json`);
-			const result = compactionOf(await russianCompaction(event, ctx));
+			const result = await compacted(event, ctx);
 			expect(result.summary.length - BODY.length).toBeLessThanOrEqual(FILE_HINTS_MAX_CHARS);
 			expect(withoutFileTracking(result.summary)).toBe(BODY);
 			event.branchEntries.push({ type: "compaction", details: result.details });
 			event.preparation.previousSummary = result.summary;
 		}
-		expect(event.branchEntries.at(-1).details.modifiedFiles.length).toBe(52);
+		expect(fileListsOf(event.branchEntries.at(-1)?.details).modifiedFiles.length).toBe(52);
 	});
 
 	test("tree summarizes cleaned branch entries without mutating originals or losing inherited metadata", async () => {
 		const { ctx, prompts } = fixture();
-		const entry: any = { type: "branch_summary", id: "b1", parentId: null, timestamp: new Date(0).toISOString(), fromId: "source", summary: OLD, fromHook: true, details: { readFiles: ["archive/old.ts"], modifiedFiles: ["archive/changed.ts"] } };
-		const event: any = { signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [entry] } };
-		const result = (await russianTreeSummary(event, ctx))!.summary;
+		const entry: FakeEntry = { type: "branch_summary", id: "b1", parentId: null, timestamp: new Date(0).toISOString(), fromId: "source", summary: OLD, fromHook: true, details: { readFiles: ["archive/old.ts"], modifiedFiles: ["archive/changed.ts"] } };
+		const event: FakeTreeEvent = { signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [entry] } };
+		const result = (await treeSummary(event, ctx))!;
 		expect(prompts[0]).not.toContain("archive/old.ts"); expect(prompts[0]).toContain("Сохранить смысл задачи");
 		expect(result.details.modifiedFiles).toEqual(["archive/changed.ts"]); expect(entry.summary).toBe(OLD);
 		expect(result.usage).toEqual(usage);
 		event.preparation.replaceInstructions = true; event.preparation.customInstructions = "ONLY CUSTOM";
-		await russianTreeSummary(event, ctx);
+		await treeSummary(event, ctx);
 		expect(prompts[1]).toContain("ONLY CUSTOM"); expect(prompts[1]).not.toContain("Чего пользователь пытался добиться");
 	});
 
@@ -141,10 +153,10 @@ describe("summary integration", () => {
 		for (const response of [new Error("offline"), { stopReason: "length", content: [] }, { stopReason: "stop", content: [{ type: "text", text: "invalid" }] }]) {
 			const { ctx, event } = fixture();
 			ctx.modelRegistry.complete = async () => { if (response instanceof Error) throw response; return response; };
-			expect(await russianCompaction(event, ctx)).toEqual({ cancel: true });
+			expect(await compact(event, ctx)).toEqual({ cancel: true });
 			expect(event.preparation.previousSummary).toBe(OLD);
-			const tree: any = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [{ type: "branch_summary", id: "b", summary: OLD, fromId: "a", timestamp: new Date(0).toISOString() }] } };
-			expect(await russianTreeSummary(tree, ctx)).toBeUndefined();
+			const tree: FakeTreeEvent = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [{ type: "branch_summary", id: "b", summary: OLD, fromId: "a", timestamp: new Date(0).toISOString() }] } };
+			expect(await treeSummary(tree, ctx)).toBeUndefined();
 		}
 	});
 });
@@ -162,7 +174,7 @@ describe("tracking boundary regressions", () => {
 				event.preparation.turnPrefixMessages = [tool("src/current.ts")];
 				if (mode === "prefix-no-history") event.preparation.messagesToSummarize = [];
 			}
-			expect(await russianCompaction(event, ctx)).toEqual({ cancel: true });
+			expect(await compact(event, ctx)).toEqual({ cancel: true });
 			expect(event.preparation.previousSummary).toBe(OLD);
 		}
 	});
@@ -170,8 +182,8 @@ describe("tracking boundary regressions", () => {
 	test("tree rejects tracking-only output even with replaceInstructions", async () => {
 		for (const replaceInstructions of [false, true]) {
 			const { ctx } = fixture([trackingOnly("## Цель")]);
-			const event: any = { signal: new AbortController().signal, preparation: { userWantsSummary: true, replaceInstructions, customInstructions: "Custom summary", entriesToSummarize: [{ type: "branch_summary", summary: OLD, fromId: "a", timestamp: new Date(0).toISOString() }] } };
-			expect(await russianTreeSummary(event, ctx)).toBeUndefined();
+			const event: FakeTreeEvent = { signal: new AbortController().signal, preparation: { userWantsSummary: true, replaceInstructions, customInstructions: "Custom summary", entriesToSummarize: [{ type: "branch_summary", summary: OLD, fromId: "a", timestamp: new Date(0).toISOString() }] } };
+			expect(await treeSummary(event, ctx)).toBeUndefined();
 		}
 	});
 
@@ -179,19 +191,19 @@ describe("tracking boundary regressions", () => {
 		for (const unusual of ["<draft>.ts", "<draft>", "```notes.ts", "~~~notes.ts"]) {
 			const paths = [unusual, ...Array.from({ length: 10000 }, (_, i) => `archive/${i}.ts`)];
 			const previous = `${BODY}\n\n<read-files>\n${paths.join("\n")}\n</read-files>`;
-			const { ctx, event, prompts } = fixture();
+			const { ctx, model, event, prompts } = fixture();
 			event.preparation.previousSummary = previous;
 			event.branchEntries = [{ type: "compaction", details: { readFiles: paths } }];
-			const result = compactionOf(await russianCompaction(event, ctx));
+			const result = await compacted(event, ctx);
 			expect(prompts[0]).not.toContain("archive/9999.ts");
 			expect(result.details.readFiles).toContain(unusual);
 			expect(result.details.readFiles).toContain("archive/9999.ts");
-			ctx.model.contextWindow = 18000;
-			const tree: any = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [
+			model.contextWindow = 18000;
+			const tree: FakeTreeEvent = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [
 				{ type: "message", message: { role: "user", content: "EARLIER_SEMANTIC_OBLIGATION", timestamp: 0 }, timestamp: new Date(0).toISOString() },
 				{ type: "branch_summary", summary: previous, fromId: "a", timestamp: new Date(1).toISOString(), details: { readFiles: paths } },
 			] } };
-			const treeResult = (await russianTreeSummary(tree, ctx))!.summary;
+			const treeResult = (await treeSummary(tree, ctx))!;
 			expect(prompts[1]).not.toContain("archive/9999.ts");
 			expect(prompts[1]).toContain("EARLIER_SEMANTIC_OBLIGATION");
 			expect(treeResult.details.readFiles).toContain(unusual);
@@ -206,22 +218,22 @@ describe("metadata-backed legacy boundaries", () => {
 			const details = { readFiles: tag === "read-files" ? paths : [], modifiedFiles: tag === "modified-files" ? paths : [] };
 			const previous = `${BODY}\n\n<${tag}>\n${paths.join("\n")}\n</${tag}>`;
 			expect(withoutFileTracking(previous, [details])).toBe(BODY);
-			const entry: any = { type: "compaction", summary: previous, details, timestamp: new Date(0).toISOString() };
-			const { ctx, event, prompts } = fixture();
+			const entry: FakeEntry = { type: "compaction", summary: previous, details, timestamp: new Date(0).toISOString() };
+			const { ctx, model, event, prompts } = fixture();
 			event.branchEntries = [entry];
 			event.preparation.previousSummary = previous;
-			event.preparation.messagesToSummarize.push({ role: "compactionSummary", summary: previous, timestamp: 0 });
-			const compact = compactionOf(await russianCompaction(event, ctx));
+			event.preparation.messagesToSummarize.push({ role: "compactionSummary", summary: previous, tokensBefore: 0, timestamp: 0 });
+			const compact = await compacted(event, ctx);
 			expect(prompts[0]).not.toContain("archive/9999.ts");
 			const field = tag === "read-files" ? "readFiles" : "modifiedFiles";
 			expect(compact.details[field]).toContain(`</${tag}>`);
 			expect(compact.details[field]).toContain("archive/9999.ts");
-			ctx.model.contextWindow = 18000;
-			const tree: any = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [
+			model.contextWindow = 18000;
+			const tree: FakeTreeEvent = { signal: event.signal, preparation: { userWantsSummary: true, entriesToSummarize: [
 				{ type: "message", message: { role: "user", content: "EARLIER_SEMANTIC_OBLIGATION", timestamp: 0 }, timestamp: new Date(0).toISOString() },
 				{ ...entry, type: "branch_summary", fromId: "a" },
 			] } };
-			const branch = (await russianTreeSummary(tree, ctx))!.summary;
+			const branch = (await treeSummary(tree, ctx))!;
 			expect(prompts[1]).not.toContain("archive/9999.ts");
 			expect(prompts[1]).toContain("EARLIER_SEMANTIC_OBLIGATION");
 			expect(branch.details[field]).toEqual(paths);
@@ -229,7 +241,7 @@ describe("metadata-backed legacy boundaries", () => {
 			const split = fixture(["## Исходный запрос\nKeep prefix"]);
 			split.event.branchEntries = [entry];
 			Object.assign(split.event.preparation, { previousSummary: previous, isSplitTurn: true, messagesToSummarize: [], turnPrefixMessages: [tool("current.ts")] });
-			const splitResult = compactionOf(await russianCompaction(split.event, split.ctx));
+			const splitResult = await compacted(split.event, split.ctx);
 			expect(splitResult.summary).not.toContain("archive/9999.ts");
 			expect(splitResult.details[field]).toContain(`</${tag}>`);
 		});

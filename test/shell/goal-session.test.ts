@@ -5,11 +5,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
-import { fakePi } from "../support/pi-fake.js";
+import { fakePi, type FakeEntry } from "../support/pi-fake.js";
 
 const OBJECTIVE = "Перенести модуль цели в новое расширение и проверить жизненный цикл.";
 
-function setup(branch?: any[]) {
+function setup(branch?: FakeEntry[]) {
   const cwd = mkdtempSync(join(tmpdir(), "goal-compact-session-"));
   const fake = fakePi(branch ? { branch } : {});
   fake.ctx.cwd = cwd;
@@ -18,10 +18,10 @@ function setup(branch?: any[]) {
 }
 
 async function call(fake: ReturnType<typeof fakePi>, name: string, params: Record<string, unknown>, id = `${name}-1`) {
-  return fake.tool(name).execute(id, params, undefined, undefined, fake.ctx);
+  return fake.runTool(name, params, id);
 }
 
-const text = (result: any): string => result.content.map((part: any) => part.text).join("\n");
+const text = (result: { text: string }): string => result.text;
 
 test("цель проходит путь от создания до закрытия через инструменты модели", async () => {
   const { fake, done } = setup();
@@ -56,14 +56,16 @@ test("цель проходит путь от создания до закрыт
 
 test("цель из журнала прежнего расширения восстанавливается после старта сессии", async () => {
   const first = setup();
-  let branch: any[];
+  let branch: FakeEntry[];
   try {
     await first.fake.event("session_start", { reason: "startup" });
     await call(first.fake, "create_goal", { objective: OBJECTIVE });
     // Те же записи, но под именами прежнего расширения, как в старой сессии.
     const names: Record<string, string> = { "goal-compact-goal": "pi-codex-goal", "goal-compact-projection": "pi-codex-goal-projection" };
-    branch = (first.fake.ctx.sessionManager.getBranch() as any[]).map((entry) =>
-      entry.type === "custom" && names[entry.customType] ? { ...entry, customType: names[entry.customType] } : entry);
+    branch = first.fake.ctx.sessionManager.getBranch().map((entry) => {
+      const legacy = typeof entry.customType === "string" ? names[entry.customType] : undefined;
+      return entry.type === "custom" && legacy ? { ...entry, customType: legacy } : entry;
+    });
     assert.ok(branch.some((entry) => entry.customType === "pi-codex-goal"));
   } finally {
     first.done();

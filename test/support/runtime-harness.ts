@@ -17,6 +17,7 @@ import { CONTINUATION_RETRY_MS, PROVIDER_LIMIT_AUTO_RESUME_MS } from "../../src/
 import { isGoalCustomEntry, reconstructGoal } from "../../src/goal/state.js";
 import { GOAL_PROJECTION_ENTRY_TYPE } from "../../src/goal/goal-reports.js";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
+import { asPi } from "./as-pi.js";
 
 type EventHandler = (event: object, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
@@ -398,7 +399,7 @@ export function createRuntimeHarness(options: {
     scopedModels: [],
     mode: options.mode ?? "rpc",
     model: undefined,
-    modelRegistry: { getAll: () => [], find: () => undefined } as unknown as ExtensionCommandContext["modelRegistry"],
+    modelRegistry: asPi<ExtensionCommandContext["modelRegistry"]>({ getAll: () => [], find: () => undefined }),
     navigateTree: async () => ({ cancelled: false }),
     newSession: async () => ({ cancelled: false }),
     reload: async () => {},
@@ -418,7 +419,7 @@ export function createRuntimeHarness(options: {
     } as ExtensionCommandContext["model"];
   }
 
-  let goalSession = loadExtension(pi as unknown as ExtensionAPI);
+  let goalSession = loadExtension(asPi<ExtensionAPI>(pi));
 
   function reloadExtension(): void {
     handlers.clear();
@@ -426,7 +427,7 @@ export function createRuntimeHarness(options: {
     eventHandlers.clear();
     entryRenderers.clear();
     tools.clear();
-    goalSession = loadExtension(pi as unknown as ExtensionAPI);
+    goalSession = loadExtension(asPi<ExtensionAPI>(pi));
   }
 
   async function reloadSession(reason: "startup" | "reload" | "resume" = "startup"): Promise<void> {

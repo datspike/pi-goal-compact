@@ -6,8 +6,10 @@
  * formal/Continuation.tla и formal/Agreement.tla.
  */
 
-/** Аргументы контрольной точки передаются ядром как есть: текст строит обвязка. */
-export type CheckpointRequest = Readonly<Record<string, unknown>>;
+import type { CheckpointParams } from "../compaction/checkpoint.js";
+
+/** Аргументы контрольной точки ядро не читает и передаёт как есть: текст строит обвязка. */
+export type CheckpointRequest = Readonly<CheckpointParams>;
 
 export type CheckpointState =
   | { readonly phase: "none" }

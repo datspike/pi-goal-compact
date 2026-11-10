@@ -1,14 +1,16 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { MAX_COMPACT_PAYLOAD_CHARS, calculateCompactBudget, type CompactCapability } from "./compact-budget.js";
-import type { Model } from "@earendil-works/pi-ai";
-import { collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking } from "./file-hints.js";
+import type { Api, AssistantMessage, Model, ModelsApiStreamOptions, TextContent, Usage } from "@earendil-works/pi-ai";
+import { collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
 import {
 	convertToLlm,
 	prepareBranchEntries,
 	serializeConversation,
 	type ExtensionContext,
 	type SessionBeforeCompactEvent,
+	type SessionBeforeCompactResult,
 	type SessionBeforeTreeEvent,
+	type SessionBeforeTreeResult,
 } from "@earendil-works/pi-coding-agent";
 
 const SUMMARIZATION_SYSTEM_PROMPT = "You are a context summarization assistant. Do not continue the conversation. Output only the requested structured summary.";
@@ -145,20 +147,20 @@ function hasLocalizedPrefixStructure(summary: string): boolean {
 
 type SummaryResponse = {
     text: string;
-    usage?: unknown;
+    usage?: Usage | undefined;
 };
 
 export type CompactionFailureReason = "aborted" | "context-changed" | "invalid-response" | "request-failed" | "insufficient-window" | "unsupported" | "request-too-large";
 
 export type RussianCompactionOptions = {
     capability?: CompactCapability;
-    model?: Model<any>;
+    model?: Model<Api>;
     isCurrent?: () => boolean;
     onFailure?: (reason: string) => void;
 };
 
 export type RussianCompactionResult = {
-    compaction: any;
+    compaction: NonNullable<SessionBeforeCompactResult["compaction"]>;
 } | {
     cancel: true;
 };
@@ -194,19 +196,19 @@ type OperationSnapshot = {
     activeModel: ModelIdentity | undefined;
     activeRoute: RouteIdentity | undefined;
     serviceModel: ModelIdentity;
-    serviceModelRef: Model<any>;
+    serviceModelRef: Model<Api>;
     serviceRoute: RouteIdentity;
     session: SessionIdentity;
 };
 
 type CompactionRequestGuard = {
     capability?: CompactCapability;
-    model: Model<any>;
+    model: Model<Api>;
     signal: AbortSignal;
     validate: () => void;
 };
 
-function modelIdentity(model: Model<any> | undefined): ModelIdentity | undefined {
+function modelIdentity(model: Model<Api> | undefined): ModelIdentity | undefined {
     if (!model)
         return undefined;
     return { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl };
@@ -216,12 +218,13 @@ function sameModelIdentity(left: ModelIdentity | undefined, right: ModelIdentity
     return left?.provider === right?.provider && left?.id === right?.id && left?.api === right?.api && left?.baseUrl === right?.baseUrl;
 }
 
-function routeIdentity(ctx: ExtensionContext, model: Model<any> | undefined): RouteIdentity | undefined {
+function routeIdentity(ctx: ExtensionContext, model: Model<Api> | undefined): RouteIdentity | undefined {
     const identity = modelIdentity(model);
-    if (!identity)
+    if (!model || !identity)
         return undefined;
-    const registry = ctx.modelRegistry as any;
-    const provider = typeof registry?.getProvider === "function" ? registry.getProvider(model!.provider) : undefined;
+    // Тестовые и старые реестры моделей могут не иметь getProvider; тогда маршрут сравнивается без провайдера.
+    const registry: Partial<ExtensionContext["modelRegistry"]> | undefined = ctx.modelRegistry;
+    const provider = typeof registry?.getProvider === "function" ? registry.getProvider(model.provider) : undefined;
     return { registry, provider, model: identity };
 }
 
@@ -234,15 +237,17 @@ export function isContextEntry(entry: { type?: unknown } | null | undefined): bo
     return entry?.type !== "custom" && entry?.type !== "session_info" && entry?.type !== "usage";
 }
 
+type SessionReader = Partial<ExtensionContext["sessionManager"]> | undefined;
+
 function branchIdentity(ctx: ExtensionContext): string | undefined {
-    const manager = ctx.sessionManager as any;
+    const manager: SessionReader = ctx.sessionManager;
     if (!manager || typeof manager.getBranch !== "function")
         return undefined;
     const branch = manager.getBranch();
     if (!Array.isArray(branch))
         return undefined;
     // The leaf moves with every appended record; the ordered model-visible entries identify the summarized context.
-    const entries = branch.filter(isContextEntry).map((entry: any) => ({
+    const entries = branch.filter(isContextEntry).map((entry) => ({
         id: entry?.id ?? null,
         type: entry?.type ?? null,
     }));
@@ -250,7 +255,7 @@ function branchIdentity(ctx: ExtensionContext): string | undefined {
 }
 
 function sessionIdentity(ctx: ExtensionContext): SessionIdentity {
-    const manager = ctx.sessionManager as any;
+    const manager: SessionReader = ctx.sessionManager;
     return {
         sessionId: manager && typeof manager.getSessionId === "function" ? manager.getSessionId() : undefined,
         sessionFile: manager && typeof manager.getSessionFile === "function" ? manager.getSessionFile() : undefined,
@@ -262,7 +267,7 @@ function sameSession(left: SessionIdentity, right: SessionIdentity): boolean {
     return left.sessionId === right.sessionId && left.sessionFile === right.sessionFile && left.tree === right.tree;
 }
 
-function operationSnapshot(ctx: ExtensionContext, signal: AbortSignal, activeModel: Model<any> | undefined, serviceModel: Model<any>): OperationSnapshot {
+function operationSnapshot(ctx: ExtensionContext, signal: AbortSignal, activeModel: Model<Api> | undefined, serviceModel: Model<Api>): OperationSnapshot {
     return {
         signal,
         activeModel: modelIdentity(activeModel),
@@ -332,7 +337,7 @@ function reasonForFailure(error: unknown, ctx: ExtensionContext, guard: Compacti
     return abortError(error) ? "aborted" : "request-failed";
 }
 
-export function combineUsage(first: any, second: any): any {
+export function combineUsage(first: Usage | undefined, second: Usage | undefined): Usage | undefined {
     if (!first)
         return second;
     if (!second)
@@ -345,7 +350,7 @@ export function combineUsage(first: any, second: any): any {
         cacheWrite: sum(first.cost.cacheWrite, second.cost.cacheWrite),
         total: sum(first.cost.total, second.cost.total),
     } : first.cost ?? second.cost;
-    const combined = {
+    const combined: Usage = {
         ...first,
         ...second,
         input: sum(first.input, second.input),
@@ -376,7 +381,7 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
             throw new SummaryFailure(budget.reason!);
     }
     let payloadFailure: unknown;
-    const options: Record<string, unknown> = { maxTokens, signal, cacheRetention: "none" };
+    const options: ModelsApiStreamOptions<Api> = { maxTokens, signal, cacheRetention: "none" };
     if (guard) {
         options.maxRetries = 0;
         options.transport = "sse";
@@ -395,11 +400,12 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
                 throw error;
             }
         };
-        const sessionId = (ctx.sessionManager as any)?.getSessionId?.();
+        const manager: SessionReader = ctx.sessionManager;
+        const sessionId = manager?.getSessionId?.();
         if (typeof sessionId === "string" && sessionId)
             options.sessionId = sessionId;
     }
-    let response: any;
+    let response: AssistantMessage | undefined;
     try {
         response = await ctx.modelRegistry.complete(model, {
             messages: [{
@@ -407,7 +413,7 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
                     content: [{ type: "text", text: `<instructions>\n${SUMMARIZATION_SYSTEM_PROMPT}\n</instructions>\n\n${prompt}` }],
                     timestamp: Date.now(),
                 }],
-        }, options as any);
+        }, options);
     }
     catch (error) {
         if (payloadFailure) throw payloadFailure;
@@ -436,12 +442,12 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
             throw new SummaryFailure("invalid-response");
         throw new Error("Summary generation failed");
     }
-    if (response.content.some((block: any) => block?.type === "toolCall")) {
+    if (response.content.some((block) => block?.type === "toolCall")) {
         if (guard)
             throw new SummaryFailure("invalid-response");
         throw new Error("Summary attempted to call a tool");
     }
-    const rawText = response.content.filter((block: any) => block?.type === "text" && typeof block.text === "string").map((block: any) => block.text).join("\n");
+    const rawText = response.content.filter((block): block is TextContent => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
     const text = withoutFileTracking(rawText);
     if (!text.trim()) {
         if (guard)
@@ -451,17 +457,17 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
     return { text, usage: response.usage };
 }
 
-function conversationPrompt(messages: any[], instructions: string, previousSummary?: string, sources: readonly unknown[] = []): string {
+function conversationPrompt(messages: AgentMessage[], instructions: string, previousSummary?: string, sources: readonly unknown[] = []): string {
     const conversationText = serializeConversation(convertToLlm(withoutMessageFileTracking(messages, sources)));
     const previous = previousSummary ? withoutFileTracking(previousSummary, sources) : undefined;
     return `<conversation>\n${conversationText}\n</conversation>\n\n${previous ? `<previous-summary>\n${previous}\n</previous-summary>\n\n` : ""}${instructions}`;
 }
 
-async function summarizeMessages(ctx: ExtensionContext, messages: any[], instructions: string, previousSummary: string | undefined, maxTokens: number, signal: AbortSignal, sources: readonly unknown[], guard?: CompactionRequestGuard): Promise<SummaryResponse> {
+async function summarizeMessages(ctx: ExtensionContext, messages: AgentMessage[], instructions: string, previousSummary: string | undefined, maxTokens: number, signal: AbortSignal, sources: readonly unknown[], guard?: CompactionRequestGuard): Promise<SummaryResponse> {
     return completeSummary(ctx, conversationPrompt(messages, instructions, previousSummary, sources), maxTokens, signal, guard);
 }
 
-async function summarizeTurnPrefix(ctx: ExtensionContext, messages: any[], signal: AbortSignal, maxTokens: number, sources: readonly unknown[], customInstructions: string | undefined, guard?: CompactionRequestGuard): Promise<SummaryResponse> {
+async function summarizeTurnPrefix(ctx: ExtensionContext, messages: AgentMessage[], signal: AbortSignal, maxTokens: number, sources: readonly unknown[], customInstructions: string | undefined, guard?: CompactionRequestGuard): Promise<SummaryResponse> {
     const instructions = `Это ранняя часть пользовательского хода, а его недавняя часть сохранена отдельно. Составь краткий контекст для продолжения на русском языке и используй ровно этот формат:
 
 ## Исходный запрос
@@ -496,10 +502,10 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
         const serviceMaxTokens = serviceModel.maxTokens;
         const maxTokens = Math.min(Math.floor(preparation.settings.reserveTokens * 0.8), serviceMaxTokens > 0 ? serviceMaxTokens : Number.POSITIVE_INFINITY);
         let summary: string;
-        let usage: unknown;
+        let usage: Usage | undefined;
         if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
             let historyText = preparation.previousSummary ? localizeSummaryStructure(withoutFileTracking(preparation.previousSummary, sources)) : "Предыдущей истории нет.";
-            let historyUsage: unknown;
+            let historyUsage: Usage | undefined;
             if (preparation.messagesToSummarize.length > 0) {
                 const history = await summarizeMessages(ctx, preparation.messagesToSummarize, instructions, preparation.previousSummary, maxTokens, event.signal, sources, guard);
                 guard.validate();
@@ -537,7 +543,7 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
                 summary: `${summary}${hints}`,
                 firstKeptEntryId: preparation.firstKeptEntryId,
                 tokensBefore: preparation.tokensBefore,
-                usage,
+                ...(usage ? { usage } : {}),
                 details: files,
             },
         };
@@ -549,7 +555,7 @@ export async function russianCompaction(event: SessionBeforeCompactEvent, ctx: E
 }
 
 /** Генерирует русское summary для /tree, сохраняя native token budget, usage и cumulative file tracking. */
-export async function russianTreeSummary(event: SessionBeforeTreeEvent, ctx: ExtensionContext): Promise<{ summary: any } | undefined> {
+export async function russianTreeSummary(event: SessionBeforeTreeEvent, ctx: ExtensionContext): Promise<SessionBeforeTreeResult | undefined> {
 	if (!event.preparation.userWantsSummary || !ctx.model) return undefined;
 	try {
 		const reserveTokens = DEFAULT_RESERVE_TOKENS;
@@ -571,7 +577,7 @@ export async function russianTreeSummary(event: SessionBeforeTreeEvent, ctx: Ext
 		return {
 			summary: {
 				summary: `${summary}${formatFileHints(files, prepared.messages, summary)}`,
-				usage: result.usage,
+				...(result.usage ? { usage: result.usage } : {}),
 				details: files,
 			},
 		};

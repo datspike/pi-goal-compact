@@ -1,3 +1,8 @@
+import type { convertToLlm } from "@earendil-works/pi-coding-agent";
+
+/** Сообщение агента в том виде, в каком Pi отдаёт его на сжатие; сам тип пакет не экспортирует. */
+export type AgentMessage = Parameters<typeof convertToLlm>[0][number];
+
 export type FileOps = { read?: Set<string>; written?: Set<string>; edited?: Set<string> };
 export type FileLists = { readFiles: string[]; modifiedFiles: string[] };
 
@@ -71,13 +76,13 @@ export function withoutFileTracking(summary: string, sources: readonly unknown[]
 }
 
 /** Keeps exact historical spellings; a write/edit supersedes a read of the same path. */
-export function collectFileLists(fileOps: FileOps | undefined, entries: readonly any[]): FileLists {
+export function collectFileLists(fileOps: FileOps | undefined, entries: readonly unknown[]): FileLists {
 	const read = new Set<string>(fileOps?.read ?? []);
 	const modified = new Set<string>([...(fileOps?.written ?? []), ...(fileOps?.edited ?? [])]);
 	for (const entry of entries) {
-		if (entry?.type !== "compaction" && entry?.type !== "branch_summary") continue;
+		if (!isRecord(entry) || (entry.type !== "compaction" && entry.type !== "branch_summary")) continue;
 		const details = entry.details;
-		if (!details || typeof details !== "object") continue;
+		if (!isRecord(details)) continue;
 		for (const path of Array.isArray(details.readFiles) ? details.readFiles : []) if (typeof path === "string") read.add(path);
 		for (const path of Array.isArray(details.modifiedFiles) ? details.modifiedFiles : []) if (typeof path === "string") modified.add(path);
 	}
@@ -85,20 +90,24 @@ export function collectFileLists(fileOps: FileOps | undefined, entries: readonly
 }
 
 /** Copies only summary messages; user/tool text is not ours to sanitize. */
-export function withoutMessageFileTracking(messages: readonly any[], sources: readonly unknown[] = []): any[] {
+export function withoutMessageFileTracking(messages: readonly AgentMessage[], sources: readonly unknown[] = []): AgentMessage[] {
 	return messages.map((message) => (message.role === "compactionSummary" || message.role === "branchSummary") && typeof message.summary === "string"
 		? { ...message, summary: withoutFileTracking(message.summary, sources) }
 		: message);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 /** Recent direct tool calls are hints, not a complete or verified filesystem change ledger. */
-function recentPaths(messages: readonly any[]): string[] {
+function recentPaths(messages: readonly AgentMessage[]): string[] {
 	const paths = new Set<string>();
 	for (const message of messages) {
 		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
 		for (const block of message.content) {
 			if (block.type !== "toolCall" || !["read", "write", "edit"].includes(block.name)) continue;
-			const path = block.arguments?.path;
+			const path: unknown = block.arguments?.["path"];
 			if (typeof path !== "string") continue;
 			paths.delete(path);
 			paths.add(path);
@@ -113,7 +122,7 @@ function parent(path: string): string {
 }
 
 /** Bounded navigation only: semantic obligations and their exact paths stay in the prose. */
-export function formatFileHints(files: FileLists, messages: readonly any[], body: string): string {
+export function formatFileHints(files: FileLists, messages: readonly AgentMessage[], body: string): string {
 	const all = [...files.modifiedFiles, ...files.readFiles];
 	if (!all.length) return "";
 	const known = new Set(all);

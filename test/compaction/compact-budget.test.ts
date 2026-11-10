@@ -7,6 +7,7 @@ import {
 	MAX_COMPACT_PAYLOAD_CHARS,
 	calculateCompactBudget,
 	resolveCompactCapability,
+	validateCompactCapabilityOverrides,
 } from "../../src/compaction/compact-budget.js";
 import { loadSummarySettings } from "../../src/compaction/language.js";
 
@@ -33,7 +34,8 @@ describe("compact capability", () => {
 		expect(() => resolveCompactCapability(model, 272_000, [{ ...override, source: "" }])).toThrow("source");
 		expect(() => resolveCompactCapability(model, 272_000, [{ ...override, contextWindow: Number.NaN }])).toThrow("contextWindow");
 		expect(() => resolveCompactCapability(model, 272_000, [override, override])).toThrow("duplicates");
-		expect(() => resolveCompactCapability(model, 272_000, [{ ...override, outputLimitEnforced: "yes" as never }])).toThrow("outputLimitEnforced");
+		// Неверный тип приходит из JSON настроек; его ловит разбор, принимающий любое значение.
+		expect(() => validateCompactCapabilityOverrides([{ ...override, outputLimitEnforced: "yes" }])).toThrow("outputLimitEnforced");
 	});
 
 	test("defaults output enforcement to false and honors an explicit override", () => {
