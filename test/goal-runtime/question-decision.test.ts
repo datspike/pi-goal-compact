@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { createRuntimeHarness, assistantMessage, sessionCompactEvent } from "../support/runtime-harness.js";
+import test, { mock } from "node:test";
+import { createRuntimeHarness, assistantMessage, flushContinuationScheduler, goalTickets, runTurn, sessionCompactEvent, settleRun } from "../support/runtime-harness.js";
 import { reconstructGoalReportState } from "../../src/goal/goal-reports.js";
 
 const waiting = { action: "publish", status: "awaiting_user", phase: "Выбор", needUser: "Выберите вариант.", nextStep: "Обработать ответ." };
@@ -33,23 +33,27 @@ test("ask_user answer permits working to release the hold without ordinary input
   assert.equal(result.details.state.awaitingUser, false);
 });
 
-test("compact immediately after ask_user resumes answer processing once, not an autonomous loop", { todo: "срез продолжения: ответ владельца продолжает работу после сжатия и перезагрузки" }, async () => {
-  const h = await setup();
-  await answerTurn(h);
-  await h.emit("session_compact", sessionCompactEvent({ reason: "threshold" }));
-  await new Promise(resolve => setTimeout(resolve, 15));
-  assert.equal(h.sentMessages.length, 1);
-  const sent = h.sentMessages[0];
-  assert.ok(sent);
-  await h.emit("message_start", { type: "message_start", message: { role: "custom", ...sent.message } });
-  await h.emit("agent_start", { type: "agent_start" });
-  const final = assistantMessage("stop", { input: 1, output: 1 });
-  await h.emit("turn_start", { type: "turn_start", turnIndex: 1, timestamp: 2 });
-  await h.emit("turn_end", { type: "turn_end", turnIndex: 1, message: final, toolResults: [] });
-  await h.emit("agent_end", { type: "agent_end", messages: [final] });
-  await h.emit("session_compact", sessionCompactEvent({ reason: "threshold" }));
-  await new Promise(resolve => setTimeout(resolve, 15));
-  assert.equal(h.sentMessages.length, 1, "without working the hold remains after the answer was processed");
+// Ответ владельца снимает удержание на один проход: работа продолжается билетом из простоя,
+// а законченный ответ без отчёта `working` снова держит цель.
+test("compact immediately after ask_user resumes answer processing once, not an autonomous loop", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const h = await setup();
+    await answerTurn(h);
+    // Сжатие посреди прогона: продолжение решает граница этого же прогона, а не билет.
+    await h.emit("agent_end", { type: "agent_end", messages: [questionTurn] });
+    await h.emit("session_compact", sessionCompactEvent({ reason: "threshold" }));
+    const resumed = await settleRun(h);
+    assert.equal(resumed.continued, true);
+    assert.equal(resumed.entries.length, 1);
+    const settled = await runTurn(h, 1, assistantMessage("stop", { input: 1, output: 1 }), { newRun: false });
+    assert.equal(settled.continued, false, "without working the hold remains after the answer was processed");
+    await h.emit("session_compact", sessionCompactEvent({ reason: "threshold" }));
+    flushContinuationScheduler();
+    assert.equal(goalTickets(h).length, 0, "without working the hold remains after the answer was processed");
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test("cancelled, errored, empty, unrelated and unpaired tool results do not authorize continuation", async () => {
@@ -88,18 +92,25 @@ test("reload reconstructs old ask_user answers in branch order and honors subseq
   assert.equal(reconstructGoalReportState(unpaired, goalId).hasUserDecisionSinceAwaiting, false);
 });
 
-test("reload and restart resume an unfinished answer, but not a finished response without working", { todo: "срез продолжения: ответ владельца продолжает работу после сжатия и перезагрузки" }, async () => {
-  for (const reason of ["reload", "resume"] as const) {
-    const h = await setup();
-    const base = { id: "question-message", parentId: null, timestamp: new Date().toISOString(), type: "message" as const };
-    h.entries.push({ ...base, message: { ...questionTurn, role: "assistant", api: "openai-responses" } });
-    h.entries.push({ ...base, id: "answer-message", message: answer });
-    await h.reloadSession(reason);
-    assert.equal(h.sentMessages.length, 1);
-    h.sentMessages.length = 0;
-    h.entries.push({ ...base, id: "final-message", message: { ...assistantMessage("stop", { input: 1, output: 1 }), role: "assistant", api: "openai-responses" } });
-    await h.reloadSession(reason);
-    assert.equal(h.sentMessages.length, 0, "reload must not start an autonomous loop from an answered hold");
+test("reload and restart resume an unfinished answer, but not a finished response without working", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (const reason of ["reload", "resume"] as const) {
+      const h = await setup();
+      const base = { id: "question-message", parentId: null, timestamp: new Date().toISOString(), type: "message" as const };
+      h.entries.push({ ...base, message: { ...questionTurn, role: "assistant", api: "openai-responses" } });
+      h.entries.push({ ...base, id: "answer-message", message: answer });
+      await h.reloadSession(reason);
+      flushContinuationScheduler();
+      assert.equal(goalTickets(h).length, 1);
+      h.sentMessages.length = 0;
+      h.entries.push({ ...base, id: "final-message", message: { ...assistantMessage("stop", { input: 1, output: 1 }), role: "assistant", api: "openai-responses" } });
+      await h.reloadSession(reason);
+      flushContinuationScheduler();
+      assert.equal(goalTickets(h).length, 0, "reload must not start an autonomous loop from an answered hold");
+    }
+  } finally {
+    mock.timers.reset();
   }
 });
 
