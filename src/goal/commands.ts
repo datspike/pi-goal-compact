@@ -100,7 +100,7 @@ export function registerGoalCommand(pi: GoalCommandPi, host: CommandHost): void 
         return;
       }
       host.clearGoal("command", ctx);
-      ctx.ui.notify("Goal cleared.");
+      ctx.ui.notify(say("Цель очищена.", "Goal cleared."));
     },
   });
   pi.registerCommand("gw", {

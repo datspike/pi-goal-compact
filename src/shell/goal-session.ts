@@ -638,7 +638,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       : { ...candidate, state, ...(ownerEntryId ? { ownerEntryId } : {}) });
     next.updatedAt = nonDecreasingUpdatedAt(goal);
     await saveGoalChange(next, "tool", ctx);
-    return { ok: true, message: `Self-decided item ${state}.` };
+    return { ok: true, message: state === "confirmed" ? say("Пункт «Решаю сам» подтверждён владельцем.", "Self-decided item confirmed.") : say("Пункт «Решаю сам» отклонён владельцем.", "Self-decided item rejected.") };
   };
 
   const requireGoal = (): ThreadGoal => {

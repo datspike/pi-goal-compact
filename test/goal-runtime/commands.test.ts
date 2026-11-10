@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { createThreadGoal, setEntry } from "../../src/goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalStatus } from "../../src/goal/types.js";
-import { createRuntimeHarness } from "../support/runtime-harness.js";
+import { createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
 import { registerGoalCommand, type CommandHost, type GoalCommandContext } from "../../src/goal/commands.js";
 
 function harnessWithStatus(status: GoalStatus) {
@@ -45,7 +45,22 @@ test("/gp pauses active work without sending a prompt", async () => {
   assert.equal(harness.snapshot().goal?.goalId, goal.goalId);
   assert.equal(harness.snapshot().goal?.usage.tokensUsed, 5);
   assert.equal(harness.abortCount, 0);
+  assert.equal(harness.notifications.at(-1), "Цель поставлена на паузу.");
   noTurn(harness);
+});
+
+test("/gp и /gc сообщают о результате на английском, когда расширение на английском", async () => {
+  useHarnessLanguage("en");
+  try {
+    const { harness } = harnessWithStatus("active");
+    await loadFixture(harness);
+    await harness.runSlashCommand("gp");
+    assert.equal(harness.notifications.at(-1), "Goal marked paused.");
+    await harness.runSlashCommand("gc");
+    assert.equal(harness.notifications.at(-1), "Goal cleared.");
+  } finally {
+    useHarnessLanguage("ru");
+  }
 });
 
 test("/gr silently resumes paused work without sending a prompt", async () => {
@@ -82,7 +97,7 @@ test("/gc clears every existing goal state without confirmation or a new turn", 
     await harness.runSlashCommand("gc");
     assert.equal(harness.snapshot().goal, null);
     assert.equal(harness.widgets.at(-1), undefined);
-    assert.equal(harness.notifications.at(-1), "Goal cleared.");
+    assert.equal(harness.notifications.at(-1), "Цель очищена.");
     noTurn(harness);
     await loadFixture(harness);
     assert.equal(harness.snapshot().goal, null);

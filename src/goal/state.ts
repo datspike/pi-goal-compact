@@ -368,7 +368,7 @@ export function createGoal(current: ThreadGoal | null, objective: string, tokenB
   const goal = createThreadGoal(objective, tokenBudget, unixSeconds(), agreement);
   return {
     ok: true,
-    message: "Goal created.",
+    message: say("Цель создана.", "Goal created."),
     goal,
   };
 }
@@ -401,7 +401,7 @@ export function amendGoal(current: ThreadGoal | null, amendment: string, agreeme
   const amendmentKey = `${current.goalId}\u0000${trimmedAmendment}`;
   goal.appliedAmendments = [...(current.appliedAmendments ?? []), amendmentKey];
   goal.updatedAt = Math.max(unixSeconds(), current.updatedAt + 1);
-  return { ok: true, message: "Goal amended.", goal };
+  return { ok: true, message: say("Цель изменена.", "Goal amended."), goal };
 }
 
 export function replaceGoal(objective: string, tokenBudget?: number | null, agreement?: AgreementInput): GoalResult {
@@ -423,7 +423,7 @@ export function replaceGoal(objective: string, tokenBudget?: number | null, agre
   const goal = createThreadGoal(objective, tokenBudget, unixSeconds(), agreement);
   return {
     ok: true,
-    message: "Goal set.",
+    message: say("Цель задана.", "Goal set."),
     goal,
   };
 }
@@ -492,7 +492,9 @@ export function updateGoalStatus(current: ThreadGoal | null, status: GoalStatus)
 
   return {
     ok: true,
-    message: `Goal marked ${goal.status}.`,
+    message: goal.status === "paused" ? say("Цель поставлена на паузу.", "Goal marked paused.")
+      : goal.status === "active" ? say("Цель возобновлена.", "Goal marked active.")
+      : say("Цель остановлена: бюджет токенов исчерпан.", `Goal marked ${goal.status}.`),
     goal,
   };
 }
