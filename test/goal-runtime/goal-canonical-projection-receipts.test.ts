@@ -8,7 +8,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { readGoalHistory } from "../../src/goal/goal-projections.js";
 import { GOAL_PROJECTION_ENTRY_TYPE } from "../../src/goal/goal-reports.js";
 import { reconstructGoal } from "../../src/goal/state.js";
-import { assistantMessage, createRuntimeHarness } from "../support/runtime-harness.js";
+import { assistantMessage, createRuntimeHarness, passAgreementCheck } from "../support/runtime-harness.js";
 
 type Receipt = { applied: boolean | null; operation: string; stage: string; retryable: boolean; eventId: string; reportId?: string; remediation: string; amendment_id?: string };
 const working = { action: "publish", status: "working", phase: "Проверяю запись", summary: "Проверяю восстановление записи.", changed: "Подготовлены условия проверки.", nextStep: "Сверить сохранённый файл." };
@@ -45,7 +45,10 @@ for (const { operation, reportStatus } of scenarios) for (const timing of ["befo
       await h.runTool("create_goal", { objective: "Проверить квитанцию записи события" });
       await h.runTool("report_goal_progress", working);
     }
-    if (operation === "update_goal") await h.runTool("report_goal_progress", { ...working, status: "verifying", verification: "Условия готовности проверены." });
+    if (operation === "update_goal") {
+      await h.runTool("report_goal_progress", { ...working, status: "verifying", verification: "Условия готовности проверены." });
+      await passAgreementCheck(h);
+    }
     const report = { ...working, status: reportStatus, verification: "Условия проверены.", problemOrDecision: "Нужно дождаться внешнего условия.", needUser: "Подтвердить выбранное решение." };
     armed = true;
     let receipt: Receipt | undefined;

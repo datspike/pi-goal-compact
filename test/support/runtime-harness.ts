@@ -18,6 +18,7 @@ import { isGoalCustomEntry, reconstructGoal } from "../../src/goal/state.js";
 import { GOAL_PROJECTION_ENTRY_TYPE } from "../../src/goal/goal-reports.js";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
 import { asPi } from "./as-pi.js";
+import { withAgreementDefaults } from "./agreement-defaults.js";
 
 type EventHandler = (event: object, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
@@ -490,14 +491,25 @@ export function createRuntimeHarness(options: {
     return results;
   }
 
-  async function runTool(name: string, params: Record<string, unknown>, signal?: AbortSignal) {
+  async function runTool(name: string, params: Record<string, unknown>, signal?: AbortSignal, options: { ownerReply?: boolean; agreementCheck?: "auto" | "raw" } = {}) {
     const tool = tools.get(name);
     assert.ok(tool, `Expected tool ${name} to be registered.`);
     // Legacy test fixtures omit the new reader-facing narrative. Supply one at
     // this boundary; explicit summary values still exercise validation unchanged.
     const input = name === "report_goal_progress" && params.action === "publish" && !("summary" in params)
       ? { ...params, summary: "Проверил состояние цели. Продолжаю следующий шаг." }
-      : params;
+      : withAgreementDefaults(name, params);
+    // Правку цели принимает только ход после реплики владельца (Д8). Прежние тесты правки
+    // проверяют её механику, поэтому обвязка подаёт эту реплику перед вызовом.
+    // Прежние тесты закрытия проверяют его механику; первую попытку, которая возвращает
+    // договорённость (Д3), обвязка проходит за них. Новые тесты просят `agreementCheck: "raw"`.
+    if (name === "update_goal" && options.agreementCheck !== "raw") {
+      try { return await tool(input, signal); }
+      catch (error) {
+        if (!(error instanceof Error) || !error.message.includes("\"agreement_check\"")) throw error;
+      }
+    }
+    if (name === "amend_goal" && typeof params.amendment === "string" && options.ownerReply !== false) await emit("input", { type: "input", text: "Согласен с изменением цели.", source: "interactive" });
     return tool(input, signal);
   }
 
@@ -776,4 +788,12 @@ export function flushContinuationScheduler(): void {
 
 export function fireProviderLimitAutoResume(): void {
   mock.timers.tick(PROVIDER_LIMIT_AUTO_RESUME_MS);
+}
+
+/**
+ * Первая попытка закрытия возвращает договорённость (Д3) и сама пишет отметку сверки. Тесты сбоев
+ * записи при закрытии проходят её до того, как ломают хранилище, чтобы сбой попал в само закрытие.
+ */
+export async function passAgreementCheck(harness: ReturnType<typeof createRuntimeHarness>): Promise<void> {
+  await assert.rejects(harness.runTool("update_goal", { status: "complete" }, undefined, { agreementCheck: "raw" }), /agreement_check/);
 }

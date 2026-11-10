@@ -151,9 +151,11 @@ test("concurrent amendment fences both stale work snapshots and pre-amendment re
     assert.equal((await read(harness)).workStateStale, false);
   }
   const { harness } = await setup();
+  // Реплика владельца приходит заранее, чтобы правка шла сразу за начатым отчётом.
+  await harness.emit("input", { type: "input", text: "Добавь новую проверку переноса.", source: "interactive" });
   const oldReport = harness.runTool("report_goal_progress", { action: "publish", status: "verifying", phase: "Старая проверка", summary: "Проверена прежняя цель.", verification: "Старое подтверждение.", nextStep: "Завершить прежнюю цель" });
   const oldRejected = assert.rejects(oldReport, /Goal contract changed/);
-  await harness.runTool("amend_goal", { amendment: "Добавить новую проверку переноса." });
+  await harness.runTool("amend_goal", { amendment: "Добавить новую проверку переноса." }, undefined, { ownerReply: false });
   await oldRejected;
   assert.equal((await read(harness)).latestUsefulVerification, null);
   assert.equal((await read(harness)).progressStatus, null);

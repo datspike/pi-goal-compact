@@ -6,7 +6,9 @@ import { Type } from "typebox";
 import { goalActionWorkingState, goalStatusWorkingState, goalToolResponse, toToolGoal, toToolText, type GoalToolResponse, type GoalWorkingState } from "./format.js";
 import { type GoalReportAction, type GoalReportState } from "./goal-reports.js";
 import { MAX_REPORT_CHANGED_CHARS, MAX_REPORT_COMPLETED_CHARS, MAX_REPORT_NEED_USER_CHARS, MAX_REPORT_NEXT_STEP_CHARS, MAX_REPORT_PHASE_CHARS, MAX_REPORT_PROBLEM_CHARS, MAX_REPORT_RISK_CHARS, MAX_REPORT_SUMMARY_CHARS, MAX_REPORT_VERIFICATION_CHARS, type GoalProgressReport, type GoalProgressEventKind, type GoalProgressStatus, validateNewGoalProgressReport } from "./report-schema.js";
-import { createGoal, replaceGoal } from "./state.js";
+import { createGoal, replaceGoal, type AgreementInput } from "./state.js";
+import { SELF_DECIDED_KINDS, renderSelfDecided, unconfirmedSelfDecided, type SelfDecidedKind } from "./agreement.js";
+import { DEFAULT_GOAL_FEATURES, type GoalFeatures } from "./goal-report-config.js";
 import { GoalCanonicalWriteError } from "./goal-persistence.js";
 import { DONE_CRITERION_GUIDANCE, goalToolGuidelines } from "./prompts.js";
 import { MAX_GOAL_PROSE_PARAGRAPH_CHARS } from "./goal-language-quality.js";
@@ -33,6 +35,15 @@ const ResumeGoalParams = Type.Object({
   })),
 }, { additionalProperties: false });
 
+const AgreementParam = Type.Object({
+  owner_wants: Type.String({ minLength: 1, description: "What the owner wants: the outcome and the qualities that matter to them, briefly quoting the owner where the wording itself matters." }),
+  done_when: Type.String({ minLength: 1, description: "Done when: the completion criterion, including when a negative result is acceptable. owner_wants and done_when together are at most 2000 characters." }),
+}, { additionalProperties: false, description: "The agreement the extension keeps verbatim at the start of every context window until the goal changes." });
+const SelfDecidedParam = Type.Array(Type.Object({
+  kind: stringEnum(SELF_DECIDED_KINDS, { description: "assumption — you assumed it; deferred_by_owner — the owner postponed the question; proposal — your own proposal." }),
+  text: Type.String({ minLength: 1, maxLength: 600 }),
+}, { additionalProperties: false }), { description: "Decisions the owner has not confirmed: scope, architecture or acceptance you chose yourself. May be empty, must be present." });
+
 const CreateGoalParams = Type.Object({
   objective: Type.String({
     description: `Preserve the original user request, approved outcome and evidence, non-goals, simplest path, complexity bounds, done criterion and decision gates. ${DONE_CRITERION_GUIDANCE}`,
@@ -52,6 +63,8 @@ const CreateGoalParams = Type.Object({
         "Replace an existing non-complete goal when the user explicitly requests a new goal.",
     }),
   ),
+  agreement: Type.Optional(AgreementParam),
+  self_decided: Type.Optional(SelfDecidedParam),
 });
 
 const AmendGoalParams = Type.Object({
@@ -63,6 +76,11 @@ const AmendGoalParams = Type.Object({
     minLength: 1,
     description: "Recovery only: the ID returned for an already applied amendment. Restores its projections without appending or changing the saved contract; omit amendment.",
   })),
+  agreement: Type.Optional(Type.Object({
+    owner_wants: Type.String({ minLength: 1 }),
+    done_when: Type.String({ minLength: 1 }),
+  }, { additionalProperties: false, description: "Required with amendment when the goal has an agreement: the complete new edition, not a diff." })),
+  self_decided: Type.Optional(SelfDecidedParam),
 }, { additionalProperties: false });
 
 const UpdateGoalParams = Type.Object({
@@ -85,6 +103,8 @@ const RecordGoalNoteParams = Type.Object({
   impact: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Required only for kind=paper_cut; consequence of deferring the issue." })),
   severity: Type.Optional(stringEnum(["low", "medium", "high"] as const, { description: "Required only for kind=paper_cut." })),
   revisit: Type.Optional(Type.String({ maxLength: 1200 })),
+  self_decided: Type.Optional(stringEnum(SELF_DECIDED_KINDS, { description: "With record kind=decision: also add the decision to the Self-decided list as this kind. Use for a notable choice about scope, architecture or acceptance the owner has not confirmed." })),
+  confirmation: Type.Optional(stringEnum(["confirmed", "rejected"] as const, { description: "With update kind=decision and note_id=S-…: the owner's verdict on a Self-decided item. Accepted only in a turn started by a real owner reply." })),
 }, { additionalProperties: false });
 
 export const ProgressReportParams = Type.Object({
@@ -133,7 +153,11 @@ export interface ToolHost {
   setGoal(goal: ThreadGoal, source: GoalEntrySource, ctx: ExtensionContext): void;
   waitForGoalProjection?: () => Promise<void>;
   resumeGoal?(ctx: ExtensionContext, signal?: AbortSignal, userDecisionConfirmed?: boolean): Promise<GoalResult>;
-  amendGoal(amendment: string, source: GoalEntrySource, ctx: ExtensionContext, amendmentId?: string): Promise<GoalResult>;
+  amendGoal(amendment: string, source: GoalEntrySource, ctx: ExtensionContext, amendmentId?: string, agreement?: AgreementInput): Promise<GoalResult>;
+  /** Действующие выключатели доработок; без хоста — всё включено. */
+  getFeatures?(): GoalFeatures;
+  addSelfDecided?(kind: SelfDecidedKind, text: string, ctx: ExtensionContext): Promise<{ ok: boolean; message: string; itemId?: string }>;
+  setSelfDecidedState?(itemId: string, state: "confirmed" | "rejected", ctx: ExtensionContext): Promise<{ ok: boolean; message: string }>;
   completeGoal(source: GoalEntrySource, ctx: ExtensionContext): Promise<GoalResult>;
   reportGoal(
     action: GoalReportAction,
@@ -301,10 +325,15 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     parameters: CreateGoalParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const current = host.getGoal();
+      const features = host.getFeatures?.() ?? DEFAULT_GOAL_FEATURES;
+      if (!params.agreement) throwToolError("create_goal requires agreement with owner_wants and done_when.");
+      if (features.selfDecidedList && !params.self_decided) throwToolError("create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything.");
+      const agreement: AgreementInput = { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
+        ...(features.selfDecidedList && params.self_decided ? { selfDecided: params.self_decided } : {}) };
       const replacingNonCompleteGoal = params.replace_existing === true && current !== null && current.status !== "complete";
       const result = replacingNonCompleteGoal
-        ? replaceGoal(params.objective, params.token_budget ?? null)
-        : createGoal(current, params.objective, params.token_budget ?? null);
+        ? replaceGoal(params.objective, params.token_budget ?? null, agreement)
+        : createGoal(current, params.objective, params.token_budget ?? null, agreement);
       if (!result.ok || !result.goal) {
         throwToolError(result.message);
       }
@@ -340,7 +369,10 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       if ((params.amendment !== undefined) === (params.amendment_id !== undefined)) {
         throwToolError("Supply exactly one of amendment or amendment_id.");
       }
-      const result = await host.amendGoal(params.amendment ?? "", "tool", ctx, params.amendment_id);
+      if (params.amendment_id !== undefined && (params.agreement || params.self_decided)) throwToolError("amendment_id repairs an applied amendment; omit agreement and self_decided.");
+      if (params.amendment !== undefined && host.getGoal()?.agreement && !params.agreement) throwToolError("This goal has an agreement: pass agreement with the complete new owner_wants and done_when together with amendment.");
+      const agreement: AgreementInput | undefined = params.agreement ? { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when, ...(params.self_decided ? { selfDecided: params.self_decided } : {}) } : undefined;
+      const result = await host.amendGoal(params.amendment ?? "", "tool", ctx, params.amendment_id, agreement);
       const receipt = {
         operation: result.operation ?? "amend_goal", applied: result.applied === undefined ? result.ok : result.applied,
         ...(result.goal ? { goalId: result.goal.goalId } : {}),
@@ -378,10 +410,20 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       const action = params.action ?? "record";
       let result: unknown;
+      let selfDecidedId: string | null = null;
       if (action === "update" || action === "repair") {
-        const allowed = new Set(action === "repair" ? ["kind", "action", "note_id"] : ["kind", "action", "note_id", "expected_revision", "status", "resolution"]);
+        const selfDecidedUpdate = action === "update" && params.kind === "decision";
+        const allowed = new Set(action === "repair" ? ["kind", "action", "note_id"] : selfDecidedUpdate ? ["kind", "action", "note_id", "confirmation"] : ["kind", "action", "note_id", "expected_revision", "status", "resolution"]);
         if (Object.keys(params).some((key) => !allowed.has(key))) throwToolError("Unexpected note fields for " + action + "; use note_id and only the fields for this action.");
         if (!params.note_id?.trim()) throwToolError("note_id is required for update/repair.");
+        if (selfDecidedUpdate) {
+          if (params.confirmation !== "confirmed" && params.confirmation !== "rejected") throwToolError("update kind=decision requires confirmation=confirmed or rejected for a Self-decided item.");
+          if (!host.setSelfDecidedState) throwToolError("Self-decided updates are unavailable.");
+          const outcome = await host.setSelfDecidedState(params.note_id, params.confirmation, ctx);
+          if (!outcome.ok) throwToolError(outcome.message, { operation: "record_goal_note", action, kind: params.kind, noteId: params.note_id, applied: false, retryable: false });
+          const response = { operation: "record_goal_note", action, noteId: params.note_id, kind: params.kind, applied: true, stage: "complete", retryable: false, confirmation: params.confirmation };
+          return { content: [{ type: "text", text: JSON.stringify(response) }], details: response };
+        }
         if (action === "update") {
           if (params.kind !== "paper_cut") throwToolError("Only paper_cut supports update.");
           if (!params.resolution?.trim()) throwToolError("resolution is required for update.");
@@ -395,15 +437,21 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
         }
       } else {
         if (action !== "record") throwToolError("Unknown note action.");
-        if (["note_id", "expected_revision", "status", "resolution"].some((key) => key in params)) throwToolError("record does not accept update/repair fields.");
+        if (["note_id", "expected_revision", "status", "resolution", "confirmation"].some((key) => key in params)) throwToolError("record does not accept update/repair fields.");
         if (!params.title?.trim()) throwToolError("title is required for record.");
         if (params.kind === "decision") {
-          if (["impact", "severity", "revisit"].some((key) => key in params)) throwToolError("decision accepts only kind, title, decision, rationale, and optional consequence.");
+          if (["impact", "severity", "revisit"].some((key) => key in params)) throwToolError("decision accepts only kind, title, decision, rationale, and optional consequence and self_decided.");
           if (!params.decision?.trim() || !params.rationale?.trim()) throwToolError("decision requires decision and rationale.");
+          if (params.self_decided) {
+            if (!host.addSelfDecided) throwToolError("Self-decided items are unavailable.");
+            const added = await host.addSelfDecided(params.self_decided, `${params.title.trim()}: ${params.decision.trim()}`, ctx);
+            if (!added.ok) throwToolError(added.message);
+            selfDecidedId = added.itemId ?? null;
+          }
           result = await host.recordGoalDecision({ title: params.title, decision: params.decision, rationale: params.rationale, ...(params.consequence === undefined ? {} : { consequence: params.consequence }) }, ctx, toolCallId);
         } else {
           if (params.kind !== "paper_cut") throwToolError("Unknown note kind.");
-          if (["decision", "rationale", "consequence"].some((key) => key in params)) throwToolError("paper_cut accepts only kind, title, impact, severity, and optional revisit.");
+          if (["decision", "rationale", "consequence", "self_decided"].some((key) => key in params)) throwToolError("paper_cut accepts only kind, title, impact, severity, and optional revisit.");
           if (!params.impact?.trim() || !params.severity) throwToolError("paper_cut requires impact and severity.");
           result = await host.recordGoalPaperCut({ title: params.title, impact: params.impact, severity: params.severity, ...(params.revisit === undefined ? {} : { revisit: params.revisit }) }, ctx, toolCallId);
         }
@@ -419,6 +467,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       const artifactRefs = projectionArtifactRefs(result);
       const response = { operation: "record_goal_note", action, noteId, kind: params.kind, applied: true,
         stage: "complete", retryable: false, ...(note ? { noteRevision: note.revision, status: note.status } : {}),
+        ...(selfDecidedId ? { selfDecidedId } : {}),
         state: compactReportState(host.getReportState()), workingState: goalActionWorkingState(fullState),
         ...(artifactRefs.length > 0 ? { artifactRefs } : {}) };
       return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: { ...response, error: null } };
@@ -475,7 +524,10 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
         remainingTokens: goalToolResponse(result.goal, true).remainingTokens,
         completionBudgetReport: goalToolResponse(result.goal, true).completionBudgetReport,
       };
-      return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: { ...response, error: null } };
+      // При закрытии владелец видит, что агент решил сам без его слова (Т6.4).
+      const unconfirmed = unconfirmedSelfDecided(result.goal);
+      const text = JSON.stringify(response, null, 2) + (unconfirmed.length > 0 ? `\n\nНе подтверждено владельцем:\n${renderSelfDecided(unconfirmed)}` : "");
+      return { content: [{ type: "text", text }], details: { ...response, ...(unconfirmed.length > 0 ? { unconfirmedSelfDecided: unconfirmed } : {}), error: null } };
     },
   });
 }

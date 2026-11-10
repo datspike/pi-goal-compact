@@ -1,4 +1,5 @@
 import { RECORD } from "../records.js";
+import type { GoalAgreement, SelfDecidedItem } from "./agreement.js";
 
 export const CUSTOM_ENTRY_TYPE = RECORD.goal;
 export const MAX_OBJECTIVE_CHARS = 8000;
@@ -22,6 +23,12 @@ export interface ThreadGoal {
   pause?: { kind: "manual" | "recovery" | "shutdown"; reason: string };
   /** Canonical provenance for amendments applied by the runtime; absent on legacy goals. */
   appliedAmendments?: readonly string[];
+  /** Договорённость последней редакции (Д1); нет у целей прежней пары и созданных с выключенной доработкой. */
+  agreement?: GoalAgreement;
+  /** Список «Решаю сам» (Д4); отклонённые пункты остаются в нём. */
+  selfDecided?: readonly SelfDecidedItem[];
+  /** Отпечаток, при котором первая попытка закрытия вернула договорённость (Д3). */
+  completionCheck?: string;
 }
 
 export type GoalEntrySource = "command" | "tool" | "runtime";
@@ -90,7 +97,8 @@ export interface GoalResult {
   operation?: "amend_goal" | "update_goal" | "resume_goal";
   /** null means the canonical write was not acknowledged; reconcile before retry. */
   applied?: boolean | null;
-  stage?: "canonical" | "projection" | "complete";
+  /** `agreement_check` — первая попытка закрытия вернула договорённость для сверки (Д3). */
+  stage?: "canonical" | "projection" | "complete" | "agreement_check";
   retryable?: boolean;
   remediation?: string;
   amendmentId?: string;

@@ -115,7 +115,7 @@ test("настоящий SDK Pi сохраняет ревизию создани
     assert.ok(createGoal);
     const result = await createGoal.execute(
       "tool-call",
-      { objective: "ship it" },
+      { objective: "ship it", agreement: { owner_wants: "Выпустить сборку.", done_when: "Сборка выпущена." }, self_decided: [] },
       undefined,
       undefined,
       toolContext,
@@ -145,9 +145,10 @@ test("настоящий SDK Pi сохраняет ревизию создани
     assert.equal(cuts.find(cut => cut.id === noteId)?.revision, 1);
     const amendGoal = runner.getToolDefinition("amend_goal");
     assert.ok(amendGoal);
+    await runner.emitInput("Согласен с изменением цели.", undefined, "interactive");
     const amended = await amendGoal.execute(
       "amend-tool-call",
-      { amendment: "Approved addition." },
+      { amendment: "Approved addition.", agreement: { owner_wants: "Выпустить сборку с дополнением.", done_when: "Сборка выпущена." } },
       undefined,
       undefined,
       toolContext,

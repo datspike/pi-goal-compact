@@ -5,6 +5,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionToolContext, RegisteredCommand, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import extension from "../../src/index.js";
 import { asPi } from "./as-pi.js";
+import { withAgreementDefaults } from "./agreement-defaults.js";
 
 /** Запись ветки в подделке: тест задаёт только нужные поля. */
 export type FakeEntry = { id: string; type: string; [field: string]: unknown };
@@ -140,7 +141,12 @@ export function fakePi(options: FakeOptions = {}) {
     },
     /** Вызывает инструмент как модель и отдаёт текст и детали ответа. */
     async runTool(name: string, params: unknown, id = "call", context: object = ctx) {
-      const result = await this.tool(name).execute(id, params, undefined, undefined, asPi<ExtensionToolContext>(context));
+      const execute = () => this.tool(name).execute(id, withAgreementDefaults(name, params), undefined, undefined, asPi<ExtensionToolContext>(context));
+      // Первую попытку закрытия, которая возвращает договорённость (Д3), обвязка проходит за прежние тесты.
+      const result = name !== "update_goal" ? await execute() : await execute().catch((error: unknown) => {
+        if (error instanceof Error && error.message.includes("\"agreement_check\"")) return execute();
+        throw error;
+      });
       const text = result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
       return { text, details: isRecord(result.details) ? result.details : {}, result };
     },

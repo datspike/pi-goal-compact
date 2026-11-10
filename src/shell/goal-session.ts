@@ -8,14 +8,15 @@ import { createGoalArtifacts } from "../goal/goal-artifacts.js";
 import { appendGoalSnapshot } from "../goal/goal-observability.js";
 import { GoalCanonicalWriteError, createGoalPersistence } from "../goal/goal-persistence.js";
 import { createGoalProjections, readGoalHistory, type GoalHistoryPage, type GoalHistoryQuery, type GoalPaperCutUpdate } from "../goal/goal-projections.js";
-import { loadGoalReportPolicy } from "../goal/goal-report-config.js";
-import { createGoalReports, holdsContinuation, type GoalReportAction, type GoalReportState } from "../goal/goal-reports.js";
+import { goalFeatures, loadGoalReportPolicy, type GoalFeatures } from "../goal/goal-report-config.js";
+import { completionFingerprint, completionReturnMessage, selfDecidedItemId, validateSelfDecidedText, MAX_SELF_DECIDED_ITEMS, type SelfDecidedKind } from "../goal/agreement.js";
+import { createGoalReports, holdsContinuation, latestOwnerEntryId, type GoalReportAction, type GoalReportState } from "../goal/goal-reports.js";
 import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-runtime-status.js";
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
 import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
 import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
 import type { GoalProgressReport } from "../goal/report-schema.js";
-import { amendGoal as appendAmendment, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
+import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { goalContext } from "./goal-context.js";
 
@@ -89,6 +90,14 @@ export function createGoalSession(pi: ExtensionAPI) {
   let userInputGeneration = 0;
   let awaitingInputGeneration = 0;
   let remoteInput: { goalId: string; reportId: string | null; text: string; commandId: string } | null = null;
+  // Настоящие реплики владельца для правки цели (Д8) и состояния пунктов «Решаю сам» (Д4):
+  // сообщение владельца, ответ `ask_user`, принятый ответ из Recall. После перезагрузки счёт
+  // начинается заново — правка и подтверждение ждут новую реплику.
+  let ownerReplySeq = 0;
+  let ownerReplySeqAtGoalChange = 0;
+  let ownerTurnOpen = false;
+  const noteOwnerReply = (): void => { ownerReplySeq++; ownerTurnOpen = true; };
+  const features = (): GoalFeatures => goalFeatures(reports.getState().policy);
 
   const goalForDisplay = (): ThreadGoal | null =>
     goalWithLiveUsage(persistence.getGoal(), accountingState.activeGoalId, accountingState.lastAccountedAt);
@@ -220,6 +229,9 @@ export function createGoalSession(pi: ExtensionAPI) {
     userInstructionGoalId = null;
     userInputGeneration++;
     remoteInput = null;
+    ownerReplySeq = 0;
+    ownerReplySeqAtGoalChange = 0;
+    ownerTurnOpen = false;
     await reloadReportPolicy(ctx);
     if (goal) watchBootstrap(goal.goalId, projections.initialize(goal, view).then(() => { refreshAfterBootstrap(goal.goalId, ctx, generation); }), "recovery");
     status.refreshUi(ctx);
@@ -316,11 +328,15 @@ export function createGoalSession(pi: ExtensionAPI) {
    * Дописывает одобренную поправку к договору и записывает её решением в документ.
    * Повтор по `amendmentId` только восстанавливает документ, текст договора не меняется.
    */
-  const amendGoal = async (amendment: string, source: GoalEntrySource, ctx: ExtensionContext, recoveryId?: string): Promise<GoalResult> => {
+  const amendGoal = async (amendment: string, source: GoalEntrySource, ctx: ExtensionContext, recoveryId?: string, agreement?: AgreementInput): Promise<GoalResult> => {
     const current = getGoal();
     const pending = unconfirmedWrite();
     if (pending) return canonicalFailure("amend_goal", pending);
-    if (!current || (current.status !== "active" && current.status !== "paused")) return appendAmendment(current, amendment);
+    if (!current || (current.status !== "active" && current.status !== "paused")) return appendAmendment(current, amendment, agreement);
+    // Восстановление по `amendment_id` цель не меняет, поэтому реплики владельца не требует (Т7.3).
+    if (recoveryId === undefined && features().amendNeedsOwner && ownerReplySeq <= ownerReplySeqAtGoalChange) {
+      return { ok: false, message: "amend_goal needs a real owner reply after the goal was created or last amended. Ask the owner; do not change the goal on your own.", goal: current };
+    }
     if (current.status === "paused" && reports.isContinuationHeld()) {
       return { ok: false, message: "Goal is awaiting an ordinary user decision before it can continue.", goal: current };
     }
@@ -332,18 +348,19 @@ export function createGoalSession(pi: ExtensionAPI) {
       key = saved;
       text = saved.slice(current.goalId.length + 1);
     } else if (text.length === 0) {
-      return appendAmendment(current, amendment);
+      return appendAmendment(current, amendment, agreement);
     }
     const amendmentId = amendmentIdFor(key);
     const alreadyApplied = current.appliedAmendments?.includes(key) === true;
     let goal = current;
     if (!alreadyApplied) {
-      const validation = appendAmendment(current, amendment);
+      const validation = appendAmendment(current, amendment, agreement);
       if (!validation.ok || !validation.goal) return validation;
       accounting.accountProgress(ctx, false);
-      const result = appendAmendment(getGoal(), amendment);
+      const result = appendAmendment(getGoal(), amendment, agreement);
       if (!result.ok || !result.goal) return result;
       goal = result.goal;
+      ownerReplySeqAtGoalChange = ownerReplySeq;
       try { applyTransition({ kind: "set", nextGoal: goal, source }, ctx); }
       catch (error) {
         if (error instanceof GoalCanonicalWriteError) return { ...canonicalFailure("amend_goal", error), amendmentId };
@@ -419,6 +436,23 @@ export function createGoalSession(pi: ExtensionAPI) {
       return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
         message: "Managed goals require a fresh verifying progress report before completion.", goal,
         remediation: "Resolve the repair or approval hold and publish a fresh verifying report after satisfying the contract." };
+    }
+    // Первая попытка при этих договорённости и плане возвращает договорённость (Д3). Правка любого
+    // из них меняет отпечаток, и сверка нужна заново (Т6.3).
+    if (goal && goal.status !== "complete" && features().completionReturn) {
+      const fingerprint = completionFingerprint(goal, projections.current()?.goalId === goal.goalId ? projections.current()!.workRevision : 0);
+      if (goal.completionCheck !== fingerprint) {
+        const checked = cloneGoal(goal);
+        checked.completionCheck = fingerprint;
+        try { await saveGoalChange(checked, source, ctx); }
+        catch (error) {
+          if (error instanceof GoalCanonicalWriteError) return canonicalFailure("update_goal", error);
+          throw error;
+        }
+        return { ok: false, operation: "update_goal", applied: false, stage: "agreement_check", retryable: true, goal: checked,
+          message: completionReturnMessage(checked),
+          remediation: "Check the work against the agreement. If something is missing, keep working; otherwise call update_goal(complete) again without changing the agreement or the plan." };
+      }
     }
     if (goal?.status !== "complete") accounting.accountProgress(ctx, false, 0, true);
     let persisted: GoalResult;
@@ -531,6 +565,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     applyTransition({ kind: "set", nextGoal, source }, ctx, { refreshUi: previous?.goalId === nextGoal.goalId });
     // Снимок документа прежней цели не должен разрешить закрытие новой.
     if (previous?.goalId !== nextGoal.goalId) {
+      ownerReplySeqAtGoalChange = ownerReplySeq;
       const branch = goalContext(ctx).sessionManager.getBranch();
       projections.reload(branch, nextGoal);
       reports.reload(branch, getGoal()?.goalId ?? null);
@@ -547,6 +582,48 @@ export function createGoalSession(pi: ExtensionAPI) {
     const branch = goalContext(ctx).sessionManager.getBranch();
     projections.reload(branch, null);
     reports.reload(branch, null);
+  };
+
+  /** Пишет изменённую цель и ждёт обновления документа, которое запускает сам переход. */
+  const saveGoalChange = async (next: ThreadGoal, source: GoalEntrySource, ctx: ExtensionContext): Promise<void> => {
+    applyTransition({ kind: "set", nextGoal: next, source }, ctx);
+    // Сбой документа здесь не отменяет сохранённую цель: его покажет следующее действие, которое ждёт документ.
+    await bootstrap.catch(() => undefined);
+  };
+
+  /** Агент добавляет пункт «Решаю сам» в любой момент; подтвердить его за владельца нельзя (Т4.5). */
+  const addSelfDecided = async (kind: SelfDecidedKind, text: string, ctx: ExtensionContext): Promise<{ ok: boolean; message: string; itemId?: string }> => {
+    const goal = getGoal();
+    if (!goal || (goal.status !== "active" && goal.status !== "paused")) return { ok: false, message: "Self-decided items need an active or paused goal." };
+    const error = validateSelfDecidedText(text);
+    if (error) return { ok: false, message: error };
+    const id = selfDecidedItemId(goal.goalId, kind, text);
+    if (goal.selfDecided?.some((item) => item.id === id)) return { ok: true, message: "Self-decided item already recorded.", itemId: id };
+    if ((goal.selfDecided?.length ?? 0) >= MAX_SELF_DECIDED_ITEMS) return { ok: false, message: `The Self-decided list already has ${MAX_SELF_DECIDED_ITEMS} items.` };
+    const next = cloneGoal(goal);
+    next.selfDecided = [...(goal.selfDecided ?? []), { id, kind, text: text.trim(), state: "unconfirmed", createdAt: Date.now() }];
+    next.updatedAt = nonDecreasingUpdatedAt(goal);
+    await saveGoalChange(next, "tool", ctx);
+    return { ok: true, message: "Self-decided item recorded.", itemId: id };
+  };
+
+  /**
+   * Состояние пункта меняет только ход, открытый настоящей репликой владельца (Т4.4).
+   * Ссылку на реплику ставит расширение по ветке журнала, а не модель.
+   */
+  const setSelfDecidedState = async (itemId: string, state: "confirmed" | "rejected", ctx: ExtensionContext): Promise<{ ok: boolean; message: string }> => {
+    const goal = getGoal();
+    const item = goal?.selfDecided?.find((candidate) => candidate.id === itemId);
+    if (!goal || !item) return { ok: false, message: `Unknown Self-decided item ${itemId}; read get_goal for the list.` };
+    if (features().selfDecidedList && !ownerTurnOpen) return { ok: false, message: "Only the owner confirms or rejects a Self-decided item: this turn was not started by a real owner reply. Ask the owner." };
+    if (item.state === state) return { ok: true, message: "Self-decided item already has this state." };
+    const ownerEntryId = latestOwnerEntryId(goalContext(ctx).sessionManager.getBranch());
+    const next = cloneGoal(goal);
+    next.selfDecided = (goal.selfDecided ?? []).map((candidate) => candidate.id !== itemId ? { ...candidate }
+      : { ...candidate, state, ...(ownerEntryId ? { ownerEntryId } : {}) });
+    next.updatedAt = nonDecreasingUpdatedAt(goal);
+    await saveGoalChange(next, "tool", ctx);
+    return { ok: true, message: `Self-decided item ${state}.` };
   };
 
   const requireGoal = (): ThreadGoal => {
@@ -591,6 +668,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       hooks.invalidateExternalRetry();
       userInputGeneration++;
       userInstructionGoalId = instructionFor(goal);
+      if (!text.startsWith("/") || isSlashWorkflow(text)) noteOwnerReply();
       if (!isSlashWorkflow(text)) reports.noteOrdinaryUserInput(goal);
       return;
     }
@@ -601,6 +679,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       hooks.invalidateExternalRetry();
       userInputGeneration++;
       userInstructionGoalId = instructionFor(goal);
+      noteOwnerReply();
       if (userInstructionGoalId) reports.noteOrdinaryUserInput(goal);
     }
   };
@@ -714,7 +793,12 @@ export function createGoalSession(pi: ExtensionAPI) {
       hooks.invalidateExternalRetry();
     },
     /** Конец прогона: слово владельца относилось только к этому ходу. */
-    endUserTurn(): void { userInstructionGoalId = null; },
+    endUserTurn(): void { userInstructionGoalId = null; ownerTurnOpen = false; },
+    /** Ответ владельца на `ask_user` внутри прогона — тоже настоящая реплика. */
+    noteOwnerAnswer: noteOwnerReply,
+    getFeatures: features,
+    addSelfDecided,
+    setSelfDecidedState,
     getGoalResumeEpoch: () => userInputGeneration,
     getGoalResumeFailure: () => resumeGateFailure(false, true),
     cancelProviderLimitAutoResume(ctx: ExtensionContext): void {

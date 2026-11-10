@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { isGoalAgreement, isSelfDecidedItem, selfDecidedItemId, validateAgreement, validateSelfDecidedText, MAX_SELF_DECIDED_ITEMS, type SelfDecidedKind } from "./agreement.js";
+
 import {
   CUSTOM_ENTRY_TYPE,
   GOAL_ARTIFACT_NAMES,
@@ -39,6 +41,8 @@ export function cloneGoal(goal: ThreadGoal): ThreadGoal {
     ...goal,
     usage: cloneUsage(goal.usage),
     ...(goal.pause ? { pause: { ...goal.pause } } : {}),
+    ...(goal.agreement ? { agreement: { ...goal.agreement } } : {}),
+    ...(goal.selfDecided ? { selfDecided: goal.selfDecided.map((item) => ({ ...item })) } : {}),
   };
 }
 
@@ -52,7 +56,10 @@ export function goalsEquivalent(left: ThreadGoal, right: ThreadGoal): boolean {
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.usage.tokensUsed === right.usage.tokensUsed &&
-    left.usage.activeSeconds === right.usage.activeSeconds
+    left.usage.activeSeconds === right.usage.activeSeconds &&
+    JSON.stringify(left.agreement) === JSON.stringify(right.agreement) &&
+    JSON.stringify(left.selfDecided) === JSON.stringify(right.selfDecided) &&
+    left.completionCheck === right.completionCheck
   );
 }
 
@@ -84,8 +91,39 @@ export function statusAfterBudgetLimit(status: GoalStatus, tokensUsed: number, t
   return status;
 }
 
-export function createThreadGoal(objective: string, tokenBudget?: number | null, now = unixSeconds()): ThreadGoal {
-  return {
+/** Договорённость и список «Решаю сам», как их передаёт модель в `create_goal` и `amend_goal`. */
+export interface AgreementInput {
+  ownerWants: string;
+  doneWhen: string;
+  selfDecided?: readonly { kind: SelfDecidedKind; text: string }[];
+}
+
+export function validateAgreementInput(input: AgreementInput): string | null {
+  const error = validateAgreement(input.ownerWants, input.doneWhen);
+  if (error) return error;
+  if ((input.selfDecided?.length ?? 0) > MAX_SELF_DECIDED_ITEMS) return `self_decided must have ${MAX_SELF_DECIDED_ITEMS} items or fewer.`;
+  for (const item of input.selfDecided ?? []) {
+    const itemError = validateSelfDecidedText(item.text);
+    if (itemError) return itemError;
+  }
+  return null;
+}
+
+/** Ставит договорённость в цель; редакция растёт, прежние пункты списка сохраняются. */
+export function withAgreement(goal: ThreadGoal, input: AgreementInput, now = unixSeconds()): ThreadGoal {
+  const next = cloneGoal(goal);
+  next.agreement = { ownerWants: input.ownerWants.trim(), doneWhen: input.doneWhen.trim(), revision: (goal.agreement?.revision ?? 0) + 1 };
+  const items = [...(goal.selfDecided ?? [])];
+  for (const item of input.selfDecided ?? []) {
+    const id = selfDecidedItemId(goal.goalId, item.kind, item.text);
+    if (!items.some((existing) => existing.id === id)) items.push({ id, kind: item.kind, text: item.text.trim(), state: "unconfirmed", createdAt: now });
+  }
+  next.selfDecided = items;
+  return next;
+}
+
+export function createThreadGoal(objective: string, tokenBudget?: number | null, now = unixSeconds(), agreement?: AgreementInput): ThreadGoal {
+  const goal: ThreadGoal = {
     goalId: randomUUID(),
     objective: objective.trim(),
     status: "active",
@@ -97,6 +135,7 @@ export function createThreadGoal(objective: string, tokenBudget?: number | null,
     createdAt: now,
     updatedAt: now,
   };
+  return agreement ? withAgreement(goal, agreement, now) : goal;
 }
 
 export function setEntry(goal: ThreadGoal, source: GoalEntrySource, at = unixSeconds()): GoalCustomEntry {
@@ -209,7 +248,10 @@ export function isThreadGoal(goal: unknown): goal is ThreadGoal {
     isGoalUsage(candidate.usage) &&
     (candidate.pause === undefined || (candidate.status === "paused" && candidate.pause !== null && typeof candidate.pause === "object" &&
       ["manual", "recovery", "shutdown"].includes(candidate.pause.kind) && typeof candidate.pause.reason === "string")) &&
-    (appliedAmendments === undefined || (Array.isArray(appliedAmendments) && appliedAmendments.every((item) => typeof item === "string")))
+    (appliedAmendments === undefined || (Array.isArray(appliedAmendments) && appliedAmendments.every((item) => typeof item === "string"))) &&
+    (candidate.agreement === undefined || isGoalAgreement(candidate.agreement)) &&
+    (candidate.selfDecided === undefined || (Array.isArray(candidate.selfDecided) && candidate.selfDecided.every(isSelfDecidedItem))) &&
+    (candidate.completionCheck === undefined || typeof candidate.completionCheck === "string")
   );
 }
 
@@ -297,7 +339,7 @@ export function reconstructHostOverflowCapNeedsUserReset(entries: Iterable<Sessi
   return needsReset;
 }
 
-export function createGoal(current: ThreadGoal | null, objective: string, tokenBudget?: number | null): GoalResult {
+export function createGoal(current: ThreadGoal | null, objective: string, tokenBudget?: number | null, agreement?: AgreementInput): GoalResult {
   if (current && current.status !== "complete") {
     return {
       ok: false,
@@ -317,7 +359,12 @@ export function createGoal(current: ThreadGoal | null, objective: string, tokenB
     return { ok: false, message: budgetError, goal: null };
   }
 
-  const goal = createThreadGoal(objective, tokenBudget);
+  const agreementError = agreement ? validateAgreementInput(agreement) : null;
+  if (agreementError) {
+    return { ok: false, message: agreementError, goal: null };
+  }
+
+  const goal = createThreadGoal(objective, tokenBudget, unixSeconds(), agreement);
   return {
     ok: true,
     message: "Goal created.",
@@ -325,7 +372,7 @@ export function createGoal(current: ThreadGoal | null, objective: string, tokenB
   };
 }
 
-export function amendGoal(current: ThreadGoal | null, amendment: string): GoalResult {
+export function amendGoal(current: ThreadGoal | null, amendment: string, agreement?: AgreementInput): GoalResult {
   if (!current || (current.status !== "active" && current.status !== "paused")) {
     return {
       ok: false,
@@ -339,7 +386,12 @@ export function amendGoal(current: ThreadGoal | null, amendment: string): GoalRe
     return { ok: false, message: "Amendment must not be empty.", goal: current };
   }
 
-  const goal = cloneGoal(current);
+  const agreementError = agreement ? validateAgreementInput(agreement) : null;
+  if (agreementError) {
+    return { ok: false, message: agreementError, goal: current };
+  }
+
+  const goal = agreement ? withAgreement(current, agreement) : cloneGoal(current);
   goal.objective = `${current.objective}\n\nApproved amendment:\n${trimmedAmendment}`;
   const objectiveError = validateObjective(goal.objective);
   if (objectiveError) {
@@ -351,7 +403,7 @@ export function amendGoal(current: ThreadGoal | null, amendment: string): GoalRe
   return { ok: true, message: "Goal amended.", goal };
 }
 
-export function replaceGoal(objective: string, tokenBudget?: number | null): GoalResult {
+export function replaceGoal(objective: string, tokenBudget?: number | null, agreement?: AgreementInput): GoalResult {
   const objectiveError = validateObjective(objective);
   if (objectiveError) {
     return { ok: false, message: objectiveError, goal: null };
@@ -362,7 +414,12 @@ export function replaceGoal(objective: string, tokenBudget?: number | null): Goa
     return { ok: false, message: budgetError, goal: null };
   }
 
-  const goal = createThreadGoal(objective, tokenBudget);
+  const agreementError = agreement ? validateAgreementInput(agreement) : null;
+  if (agreementError) {
+    return { ok: false, message: agreementError, goal: null };
+  }
+
+  const goal = createThreadGoal(objective, tokenBudget, unixSeconds(), agreement);
   return {
     ok: true,
     message: "Goal set.",

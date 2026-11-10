@@ -152,6 +152,17 @@ export function answeredQuestionCallIds(message: unknown, results: readonly unkn
   return results.filter(hasQuestionAnswer).filter(result => typeof result.toolCallId === "string" && calls.has(result.toolCallId)).map(result => result.toolCallId as string);
 }
 
+/** Последняя запись ветки с настоящей репликой владельца: его сообщение или ответ `ask_user`. */
+export function latestOwnerEntryId(entries: readonly unknown[]): string | null {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (!isRecord(entry) || entry.type !== "message" || typeof entry.id !== "string") continue;
+    const message = entry.message;
+    if (isRecord(message) && (message.role === "user" || hasQuestionAnswer(message))) return entry.id;
+  }
+  return null;
+}
+
 function consumeQuestionAnswer(message: unknown, calls: Set<string>): string | null {
   if (!isRecord(message)) return null;
   if (message.role === "assistant") {

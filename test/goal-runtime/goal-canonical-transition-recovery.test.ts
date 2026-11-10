@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
 import { reconstructGoal } from "../../src/goal/state.js";
-import { assistantMessage, createRuntimeHarness } from "../support/runtime-harness.js";
+import { assistantMessage, createRuntimeHarness, passAgreementCheck } from "../support/runtime-harness.js";
 
 type Receipt = { operation: string; applied: boolean | null; stage: string; retryable: boolean; goalId: string; amendment_id?: string; remediation: string };
 const working = { action: "publish", status: "working", phase: "Проверяю сохранение", summary: "Проверяю сохранение цели.", changed: "Подготовлена проверка сохранения.", nextStep: "Сверить результат." };
@@ -49,7 +49,10 @@ for (const operation of ["create_goal", "amend_goal", "resume_goal", "update_goa
         await h.runCommand("pause");
         await h.emit("input", { type: "input", source: "interactive", text: "Продолжи цель" });
       }
-      if (operation === "update_goal") await h.runTool("report_goal_progress", { ...working, status: "verifying", verification: "Условия проверены." });
+      if (operation === "update_goal") {
+        await h.runTool("report_goal_progress", { ...working, status: "verifying", verification: "Условия проверены." });
+        await passAgreementCheck(h);
+      }
       const existingId = h.snapshot().goal?.goalId;
       if (timing === "before") {
         await rename(sessionFile, sessionFile + ".saved");

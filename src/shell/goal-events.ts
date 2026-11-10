@@ -83,6 +83,9 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     completeGoal: session.completeGoal,
     reportGoal: session.reportGoal,
     recordGoalDecision: session.recordGoalDecision,
+    getFeatures: session.getFeatures,
+    addSelfDecided: session.addSelfDecided,
+    setSelfDecidedState: session.setSelfDecidedState,
     recordGoalPaperCut: session.recordGoalPaperCut,
     updateGoalPaperCut: session.updateGoalPaperCut,
     repairGoalNote: session.repairGoalNote,
@@ -205,7 +208,10 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     session.status.setActivity(null);
     if (terminalFallbackHandled) return;
     const message = event.message as AssistantTurnMessage;
-    for (const id of answeredQuestionCallIds(event.message, event.toolResults)) session.reports.noteQuestionAnswer(session.getGoal(), id);
+    for (const id of answeredQuestionCallIds(event.message, event.toolResults)) {
+      session.noteOwnerAnswer();
+      session.reports.noteQuestionAnswer(session.getGoal(), id);
+    }
     if (!isToolUseAssistantMessage(message)) session.reports.finishQuestionAnswer();
     session.accounting.accountProgress(ctx, !session.isContinuationHeld(), assistantTurnTokens(message));
     terminalUsageAccounted = true;

@@ -1,0 +1,153 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+import type { GoalWorkingState } from "../../src/goal/format.js";
+import { assistantMessage, createRuntimeHarness } from "../support/runtime-harness.js";
+
+type Harness = ReturnType<typeof createRuntimeHarness>;
+
+const AGREEMENT = { owner_wants: "Собрать отчёт о продажах за квартал.", done_when: "Отчёт открывается и сходится с выгрузкой." };
+
+async function read(harness: Harness): Promise<GoalWorkingState> {
+  return (await harness.runTool("get_goal", {}) as { details: GoalWorkingState }).details;
+}
+
+async function setup(selfDecided: unknown[] = [{ kind: "assumption", text: "Квартал — календарный." }]) {
+  const harness = createRuntimeHarness();
+  await harness.runTool("create_goal", { objective: "Отчёт о продажах", agreement: AGREEMENT, self_decided: selfDecided });
+  return harness;
+}
+
+/** Реплика владельца: событие ввода и запись в ветке, на которую расширение ставит ссылку. */
+async function ownerSays(harness: Harness, id: string, text: string): Promise<void> {
+  await harness.emit("input", { type: "input", text, source: "interactive" });
+  harness.entries.push({ type: "message", id, parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: text, timestamp: Date.now() } });
+}
+
+async function endRun(harness: Harness): Promise<void> {
+  await harness.emit("agent_end", { type: "agent_end", messages: [] });
+}
+
+test("create_goal требует договорённость и список «Решаю сам», пустой список допустим", async () => {
+  const harness = createRuntimeHarness();
+  await assert.rejects(harness.runTool("create_goal", { objective: "Отчёт", agreement: undefined }), /requires agreement/);
+  await assert.rejects(harness.runTool("create_goal", { objective: "Отчёт", agreement: AGREEMENT, self_decided: undefined }), /requires self_decided/);
+  await assert.rejects(harness.runTool("create_goal", { objective: "Отчёт", agreement: { owner_wants: "я".repeat(1500), done_when: "г".repeat(501) }, self_decided: [] }), /2000 characters/);
+  await harness.runTool("create_goal", { objective: "Отчёт", agreement: AGREEMENT, self_decided: [] });
+  const goal = (await read(harness)).goal!;
+  assert.deepEqual(goal.agreement, { ownerWants: AGREEMENT.owner_wants, doneWhen: AGREEMENT.done_when, revision: 1 });
+  assert.deepEqual(goal.selfDecided, []);
+});
+
+test("пункты «Решаю сам» сохраняют вид, начинаются неподтверждёнными и переживают перезагрузку", async () => {
+  const harness = await setup([{ kind: "assumption", text: "Квартал — календарный." }, { kind: "deferred_by_owner", text: "Формат выгрузки решим позже." }]);
+  await harness.reloadSession("reload");
+  const items = (await read(harness)).goal!.selfDecided!;
+  assert.deepEqual(items.map((item) => [item.kind, item.state]), [["assumption", "unconfirmed"], ["deferred_by_owner", "unconfirmed"]]);
+  assert.equal((await read(harness)).goal!.agreement!.revision, 1);
+});
+
+test("правка цели принимается только после реплики владельца и несёт новую редакцию договорённости", async () => {
+  const harness = await setup();
+  const amendment = { amendment: "Добавить разбивку по регионам.", agreement: { ...AGREEMENT, owner_wants: "Собрать отчёт о продажах с разбивкой по регионам." } };
+  await assert.rejects(harness.runTool("amend_goal", amendment, undefined, { ownerReply: false }), /needs a real owner reply/);
+  await ownerSays(harness, "owner-1", "Добавь разбивку по регионам.");
+  await assert.rejects(harness.runTool("amend_goal", { amendment: "Добавить разбивку по регионам.", agreement: undefined }, undefined, { ownerReply: false }), /pass agreement/);
+  const applied = await harness.runTool("amend_goal", amendment, undefined, { ownerReply: false }) as { details: { amendment_id: string } };
+  const goal = (await read(harness)).goal!;
+  assert.equal(goal.agreement!.revision, 2);
+  assert.match(goal.agreement!.ownerWants, /по регионам/);
+  // Одна реплика разрешает одну правку: следующая ждёт новую реплику.
+  await assert.rejects(harness.runTool("amend_goal", { ...amendment, amendment: "Ещё и по менеджерам." }, undefined, { ownerReply: false }), /needs a real owner reply/);
+  // Восстановление документа по amendment_id цель не меняет и реплики не требует.
+  await harness.runTool("amend_goal", { amendment_id: applied.details.amendment_id }, undefined, { ownerReply: false });
+});
+
+test("подтвердить или отклонить пункт можно только в ходе, начатом репликой владельца", async () => {
+  const harness = await setup();
+  const added = await harness.runTool("record_goal_note", { kind: "decision", title: "Источник данных", decision: "Беру выгрузку из CRM.", rationale: "Других источников в задаче нет.", self_decided: "proposal" }) as { details: { selfDecidedId: string } };
+  const itemId = added.details.selfDecidedId;
+  assert.match(itemId, /^S-/);
+  assert.equal((await read(harness)).goal!.selfDecided!.length, 2);
+  await assert.rejects(harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "confirmed" }), /Only the owner/);
+  await ownerSays(harness, "owner-crm", "CRM подходит.");
+  await harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "confirmed" });
+  const confirmed = (await read(harness)).goal!.selfDecided!.find((item) => item.id === itemId)!;
+  assert.equal(confirmed.state, "confirmed");
+  assert.equal(confirmed.ownerEntryId, "owner-crm");
+  await endRun(harness);
+  await assert.rejects(harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "rejected" }), /Only the owner/);
+});
+
+test("ответ владельца на ask_user открывает ход для подтверждения пункта", async () => {
+  const harness = await setup();
+  const itemId = (await read(harness)).goal!.selfDecided![0]!.id;
+  const call = { type: "toolCall" as const, id: "ask-1", name: "ask_user", arguments: {} };
+  const answer = { role: "toolResult" as const, toolCallId: call.id, toolName: "ask_user", isError: false, timestamp: 1,
+    content: [{ type: "text" as const, text: "User answered: финансовый квартал" }],
+    details: { mode: "single", cancelled: false, response: { kind: "freeform", text: "Нет, финансовый квартал." } } };
+  await harness.emit("agent_start", { type: "agent_start" });
+  await harness.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+  harness.entries.push({ type: "message", id: "answer-1", parentId: null, timestamp: new Date().toISOString(), message: answer });
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, message: { ...assistantMessage("toolUse", { input: 1, output: 1 }), content: [call] }, toolResults: [answer] });
+  await harness.runTool("record_goal_note", { kind: "decision", action: "update", note_id: itemId, confirmation: "rejected" });
+  const item = (await read(harness)).goal!.selfDecided![0]!;
+  assert.deepEqual([item.state, item.ownerEntryId], ["rejected", "answer-1"]);
+});
+
+const verifying = { action: "publish", status: "verifying", phase: "Сверяю отчёт", summary: "Отчёт собран и сверен с выгрузкой.", verification: "Итоги отчёта совпали с выгрузкой.", nextStep: "Закрыть цель." };
+const complete = (harness: Harness) => harness.runTool("update_goal", { status: "complete" }, undefined, { agreementCheck: "raw" });
+
+test("первая попытка закрытия возвращает договорённость, вторая при тех же данных закрывает цель", async () => {
+  const harness = await setup();
+  await harness.runTool("report_goal_progress", verifying);
+  await assert.rejects(complete(harness), (error: unknown) => {
+    const receipt = JSON.parse((error as Error).message) as { stage: string; applied: boolean; message: string };
+    assert.equal(receipt.stage, "agreement_check");
+    assert.equal(receipt.applied, false);
+    assert.match(receipt.message, /Собрать отчёт о продажах за квартал/);
+    assert.match(receipt.message, /Квартал — календарный/);
+    assert.match(receipt.message, /Отчёт открывается и сходится с выгрузкой/);
+    return true;
+  });
+  assert.equal((await read(harness)).goal!.status, "active");
+  const done = await complete(harness) as { content: Array<{ text: string }>; details: { unconfirmedSelfDecided?: unknown[] } };
+  assert.equal((await read(harness)).goal!.status, "complete");
+  // Владелец видит, что агент решил сам без его слова (Т6.4).
+  assert.match(done.content[0]!.text, /Не подтверждено владельцем:\n1\. \[допущение\] Квартал — календарный\./);
+  assert.equal(done.details.unconfirmedSelfDecided?.length, 1);
+});
+
+test("правка плана или нового пункта после первой попытки требует сверки заново", async () => {
+  const harness = await setup();
+  const goalId = (await read(harness)).goal!.goalId;
+  await harness.runTool("report_goal_progress", verifying);
+  await assert.rejects(complete(harness), /agreement_check/);
+  await harness.runTool("record_goal_note", { kind: "decision", title: "Округление", decision: "Округляю суммы до рубля.", rationale: "Так в выгрузке.", self_decided: "assumption" });
+  await assert.rejects(complete(harness), /agreement_check/);
+  const plan = { outcome: "Отчёт о продажах.", doneWhen: "Отчёт сходится.", summary: "Отчёт собран.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "done", source: "user" }] };
+  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: plan });
+  await harness.runTool("report_goal_progress", { ...verifying, verification: "План сверен, итоги совпали с выгрузкой." });
+  await assert.rejects(complete(harness), /agreement_check/);
+  await complete(harness);
+  assert.equal((await read(harness)).goal!.status, "complete");
+});
+
+test("с выключенной сверкой закрытие идёт с первой попытки, как в прежней сборке", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "goal-agreement-features-"));
+  try {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", "goal-reports.json"), JSON.stringify({ features: { completionReturn: false } }));
+    const harness = createRuntimeHarness({ cwd });
+    await harness.emit("session_start", { type: "session_start", reason: "startup" });
+    await harness.runTool("create_goal", { objective: "Отчёт о продажах", agreement: AGREEMENT, self_decided: [] });
+    await harness.runTool("report_goal_progress", verifying);
+    await complete(harness);
+    assert.equal((await read(harness)).goal!.status, "complete");
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});

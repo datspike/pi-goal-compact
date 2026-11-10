@@ -25,6 +25,10 @@ export interface GoalToolRecord {
   timeUsedSeconds: number;
   createdAt: number;
   updatedAt: number;
+  /** Договорённость последней редакции; нет у целей прежней пары. */
+  agreement?: ThreadGoal["agreement"];
+  /** Список «Решаю сам» с видом и состоянием каждого пункта. */
+  selfDecided?: ThreadGoal["selfDecided"];
 }
 
 export interface GoalWorkingState {
@@ -237,6 +241,8 @@ export function toToolGoal(goal: ThreadGoal): GoalToolRecord {
     timeUsedSeconds: goal.usage.activeSeconds,
     createdAt: goal.createdAt,
     updatedAt: goal.updatedAt,
+    ...(goal.agreement ? { agreement: { ...goal.agreement } } : {}),
+    ...(goal.selfDecided ? { selfDecided: goal.selfDecided.map((item) => ({ ...item })) } : {}),
   };
 }
 

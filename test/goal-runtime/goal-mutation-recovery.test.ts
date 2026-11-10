@@ -11,7 +11,7 @@ import type { GoalWorkUpdateResult } from "../../src/goal/goal-work-state.js";
 import { isGoalProjectionEvent } from "../../src/goal/goal-projection-reducer.js";
 
 type CompletionReceipt = { applied: boolean | null; stage: string; retryable: boolean };
-import { createRuntimeHarness } from "../support/runtime-harness.js";
+import { createRuntimeHarness, passAgreementCheck } from "../support/runtime-harness.js";
 
 async function full(h: ReturnType<typeof createRuntimeHarness>) {
   const state = (await h.runTool("get_goal", {}) as { details: GoalWorkingState }).details;
@@ -55,6 +55,7 @@ test("an applied work-state write repairs its document without another semantic 
 test("canonical completion survives a document failure and repairs without completing twice", async () => {
   const h = await fixture();
   await h.runTool("report_goal_progress", { action: "publish", status: "verifying", phase: "Сверяю результат", summary: "Договорённость и проверки сверены. Проверяю запись завершения.", verification: "Проверен изолированный путь завершения.", nextStep: "Завершить тестовую цель." });
+  await passAgreementCheck(h);
   const restore = await breakDocument(h);
   let failure: CompletionReceipt | undefined;
   try { await h.runTool("update_goal", { status: "complete" }); }
