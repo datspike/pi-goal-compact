@@ -2,17 +2,57 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
+/**
+ * Выключатели доработок Д2–Д8. Выключенная доработка возвращает поведение прежней пары
+ * расширений: так можно сравнить сборки и откатить одну доработку, не трогая остальные.
+ */
+export interface GoalFeatures {
+  /** Д2: договорённость стоит в начале окна сразу после сводки сжатия. */
+  agreementInWindow: boolean;
+  /** Д3: первая попытка закрытия возвращает договорённость. */
+  completionReturn: boolean;
+  /** Д4: `create_goal` требует список «Решаю сам», состояние пункта меняет только владелец. */
+  selfDecidedList: boolean;
+  /** Д5: правило задавать вопросы до цели в описании `create_goal`. */
+  askBeforeGoal: boolean;
+  /** Д6: у факта один хозяин — сводка без раздела «Цель», продолжение без пересказа цели. */
+  singleFactOwner: boolean;
+  /** Д7: без цели после сводки стоят последние реплики владельца дословно. */
+  ownerRepliesWithoutGoal: boolean;
+  /** Д8: правка цели принимается только после настоящей реплики владельца. */
+  amendNeedsOwner: boolean;
+}
+
+export const GOAL_FEATURE_NAMES = ["agreementInWindow", "completionReturn", "selfDecidedList", "askBeforeGoal", "singleFactOwner", "ownerRepliesWithoutGoal", "amendNeedsOwner"] as const satisfies readonly (keyof GoalFeatures)[];
+
+export const DEFAULT_GOAL_FEATURES: Readonly<GoalFeatures> = Object.freeze({
+  agreementInWindow: true,
+  completionReturn: true,
+  selfDecidedList: true,
+  askBeforeGoal: true,
+  singleFactOwner: true,
+  ownerRepliesWithoutGoal: true,
+  amendNeedsOwner: true,
+});
+
 export interface GoalReportPolicy {
   afterActiveSeconds: number;
   afterAssistantTurns: number;
   /** Сколько скрытых продолжений подряд без сообщения пользователя допустимо; 0 — без предела. */
   maxHiddenContinuations?: number;
+  /** Отсутствует у старых состояний — тогда действуют значения по умолчанию. */
+  features?: GoalFeatures;
 }
 
 export const DEFAULT_GOAL_REPORT_POLICY: Readonly<GoalReportPolicy> = Object.freeze({
   afterActiveSeconds: 500,
   afterAssistantTurns: 30,
 });
+
+/** Действующие выключатели политики. */
+export function goalFeatures(policy: Pick<GoalReportPolicy, "features">): GoalFeatures {
+  return policy.features ?? DEFAULT_GOAL_FEATURES;
+}
 
 export interface GoalReportPolicyLoadOptions {
   cwd?: string;
@@ -28,7 +68,7 @@ export interface GoalReportPolicyLoadResult {
   };
 }
 
-type GoalReportPolicyFile = Partial<GoalReportPolicy>;
+type GoalReportPolicyFile = Partial<Omit<GoalReportPolicy, "features">> & { features?: Partial<GoalFeatures> };
 
 const CONFIG_FILE_NAME = "goal-reports.json";
 
@@ -62,6 +102,19 @@ function parsePolicyFile(value: unknown, path: string, warnings: string[]): Goal
       warnings.push(`${path}.maxHiddenContinuations must be a non-negative safe integer; the value was ignored.`);
     }
   }
+  if (value.features !== undefined) {
+    if (!isRecord(value.features)) {
+      warnings.push(`${path}.features must be an object of booleans; the value was ignored.`);
+    } else {
+      const features: Partial<GoalFeatures> = {};
+      for (const [key, flag] of Object.entries(value.features)) {
+        if (!(GOAL_FEATURE_NAMES as readonly string[]).includes(key)) warnings.push(`${path}.features.${key} is unknown; the value was ignored.`);
+        else if (typeof flag !== "boolean") warnings.push(`${path}.features.${key} must be a boolean; the value was ignored.`);
+        else features[key as keyof GoalFeatures] = flag;
+      }
+      policy.features = features;
+    }
+  }
   return policy;
 }
 
@@ -92,11 +145,15 @@ export async function loadGoalReportPolicy(options: GoalReportPolicyLoadOptions 
   const warnings: string[] = [];
   const user = await readPolicyFile(paths.user, warnings);
   const project = await readPolicyFile(paths.project, warnings);
+  const { features: userFeatures, ...userPolicy } = user;
+  const { features: projectFeatures, ...projectPolicy } = project;
   return {
     policy: {
       ...DEFAULT_GOAL_REPORT_POLICY,
-      ...user,
-      ...project,
+      ...userPolicy,
+      ...projectPolicy,
+      // Выключатели сливаются по одному: проектный файл меняет только названные в нём.
+      ...(userFeatures || projectFeatures ? { features: { ...DEFAULT_GOAL_FEATURES, ...userFeatures, ...projectFeatures } } : {}),
     },
     warnings,
     paths,

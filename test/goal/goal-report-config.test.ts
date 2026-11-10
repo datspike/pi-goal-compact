@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { DEFAULT_GOAL_REPORT_POLICY, loadGoalReportPolicy } from "../../src/goal/goal-report-config.js";
+import { DEFAULT_GOAL_FEATURES, DEFAULT_GOAL_REPORT_POLICY, goalFeatures, loadGoalReportPolicy } from "../../src/goal/goal-report-config.js";
 
 async function withConfigDirs(run: (dirs: { agentDir: string; cwd: string }) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "pi-codex-goal-report-config-"));
@@ -82,5 +82,30 @@ test("maxHiddenContinuations accepts zero and rejects negative or fractional val
     assert.match(result.warnings.join("\n"), /maxHiddenContinuations must be a non-negative safe integer/);
     await writeFile(join(dirs.cwd, ".pi", "goal-reports.json"), JSON.stringify({ maxHiddenContinuations: 0 }));
     assert.equal((await loadGoalReportPolicy(dirs)).policy.maxHiddenContinuations, 0);
+  });
+});
+
+test("выключатели доработок по умолчанию включены, а файлы меняют их по одному", async () => {
+  await withConfigDirs(async (dirs) => {
+    assert.deepEqual(goalFeatures((await loadGoalReportPolicy(dirs)).policy), DEFAULT_GOAL_FEATURES);
+    await writeFile(join(dirs.agentDir, "goal-reports.json"), JSON.stringify({ features: { completionReturn: false, amendNeedsOwner: false } }));
+    await mkdir(join(dirs.cwd, ".pi"), { recursive: true });
+    await writeFile(join(dirs.cwd, ".pi", "goal-reports.json"), JSON.stringify({ features: { amendNeedsOwner: true } }));
+    const result = await loadGoalReportPolicy(dirs);
+    assert.deepEqual(goalFeatures(result.policy), { ...DEFAULT_GOAL_FEATURES, completionReturn: false });
+    assert.deepEqual(result.warnings, []);
+  });
+});
+
+test("неизвестный или не булев выключатель даёт предупреждение и не меняет остальные", async () => {
+  await withConfigDirs(async (dirs) => {
+    await writeFile(join(dirs.agentDir, "goal-reports.json"), JSON.stringify({ features: { agreementInWindow: "no", ghost: false, singleFactOwner: false } }));
+    const result = await loadGoalReportPolicy(dirs);
+    assert.deepEqual(goalFeatures(result.policy), { ...DEFAULT_GOAL_FEATURES, singleFactOwner: false });
+    assert.equal(result.warnings.length, 2);
+    await writeFile(join(dirs.agentDir, "goal-reports.json"), JSON.stringify({ features: [true] }));
+    const broken = await loadGoalReportPolicy(dirs);
+    assert.deepEqual(goalFeatures(broken.policy), DEFAULT_GOAL_FEATURES);
+    assert.match(broken.warnings[0] ?? "", /features must be an object/);
   });
 });
