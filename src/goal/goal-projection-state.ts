@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import { cloneGoalWorkState, type GoalWorkState } from "./goal-work-state.js";
 import type { GoalProgressEventKind, GoalProgressReport } from "./report-schema.js";
 import type { GoalArtifactName, GoalStatus, ThreadGoal } from "./types.js";
@@ -198,7 +199,7 @@ export function goalPreservedContext(state: GoalProjectionState) {
   const unclassifiedDecisionIds = state.workState ? [] : state.decisions.map(entry => entry.id);
   if (!state.importedDocuments.length && !state.legacyDecisions && !state.legacyPaperCuts && !unclassifiedDecisionIds.length) return null;
   return {
-    notice: "Исходные записи сохранены для адресной проверки. Рабочий снимок не заменяет полный договор и источники и сам по себе не подтверждает полноту контекста. Если в текущем плане есть пробел или противоречие, откройте нужный источник через `get_goal` и уточните действующее через `update_goal_work`; повторно читать уже проверенное не требуется.",
+    notice: say("Исходные записи сохранены для адресной проверки. Рабочий снимок не заменяет полный договор и источники и сам по себе не подтверждает полноту контекста. Если в текущем плане есть пробел или противоречие, откройте нужный источник через `get_goal` и уточните действующее через `update_goal_work`; повторно читать уже проверенное не требуется.", "Original records are kept for addressed checks. The work snapshot does not replace the full contract and sources and does not by itself prove the context is complete. If the current plan has a gap or contradiction, open the needed source with `get_goal` and clarify what applies with `update_goal_work`; there is no need to reread what was already checked."),
     sourceEventIds: [...new Set([...(state.preservedSourceIds ?? []), ...unclassifiedDecisionIds])],
     documents: [...new Set(state.importedDocuments.map(entry => entry.artifact))],
     unclassifiedDecisionIds,

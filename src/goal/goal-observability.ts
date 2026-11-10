@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import { RECORD } from "../records.js";
@@ -21,14 +22,14 @@ export interface GoalObservabilityEntry {
 }
 
 function statusLabel(state: GoalWorkingState): string {
-  if (state.lifecycle === "complete") return "✓ Завершена";
-  if (state.lifecycle === "paused") return "На паузе";
-  if (state.lifecycle === "budgetLimited") return "Лимит бюджета";
-  if (state.progressStatus === "blocked") return "Заблокировано";
-  if (state.awaitingUser && !state.userAnswerReceived) return "Жду ответа";
-  if (state.blocker) return "Заблокировано";
-  if (state.progressStatus === "verifying") return "Проверяю";
-  return state.lifecycle === "active" ? "Работаю" : "Нет цели";
+  if (state.lifecycle === "complete") return say("✓ Завершена", "✓ Complete");
+  if (state.lifecycle === "paused") return say("На паузе", "Paused");
+  if (state.lifecycle === "budgetLimited") return say("Лимит бюджета", "Budget limit");
+  if (state.progressStatus === "blocked") return say("Заблокировано", "Blocked");
+  if (state.awaitingUser && !state.userAnswerReceived) return say("Жду ответа", "Waiting for reply");
+  if (state.blocker) return say("Заблокировано", "Blocked");
+  if (state.progressStatus === "verifying") return say("Проверяю", "Verifying");
+  return state.lifecycle === "active" ? say("Работаю", "Working") : say("Нет цели", "No goal");
 }
 
 function clean(value: string | null | undefined): string | null {
@@ -44,52 +45,52 @@ function addOptional(lines: string[], label: string, value: string | null | unde
 }
 
 export function formatGoalSnapshot(state: GoalWorkingState, mode: SnapshotMode): string[] {
-  if (!state.goal) return ["Цель: нет активной цели"];
-  const lines = [`Цель: ${statusLabel(state)} · ${formatDuration(state.usage.activeSeconds)}`];
+  if (!state.goal) return [say("Цель: нет активной цели", "Goal: no active goal")];
+  const lines = [say(`Цель: ${statusLabel(state)} · ${formatDuration(state.usage.activeSeconds)}`, `Goal: ${statusLabel(state)} · ${formatDuration(state.usage.activeSeconds)}`)];
   if (mode === "status") {
-    addOptional(lines, "Сейчас", state.currentStep);
-    addOptional(lines, "Дальше", state.nextStep);
+    addOptional(lines, say("Сейчас", "Now"), state.currentStep);
+    addOptional(lines, say("Дальше", "Next"), state.nextStep);
     return lines;
   }
   const work = state.workState;
   const agreement = state.goal.agreement;
   if (agreement) {
-    addOptional(lines, `Договорённость (ред. ${agreement.revision})`, agreement.ownerWants);
-    addOptional(lines, "Готово, когда", agreement.doneWhen);
+    addOptional(lines, say(`Договорённость (ред. ${agreement.revision})`, `Agreement (rev. ${agreement.revision})`), agreement.ownerWants);
+    addOptional(lines, say("Готово, когда", "Done when"), agreement.doneWhen);
     const unconfirmed = (state.goal.selfDecided ?? []).filter((item) => item.state === "unconfirmed");
     if (unconfirmed.length) {
-      lines.push("Решаю сам, не подтверждено:");
+      lines.push(say("Решаю сам, не подтверждено:", "Decided myself, not confirmed:"));
       unconfirmed.slice(0, 5).forEach((item, index) => lines.push(`  ${index + 1}. ${clean(item.text)}`));
-      if (unconfirmed.length > 5) lines.push(`  Ещё ${unconfirmed.length - 5} — в GOAL.md.`);
+      if (unconfirmed.length > 5) lines.push(say(`  Ещё ${unconfirmed.length - 5} — в GOAL.md.`, `  ${unconfirmed.length - 5} more in GOAL.md.`));
     }
   }
-  addOptional(lines, "Замысел", work?.outcome || state.goal.objective);
-  addOptional(lines, "Сейчас", work?.summary || state.currentStep);
+  addOptional(lines, say("Замысел", "Intent"), work?.outcome || state.goal.objective);
+  addOptional(lines, say("Сейчас", "Now"), work?.summary || state.currentStep);
   if (work) {
     const active = work.items.filter((item) => item.status === "active");
     const done = work.items.filter((item) => item.status === "done");
-    if (active.length) addOptional(lines, "В работе", active.slice(0, 2).map((item) => item.title).join("; "));
-    if (done.length) addOptional(lines, "Готово", done.slice(-2).map((item) => item.title).join("; "));
+    if (active.length) addOptional(lines, say("В работе", "In progress"), active.slice(0, 2).map((item) => item.title).join("; "));
+    if (done.length) addOptional(lines, say("Готово", "Done"), done.slice(-2).map((item) => item.title).join("; "));
     const remaining = work.items.filter((item) => item.status === "planned" || item.status === "blocked");
     if (remaining.length) {
-      lines.push("Предстоит:");
-      for (const item of remaining.slice(0, 5)) lines.push(`  • ${clean(item.title)}${item.status === "blocked" ? " — заблокировано" : ""}`);
-      if (remaining.length > 5) lines.push(`  Ещё ${remaining.length - 5} этапов — в сводке.`);
+      lines.push(say("Предстоит:", "Planned:"));
+      for (const item of remaining.slice(0, 5)) lines.push(`  • ${clean(item.title)}${item.status === "blocked" ? say(" — заблокировано", " — blocked") : ""}`);
+      if (remaining.length > 5) lines.push(say(`  Ещё ${remaining.length - 5} этапов — в сводке.`, `  ${remaining.length - 5} more stages in the summary.`));
     } else if (!active.length && state.lifecycle !== "complete") {
-      lines.push("Будущие этапы не отмечены; полноту результата ещё нужно проверить.");
+      lines.push(say("Будущие этапы не отмечены; полноту результата ещё нужно проверить.", "Future stages are not marked; the result still needs a completeness check."));
     }
-    if (state.workStateStale) lines.push("План: договорённость изменилась, сводку нужно сверить.");
+    if (state.workStateStale) lines.push(say("План: договорённость изменилась, сводку нужно сверить.", "Plan: the agreement changed, the summary needs reconciling."));
   } else {
-    lines.push("План ещё не записан; это не означает, что оставшейся работы нет.");
-    addOptional(lines, "Дальше", state.nextStep);
+    lines.push(say("План ещё не записан; это не означает, что оставшейся работы нет.", "No plan recorded yet; this does not mean no work remains."));
+    addOptional(lines, say("Дальше", "Next"), state.nextStep);
   }
-  addOptional(lines, "Проверка", state.latestUsefulVerification);
-  addOptional(lines, "Препятствие", state.blocker);
-  addOptional(lines, "Нужно решение", state.needUser);
-  if (state.continuationHeld) lines.push("Продолжение удерживается до решения пользователя.");
-  if (state.projection && !state.projection.fresh) lines.push("Сводка требует синхронизации.");
+  addOptional(lines, say("Проверка", "Verification"), state.latestUsefulVerification);
+  addOptional(lines, say("Препятствие", "Blocker"), state.blocker);
+  addOptional(lines, say("Нужно решение", "Decision needed"), state.needUser);
+  if (state.continuationHeld) lines.push(say("Продолжение удерживается до решения пользователя.", "Continuation is held until the user decides."));
+  if (state.projection && !state.projection.fresh) lines.push(say("Сводка требует синхронизации.", "The summary needs synchronization."));
   const document = state.artifactRefs.find((ref) => ref.artifact === "GOAL");
-  if (document) lines.push(`Подробности: \u001b]8;;${document.path}\u001b\\GOAL.md\u001b]8;;\u001b\\`);
+  if (document) lines.push(`${say("Подробности", "Details")}: \u001b]8;;${document.path}\u001b\\GOAL.md\u001b]8;;\u001b\\`);
   return lines;
 }
 

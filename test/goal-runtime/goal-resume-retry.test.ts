@@ -1,3 +1,4 @@
+import { setLanguage } from "../../src/language.js";
 import assert from "node:assert/strict";
 import { test, mock } from "node:test";
 import { createExpandedRuntimeHarness, emitPersistentAssistantError, assistantMessage, fireProviderLimitAutoResume } from "../support/runtime-harness.js";
@@ -349,6 +350,20 @@ for (const text of ["Продолжай", "continue", "resume", "Продолж�
     assert.equal(h.sentUserMessages.length, 0);
   });
 }
+
+test("в английском варианте точное слово continue возобновляет цель, а «продолжи» ждёт модель", async () => {
+  const h = await goal();
+  setLanguage("en");
+  try {
+    await h.runCommand("pause");
+    await h.emit("input", { type: "input", source: "interactive", text: "продолжи" });
+    assert.equal(h.snapshot().goal?.status, "paused");
+    await h.emit("input", { type: "input", source: "interactive", text: "Continue" });
+    assert.equal(h.snapshot().goal?.status, "active");
+  } finally {
+    setLanguage("ru");
+  }
+});
 
 test("repeated empty retry preserves a technical pause without scheduling a goal continuation", async () => {
   const h = await goal();

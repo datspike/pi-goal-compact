@@ -1,3 +1,4 @@
+import { language, say } from "../language.js";
 import { createHash } from "node:crypto";
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -20,7 +21,8 @@ import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEqui
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { goalContext } from "./goal-context.js";
 
-const ARTIFACT_LINK_LABELS = { GOAL: "Сводка" } as const;
+// managedRefs отдаёт только GOAL; прочие имена показываются как есть.
+const artifactLinkLabel = (artifact: string): string => artifact === "GOAL" ? say("Сводка", "Summary") : artifact;
 const STALE_PROJECTION = /no longer current|belongs to goal|stale after session replacement/i;
 
 /**
@@ -114,7 +116,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       const projected = projections.current();
       if (!projected || projected.goalId !== goal.goalId) return [];
       return artifacts.managedRefs(goal, { cwd: ctx.cwd, sessionManager: ctx.sessionManager }, ctx.sessionManager.getBranch())
-        .map((ref) => ({ label: ARTIFACT_LINK_LABELS[ref.artifact as keyof typeof ARTIFACT_LINK_LABELS], path: ref.path }));
+        .map((ref) => ({ label: artifactLinkLabel(ref.artifact), path: ref.path }));
     },
     setActivity: (next) => { activity = next; },
   });
@@ -316,11 +318,11 @@ export function createGoalSession(pi: ExtensionAPI) {
   };
 
   const amendmentIdFor = (key: string): string => `amendment-${createHash("sha256").update(key).digest("hex")}`;
-  const amendmentRemediation = "Поправка уже сохранена. Проверьте get_goal; при языковой диагностике вызовите load_goal_language_guide и исправьте указанный документ. Затем вызовите amend_goal только с amendment_id из ответа, без amendment.";
+  const amendmentRemediation = (): string => say("Поправка уже сохранена. Проверьте get_goal; при языковой диагностике вызовите load_goal_language_guide и исправьте указанный документ. Затем вызовите amend_goal только с amendment_id из ответа, без amendment.", "The amendment is already saved. Check get_goal; on a language diagnostic call load_goal_language_guide and repair the named document. Then call amend_goal with only the amendment_id from the response, without amendment.");
   const needsRepair = (outcome: AmendmentOutcome): boolean =>
     outcome.language.verdict === "repair_required" || outcome.state.languageRepair !== null || outcome.state.currentProjectionSeq !== outcome.state.stateSeq;
   const amendmentProjectionFailure = (goal: ThreadGoal, outcome: AmendmentOutcome, amendmentId: string): GoalResult => ({
-    ok: false, operation: "amend_goal", applied: true, stage: "projection", retryable: true, amendmentId, remediation: amendmentRemediation,
+    ok: false, operation: "amend_goal", applied: true, stage: "projection", retryable: true, amendmentId, remediation: amendmentRemediation(),
     message: `Goal amendment already applied; projection repair remains pending (artifact=${outcome.state.languageRepair?.artifact ?? "projection"}, currentCheck=${outcome.language.verdict}, stateSeq=${outcome.state.stateSeq}, currentProjectionSeq=${outcome.state.currentProjectionSeq}).`, goal,
   });
 
@@ -377,15 +379,15 @@ export function createGoalSession(pi: ExtensionAPI) {
           updated.language.verdict !== "repair_required" && updated.state.currentProjectionSeq === updated.state.stateSeq;
         if (needsRepair(updated) && !pendingDecision) return amendmentProjectionFailure(goal, updated, amendmentId);
         const decision = await projections.recordDecision(goal, {
-          title: "Изменение цели", decision: text, source: "approved-amendment",
-          rationale: "Изменение добавлено пользователем в договорённость о завершении цели.", createdAt: goal.updatedAt,
+          title: say("Изменение цели", "Goal change"), decision: text, source: "approved-amendment",
+          rationale: say("Изменение добавлено пользователем в договорённость о завершении цели.", "The user added this change to the goal completion contract."), createdAt: goal.updatedAt,
         }, goalContext(ctx), `amendment:${key}`);
         if (needsRepair(decision)) return amendmentProjectionFailure(goal, decision, amendmentId);
       } catch (error) {
         if (error instanceof GoalCanonicalWriteError) return { ...canonicalFailure("amend_goal", error, true), amendmentId,
           remediation: `${error.details.remediation} Once the saved contract is confirmed, repair with only amendment_id=${amendmentId}; never reword or resend the amendment.` };
         return { ok: false, operation: "amend_goal", applied: true, stage: "projection", retryable: true, amendmentId,
-          remediation: amendmentRemediation, message: `Goal amendment applied but projection retryable: ${error instanceof Error ? error.message : String(error)}`, goal };
+          remediation: amendmentRemediation(), message: `Goal amendment applied but projection retryable: ${error instanceof Error ? error.message : String(error)}`, goal };
       } finally {
         amendmentProjectionPending = false;
       }
@@ -644,12 +646,18 @@ export function createGoalSession(pi: ExtensionAPI) {
     if (!repair) return { active: false, message: "No language repair is pending." };
     return {
       active: true, artifact: repair.artifact, fields: repair.fields, findings: repair.findings, diagnostics: repair.diagnostics ?? [],
-      guide: [
+      guide: language() === "ru" ? [
         "Исправьте каждую diagnostic по code, field, length, limit и repair; не копируйте raw excerpt, которого здесь намеренно нет.",
         "Пишите связным русским техническим языком. Сохраняйте пути, команды, идентификаторы, ссылки и точные сообщения без изменений.",
         "Не смешивайте русский и английский в одном предложении, убирайте шаблонные фразы и служебные артефакты чат-бота.",
         "Сохраняйте Markdown headings, lists и fenced code blocks; одна независимая мысль должна занимать один абзац или один пункт списка.",
         "Если запрос ещё не применён, исправьте его и повторите. Если данные уже сохранены, прочитайте текущее состояние и восстановите их по возвращённому идентификатору; не создавайте повторную заметку или поправку. Проверьте, что диагностика исчезла.",
+      ] : [
+        "Fix every diagnostic by code, field, length, limit and repair; do not copy the raw excerpt, which is intentionally omitted here.",
+        "Write coherent technical English. Keep paths, commands, identifiers, links and exact messages unchanged.",
+        "Remove boilerplate phrases and chatbot service artifacts.",
+        "Keep Markdown headings, lists and fenced code blocks; one independent thought per paragraph or list item.",
+        "If the request was not applied yet, fix it and retry. If the data is already saved, read the current state and repair it by the returned identifier; do not create a duplicate note or amendment. Check that the diagnostic is gone.",
       ],
     };
   };

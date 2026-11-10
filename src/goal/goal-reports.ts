@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -679,24 +680,24 @@ export function formatGoalProgressReport(entry: GoalReportEntry, expanded: boole
     // internal field dump into the main transcript by default.
     const report = entry.report;
     const narrative = report.summary?.trim() ||
-      (report.status === "awaiting_user" ? report.needUser?.trim() || "Требуется решение пользователя." : undefined) ||
+      (report.status === "awaiting_user" ? report.needUser?.trim() || say("Требуется решение пользователя.", "A user decision is required.") : undefined) ||
       report.completed?.trim() || report.changed?.trim() || report.problemOrDecision?.trim() ||
       report.verification?.trim() || report.phase.trim();
     return [stripGoalTerminalControls(narrative)];
   }
   const eventKind = normalizedGoalProgressEventKind(entry.report);
   const lines = [
-    `Событие цели · ${goalProgressEventLabel(eventKind)} · ${entry.report.status} · ${entry.report.phase.trim()}`,
-    reportLine("Изменения", entry.report.changed),
-    reportLine("Готово", entry.report.completed),
-    reportLine("Решение или проблема", entry.report.problemOrDecision),
-    reportLine("Риск и сложность", entry.report.riskAndComplexity),
-    reportLine("Проверка", entry.report.verification),
-    reportLine("Следующий шаг", entry.report.nextStep),
-    reportLine("Нужен пользователь", entry.report.needUser),
+    say(`Событие цели · ${goalProgressEventLabel(eventKind)} · ${entry.report.status} · ${entry.report.phase.trim()}`, `Goal event · ${goalProgressEventLabel(eventKind)} · ${entry.report.status} · ${entry.report.phase.trim()}`),
+    reportLine(say("Изменения", "Changes"), entry.report.changed),
+    reportLine(say("Готово", "Done"), entry.report.completed),
+    reportLine(say("Решение или проблема", "Decision or problem"), entry.report.problemOrDecision),
+    reportLine(say("Риск и сложность", "Risk and complexity"), entry.report.riskAndComplexity),
+    reportLine(say("Проверка", "Verification"), entry.report.verification),
+    reportLine(say("Следующий шаг", "Next step"), entry.report.nextStep),
+    reportLine(say("Нужен пользователь", "User needed"), entry.report.needUser),
   ].filter((line): line is string => line !== null);
   if (entry.artifactRefs?.length) {
-    lines.push("Артефакты:");
+    lines.push(say("Артефакты:", "Artifacts:"));
     for (const ref of entry.artifactRefs) {
       lines.push(`  · ${ref.artifact} r${ref.revision}`);
       lines.push(`${ARTIFACT_PATH_INDENT}${artifactFilePath(ref.path)}`);
@@ -704,7 +705,7 @@ export function formatGoalProgressReport(entry: GoalReportEntry, expanded: boole
   }
   if (expanded) {
     lines.push(
-      `Технические данные: reportId=${entry.reportId}, goalId=${entry.goalId}, trigger=${entry.triggerReason}, turn=${entry.turnIndex ?? "—"}, activeSeconds=${entry.activeSeconds}, tokensUsed=${entry.tokensUsed}, createdAt=${new Date(entry.createdAt).toISOString()}`,
+      `${say("Технические данные", "Technical data")}: reportId=${entry.reportId}, goalId=${entry.goalId}, trigger=${entry.triggerReason}, turn=${entry.turnIndex ?? "—"}, activeSeconds=${entry.activeSeconds}, tokensUsed=${entry.tokensUsed}, createdAt=${new Date(entry.createdAt).toISOString()}`,
     );
   }
   return lines;

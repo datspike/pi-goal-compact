@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { BeforeAgentStartEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { registerGoalCommand } from "../goal/commands.js";
@@ -47,13 +48,13 @@ function registerEntryRenderers(pi: ExtensionAPI): void {
     [GOAL_PROJECTION_ENTRY_TYPE]: (entry) => {
       if (!isGoalProjectionEvent(entry.data)) return undefined;
       switch (entry.data.kind) {
-        case "goal_created": return createGoalProgressEntryComponent([`★ Цель создана: ${entry.data.goal.objective}`]);
-        case "goal_completed": return createGoalProgressEntryComponent([`✓ Цель завершена: ${entry.data.goal.objective}`]);
+        case "goal_created": return createGoalProgressEntryComponent([say(`★ Цель создана: ${entry.data.goal.objective}`, `★ Goal created: ${entry.data.goal.objective}`)]);
+        case "goal_completed": return createGoalProgressEntryComponent([say(`✓ Цель завершена: ${entry.data.goal.objective}`, `✓ Goal completed: ${entry.data.goal.objective}`)]);
         case "progress_reported": {
           const summary = entry.data.report.summary?.trim();
           return summary ? createGoalProgressEntryComponent(summary.split("\n")) : undefined;
         }
-        case "decision_recorded": return createGoalProgressEntryComponent([`◆ Решение: ${entry.data.entry.title}`, entry.data.entry.decision]);
+        case "decision_recorded": return createGoalProgressEntryComponent([say(`◆ Решение: ${entry.data.entry.title}`, `◆ Decision: ${entry.data.entry.title}`), entry.data.entry.decision]);
         default: return undefined;
       }
     },
@@ -120,7 +121,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
 
   const refreshToolActivity = (): void => {
     const name = [...activeToolCalls.values()].at(-1);
-    session.status.setActivity(name ? { label: `инструмент: ${name}` } : null);
+    session.status.setActivity(name ? { label: say(`инструмент: ${name}`, `tool: ${name}`) } : null);
   };
   const resetRun = (): void => {
     session.markRun(false);
@@ -146,8 +147,9 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     }
     session.noteInput(event.text, event.source === "extension");
     if (event.source !== "extension") session.status.refreshUi(ctx);
-    // Одно слово «продолжи» — явное разрешение возобновить цель на паузе (Ц06).
-    if (event.source !== "extension" && /^продолжи$/i.test(event.text.trim()) && session.getGoal()?.status === "paused") {
+    // Одно слово «продолжи» (в английском варианте — «continue») — явное разрешение возобновить цель на паузе (Ц06).
+    // Другие формы, в том числе слово чужого языка, остаются на толкование модели через resume_goal.
+    if (event.source !== "extension" && event.text.trim().toLowerCase() === say("продолжи", "continue") && session.getGoal()?.status === "paused") {
       const resumed = await session.resumeGoal(ctx);
       if (!resumed.ok && ctx.hasUI) ctx.ui.notify(resumed.message, "warning");
     }
@@ -198,7 +200,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     agentEndHandled = false;
     activeToolCalls.clear();
     session.accounting.beginAccounting();
-    session.status.setActivity({ label: "модель формирует ответ" });
+    session.status.setActivity({ label: say("модель формирует ответ", "model is responding") });
     session.status.refreshUi(ctx);
   });
 
@@ -212,7 +214,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   pi.on("tool_execution_end", async (event, ctx) => {
     if (session.runIsForeign()) return;
     activeToolCalls.delete(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`);
-    if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? `ошибка инструмента: ${event.toolName}` : `завершён инструмент: ${event.toolName}` });
+    if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? say(`ошибка инструмента: ${event.toolName}`, `tool error: ${event.toolName}`) : say(`завершён инструмент: ${event.toolName}`, `tool finished: ${event.toolName}`) });
     else refreshToolActivity();
     session.status.refreshUi(ctx);
     session.accounting.accountProgress(ctx, !session.isContinuationHeld(), 0, true);

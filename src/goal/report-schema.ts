@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 /**
  * Схема отчёта о ходе цели: виды событий, пределы полей и проверка.
  * Отдельный лист, чтобы документ цели и журнал отчётов не зависели друг от друга.
@@ -90,15 +91,15 @@ export function normalizedGoalProgressEventKind(report: GoalProgressReport): Goa
 
 export function goalProgressEventLabel(kind: GoalProgressEventKind): string {
   switch (kind) {
-    case "goal_started": return "Старт цели";
-    case "phase_changed": return "Смена фазы";
+    case "goal_started": return say("Старт цели", "Goal started");
+    case "phase_changed": return say("Смена фазы", "Phase changed");
     case "progress_checkpoint": return "Checkpoint";
-    case "verification": return "Проверка";
-    case "blocker_opened": return "Блокер открыт";
-    case "blocker_resolved": return "Блокер снят";
-    case "decision_recorded": return "Решение";
-    case "artifact_updated": return "Артефакт обновлён";
-    case "goal_completed": return "Цель завершена";
+    case "verification": return say("Проверка", "Verification");
+    case "blocker_opened": return say("Блокер открыт", "Blocker opened");
+    case "blocker_resolved": return say("Блокер снят", "Blocker resolved");
+    case "decision_recorded": return say("Решение", "Decision");
+    case "artifact_updated": return say("Артефакт обновлён", "Artifact updated");
+    case "goal_completed": return say("Цель завершена", "Goal completed");
   }
 }
 

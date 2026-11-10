@@ -17,11 +17,11 @@ import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
 import type { Tickets } from "./tickets.js";
-import { sayFor } from "../language.js";
+import { say, sayFor } from "../language.js";
 import { notice } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
 
-const WORKING_STANDARD = "Compact: стандартная сводка";
+const workingStandard = (): string => say("Compact: стандартная сводка", "Compact: standard summary");
 const MODES: readonly ContextMode[] = ["economy", "long-once", "long-chat", "off"];
 
 type ContextCompletion = { value: string; label: string; description: string };
@@ -88,7 +88,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const summarize = async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
 		const generation = ++summarySequence;
 		const started = Date.now();
-		stage.beginCompaction(ctx, WORKING_STANDARD);
+		stage.beginCompaction(ctx, workingStandard());
 		try {
 			const model = ctx.model ? { ...ctx.model, contextWindow: window.capability(ctx).window } : undefined;
 			const compact = await summarizeCompaction(event, ctx, {

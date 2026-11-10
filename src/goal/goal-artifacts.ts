@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, chmod, writeFile, unlink, realpath, open } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -203,7 +204,7 @@ export function createGoalArtifacts(pi: ArtifactDeps) {
     await ensureSafeDirectory(ctx.cwd, goal.goalId);
     await assertSafeArtifactFile(path);
     const releaseLock = await acquireArtifactLock(ctx.cwd, goal.goalId);
-    const content = `# Цель\n\n${goal.objective}\n`;
+    const content = `${say("# Цель", "# Goal")}\n\n${goal.objective}\n`;
     try {
       const previousContent = await readFile(path).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;

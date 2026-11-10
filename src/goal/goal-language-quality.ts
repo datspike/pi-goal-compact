@@ -1,3 +1,4 @@
+import { language } from "../language.js";
 /** Shared by prose validation and model-facing descriptions. */
 export const MAX_GOAL_PROSE_PARAGRAPH_CHARS = 700;
 
@@ -111,8 +112,37 @@ const DIAGNOSTIC_REPAIRS: Readonly<Record<string, string>> = {
   "ai-cluster": "Замените кластер шаблонной лексики конкретными фактами и проверками.",
 };
 
+/** Английские тексты замечаний, которые возможны в английском варианте; ключ — русский текст. */
+export const ENGLISH_FINDING_MESSAGES: Readonly<Record<string, string>> = {
+  "артефакт цитирования чат-бота": "chatbot citation artifact",
+  "служебная метка чат-бота": "chatbot service marker",
+  "хвост ссылки чат-бота": "chatbot link tracking tail",
+  "служебный знак в обычной прозе": "service symbol in ordinary prose",
+  "текст представляет собой слишком длинную строку без структуры": "the text is one overly long line without structure",
+  "абзац слишком длинный; разделите независимые мысли": "the paragraph is too long; split independent thoughts",
+  "незакрытый fenced code block скрывает остаток Markdown-текста": "an unclosed fenced code block hides the rest of the Markdown text",
+};
+
+const localized = (message: string): string => (language() === "en" ? ENGLISH_FINDING_MESSAGES[message] : undefined) ?? message;
+
+const ENGLISH_DIAGNOSTIC_REPAIRS: Readonly<Record<string, string>> = {
+  "chatbot-citation": "Remove the chatbot citation marker.",
+  "chatbot-turn-marker": "Remove the chatbot service marker.",
+  "chatbot-utm": "Remove the tracking tail of the link.",
+  "chatbot-closing": "Replace the boilerplate closing with a concrete fact.",
+  "prose-symbol": "Replace the service symbol with ordinary punctuation or protect the exact literal as code.",
+  "one-line-dump": "Split the text into short paragraphs or a list; one independent thought per block.",
+  "long-paragraph": "Split the paragraph into independent thoughts or turn them into separate list items.",
+  "unclosed-code-fence": "Close the fenced code block with the same character and at least the same fence length.",
+};
+
 export function diagnosticRepairForCode(code: string): string | null {
-  return DIAGNOSTIC_REPAIRS[code] ?? null;
+  return (language() === "en" ? ENGLISH_DIAGNOSTIC_REPAIRS[code] : DIAGNOSTIC_REPAIRS[code]) ?? null;
+}
+
+/** Журнал хранит текст исправления на языке записи; после смены языка он остаётся допустимым. */
+export function isKnownDiagnosticRepair(code: string, repair: unknown): boolean {
+  return typeof repair === "string" && (repair === DIAGNOSTIC_REPAIRS[code] || repair === ENGLISH_DIAGNOSTIC_REPAIRS[code]);
 }
 
 function emptyFacts(): ProtectedFacts {
@@ -249,7 +279,7 @@ function excerpt(text: string, index: number): string {
 }
 
 function finding(code: string, severity: FindingSeverity, message: string, text: string, match: RegExpMatchArray | null): LanguageFinding {
-  return { code, severity, message, ...(match?.index === undefined ? {} : { excerpt: excerpt(text, match.index) }) };
+  return { code, severity, message: localized(message), ...(match?.index === undefined ? {} : { excerpt: excerpt(text, match.index) }) };
 }
 
 function addPatternFindings(findings: LanguageFinding[], text: string, patterns: Array<[string, RegExp, string]>, severity: FindingSeverity): void {
@@ -351,10 +381,10 @@ function detectLength(text: string, findings: LanguageFinding[]): void {
     findings.push({
       code: "one-line-dump",
       severity: "error",
-      message: "текст представляет собой слишком длинную строку без структуры",
+      message: localized("текст представляет собой слишком длинную строку без структуры"),
       length: plain.length,
       limit: 320,
-      repair: "Разбейте текст на короткие абзацы или список; одна независимая мысль должна занимать один блок.",
+      repair: diagnosticRepairForCode("one-line-dump")!,
     });
   }
   for (const paragraph of plain.split(/\n\s*\n/).map((value) => value.trim()).filter(Boolean)) {
@@ -362,10 +392,10 @@ function detectLength(text: string, findings: LanguageFinding[]): void {
       findings.push({
         code: "long-paragraph",
         severity: "error",
-        message: "абзац слишком длинный; разделите независимые мысли",
+        message: localized("абзац слишком длинный; разделите независимые мысли"),
         length: paragraph.length,
         limit: MAX_GOAL_PROSE_PARAGRAPH_CHARS,
-        repair: "Разделите абзац на несколько независимых мыслей или оформите их отдельными пунктами списка.",
+        repair: diagnosticRepairForCode("long-paragraph")!,
       });
     }
   }
@@ -403,16 +433,21 @@ export function lintGoalMarkdown(text: string, options: GoalLanguageOptions = {}
   const proseResult = proseText(visible);
   const prose = proseResult.text;
   if (proseResult.unclosedFence) {
-    findings.push({ code: "unclosed-code-fence", severity: "error", message: "незакрытый fenced code block скрывает остаток Markdown-текста" });
+    findings.push({ code: "unclosed-code-fence", severity: "error", message: localized("незакрытый fenced code block скрывает остаток Markdown-текста") });
   }
-  addPatternFindings(findings, prose, ARTIFACT_PATTERNS, "error");
-  addPatternFindings(findings, prose, HARD_PATTERNS, "error");
-  addPatternFindings(findings, prose, STYLE_PATTERNS, "warning");
-  addPatternFindings(findings, prose, AI_LEXICON, "warning");
-  detectLanguageMix(prose, new Set([...DEFAULT_TECHNICAL_ALLOWLIST, ...(options.technicalAllowlist ?? [])].map((value) => value.toLowerCase())), findings);
+  // Русские правила (смешение языков, шаблонная лексика, обороты) в английском варианте не действуют:
+  // английская проза там и есть нужный язык. Общие правила структуры и следов чат-бота остаются.
+  const russian = language() === "ru";
+  addPatternFindings(findings, prose, russian ? ARTIFACT_PATTERNS : ARTIFACT_PATTERNS.filter(([code]) => code !== "chatbot-closing"), "error");
+  addPatternFindings(findings, prose, russian ? HARD_PATTERNS : HARD_PATTERNS.filter(([code]) => code === "prose-symbol"), "error");
+  if (russian) {
+    addPatternFindings(findings, prose, STYLE_PATTERNS, "warning");
+    addPatternFindings(findings, prose, AI_LEXICON, "warning");
+    detectLanguageMix(prose, new Set([...DEFAULT_TECHNICAL_ALLOWLIST, ...(options.technicalAllowlist ?? [])].map((value) => value.toLowerCase())), findings);
+  }
   detectLength(prose, findings);
 
-  const aiFamilies = countAiFamilies(visible);
+  const aiFamilies = russian ? countAiFamilies(visible) : 0;
   if (aiFamilies >= 3) findings.push({ code: "ai-cluster", severity: "error", message: `обнаружен кластер из ${aiFamilies} семейств шаблонной лексики` });
   const errors = findings.filter((item) => item.severity === "error");
   const warnings = findings.filter((item) => item.severity === "warning");

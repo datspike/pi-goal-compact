@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { CustomMessageEntryDraft, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { CoreEffect, GoalGate } from "../core/model.js";
@@ -74,7 +75,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     pi.sendMessage(
       {
         customType: CUSTOM_ENTRY_TYPE,
-        content: `Скрытые продолжения цели остановлены: ${count} подряд без сообщения пользователя. Цель ждёт ответа пользователя: продолжить, сузить задачу или остановиться.`,
+        content: say(`Скрытые продолжения цели остановлены: ${count} подряд без сообщения пользователя. Цель ждёт ответа пользователя: продолжить, сузить задачу или остановиться.`, `Hidden goal continuations stopped: ${count} in a row without a user message. The goal waits for the user to continue, narrow the task or stop.`),
         display: true,
         details: { kind: "continuation_limit", goalId: goal.goalId, count },
       },
@@ -326,7 +327,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
       const goal = session.getGoal();
       if (!goal) return;
       countHidden(goal);
-      if (!tickets.send(effect, continuationText(goal)) && ctx.hasUI) ctx.ui.notify("Не удалось поставить продолжение цели", "error");
+      if (!tickets.send(effect, continuationText(goal)) && ctx.hasUI) ctx.ui.notify(say("Не удалось поставить продолжение цели", "Could not queue the goal continuation"), "error");
     },
   };
 }

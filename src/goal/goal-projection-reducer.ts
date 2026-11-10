@@ -1,5 +1,5 @@
 import { cloneGoalWorkState, isGoalWorkState, type GoalWorkState } from "./goal-work-state.js";
-import { diagnosticRepairForCode } from "./goal-language-quality.js";
+import { ENGLISH_FINDING_MESSAGES, isKnownDiagnosticRepair } from "./goal-language-quality.js";
 import { isGoalProgressEventKind, normalizedGoalProgressEventKind, validateGoalProgressReport, validateNewGoalProgressReport, type GoalProgressReport } from "./report-schema.js";
 import {
   cloneGoalProjectionState,
@@ -103,6 +103,7 @@ const SAFE_FINDINGS = new Set([
   "текст представляет собой слишком длинную строку без структуры",
   "абзац слишком длинный; разделите независимые мысли",
   "незакрытый fenced code block скрывает остаток Markdown-текста",
+  ...Object.values(ENGLISH_FINDING_MESSAGES),
 ]);
 
 function isSafeFinding(value: unknown): value is string {
@@ -113,8 +114,7 @@ function isLanguageDiagnostic(value: unknown, artifact: GoalProjectionLanguageRe
   if (!isRecord(value)) return false;
   const allowedKeys = new Set(["artifact", "code", "field", "length", "limit", "repair"]);
   if (!Object.keys(value).every((key) => allowedKeys.has(key)) || value.artifact !== artifact || typeof value.code !== "string") return false;
-  const repair = diagnosticRepairForCode(value.code);
-  if (repair === null || value.repair !== repair) return false;
+  if (!isKnownDiagnosticRepair(value.code, value.repair)) return false;
   if (value.field !== null && (typeof value.field !== "string" || !DIAGNOSTIC_FIELDS[artifact].has(value.field))) return false;
   if (value.code === "one-line-dump" || value.code === "long-paragraph") {
     const expectedLimit = value.code === "one-line-dump" ? 320 : 700;

@@ -1,3 +1,4 @@
+import { language, say } from "../language.js";
 import type { GoalHistoryPage, GoalHistoryQuery } from "./goal-projections.js";
 import { stringEnum } from "./string-enum.js";
 import type { AgentToolResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -16,7 +17,8 @@ import type { GoalPaperCutUpdate } from "./goal-projections.js";
 import { isGoalWorkState, type GoalWorkState, type GoalWorkUpdateResult } from "./goal-work-state.js";
 import { type GoalArtifactRef, type GoalEntrySource, type GoalResult, type ThreadGoal } from "./types.js";
 
-const GOAL_PROSE_DESCRIPTION = `Write Russian prose in paragraphs of at most ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} characters. Keep exact commands, paths, error messages, identifiers and status values unchanged in inline or fenced code.`;
+// Функция, а не константа: язык задаётся при загрузке расширения, после импорта модулей.
+const goalProseDescription = (): string => `Write ${language() === "ru" ? "Russian" : "English"} prose in paragraphs of at most ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} characters. Keep exact commands, paths, error messages, identifiers and status values unchanged in inline or fenced code.`;
 
 const EmptyParams = Type.Object({});
 const GetGoalParams = Type.Object({
@@ -304,7 +306,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   pi.registerTool({
     name: "update_goal_work",
     label: "Update Goal Work",
-    description: `After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal. ${GOAL_PROSE_DESCRIPTION}`,
+    description: `After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal. ${goalProseDescription()}`,
     promptSnippet: "Replace the whole-task plan after a material change; preserve unfinished obligations.",
     promptGuidelines: goalToolGuidelines("update_goal_work"),
     parameters: GoalWorkParams,
@@ -363,7 +365,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   pi.registerTool({
     name: "record_goal_note",
     label: "Record Goal Note",
-    description: `Record a durable decision or deferred risk. Default action=record requires title and kind-specific fields. action=update closes a paper_cut by note_id with expected_revision, status and resolution; it does not approve scope changes. action=repair rebuilds the document for an existing note by kind and note_id without appending another note. Read IDs and note revisions via get_goal(view=full). ${GOAL_PROSE_DESCRIPTION}`,
+    description: `Record a durable decision or deferred risk. Default action=record requires title and kind-specific fields. action=update closes a paper_cut by note_id with expected_revision, status and resolution; it does not approve scope changes. action=repair rebuilds the document for an existing note by kind and note_id without appending another note. Read IDs and note revisions via get_goal(view=full). ${goalProseDescription()}`,
     promptSnippet: "Record a decision or risk, close a paper cut, or repair an already saved note by ID.",
     promptGuidelines: goalToolGuidelines("record_goal_note"),
     parameters: RecordGoalNoteParams,
@@ -437,7 +439,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   pi.registerTool({
     name: "report_goal_progress",
     label: "Report Goal Progress",
-    description: `Publish a user-facing result delta, not internal activity. Publish needs status, phase, summary, nextStep and its status-specific delta; suppress takes only action. If one item is blocked but other safe work remains, report working. Separate independent facts with blank lines. ${GOAL_PROSE_DESCRIPTION}`,
+    description: `Publish a user-facing result delta, not internal activity. Publish needs status, phase, summary, nextStep and its status-specific delta; suppress takes only action. If one item is blocked but other safe work remains, report working. Separate independent facts with blank lines. ${goalProseDescription()}`,
     promptSnippet: "Report a meaningful result change, or suppress a due reminder with action only.",
     promptGuidelines: goalToolGuidelines("report_goal_progress"),
     parameters: ProgressReportParams,
@@ -486,7 +488,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       };
       // При закрытии владелец видит, что агент решил сам без его слова (Т6.4).
       const unconfirmed = unconfirmedSelfDecided(result.goal);
-      const text = JSON.stringify(response, null, 2) + (unconfirmed.length > 0 ? `\n\nНе подтверждено владельцем:\n${renderSelfDecided(unconfirmed)}` : "");
+      const text = JSON.stringify(response, null, 2) + (unconfirmed.length > 0 ? `\n\n${say("Не подтверждено владельцем:", "Not confirmed by the owner:")}\n${renderSelfDecided(unconfirmed)}` : "");
       return { content: [{ type: "text", text }], details: { ...response, ...(unconfirmed.length > 0 ? { unconfirmedSelfDecided: unconfirmed } : {}), error: null } };
     },
   });

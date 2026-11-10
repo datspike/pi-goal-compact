@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
 
 import { RECORD } from "../records.js";
@@ -85,7 +86,7 @@ export function assembleWindow(messages: readonly AgentMessage[], input: WindowI
   } else if (!goal && input.features.ownerRepliesWithoutGoal) {
     const replies = lastOwnerReplies(input.ownerReplies);
     if (replies.length > 0) {
-      const content = ["## Последние реплики владельца дословно", ...replies.map((reply) => `> ${reply.replace(/\n/g, "\n> ")}`)].join("\n\n");
+      const content = [say("## Последние реплики владельца дословно", "## Latest owner replies verbatim"), ...replies.map((reply) => `> ${reply.replace(/\n/g, "\n> ")}`)].join("\n\n");
       after.push({ role: "custom", customType: RECORD.ownerReplies, content, display: false, timestamp: summary.timestamp });
     }
   }

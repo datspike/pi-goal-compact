@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import { createHash } from "node:crypto";
 
 /**
@@ -34,17 +35,18 @@ export const MAX_AGREEMENT_CHARS = 2000;
 export const MAX_SELF_DECIDED_ITEM_CHARS = 600;
 export const MAX_SELF_DECIDED_ITEMS = 30;
 
-const KIND_LABEL: Record<SelfDecidedKind, string> = {
-  assumption: "допущение",
-  deferred_by_owner: "отложено тобой",
-  proposal: "моё предложение",
-};
+// Функции, а не таблицы: язык задаётся при загрузке расширения, после импорта модулей.
+const kindLabel = (kind: SelfDecidedKind): string => ({
+  assumption: say("допущение", "assumption"),
+  deferred_by_owner: say("отложено тобой", "deferred by you"),
+  proposal: say("моё предложение", "my proposal"),
+})[kind];
 
-const STATE_LABEL: Record<SelfDecidedState, string> = {
-  unconfirmed: "не подтверждено",
-  confirmed: "подтверждено владельцем",
-  rejected: "отклонено владельцем",
-};
+const stateLabel = (state: SelfDecidedState): string => ({
+  unconfirmed: say("не подтверждено", "not confirmed"),
+  confirmed: say("подтверждено владельцем", "confirmed by the owner"),
+  rejected: say("отклонено владельцем", "rejected by the owner"),
+})[state];
 
 const chars = (text: string): number => [...text].length;
 
@@ -82,10 +84,10 @@ export function isSelfDecidedItem(value: unknown): value is SelfDecidedItem {
 
 /** Нумерованный список «Решаю сам», который видят и владелец, и модель (Т4.3). */
 export function renderSelfDecided(items: readonly SelfDecidedItem[]): string {
-  if (items.length === 0) return "Пунктов нет.";
+  if (items.length === 0) return say("Пунктов нет.", "No items.");
   return items.map((item, index) => {
-    const state = item.state === "unconfirmed" ? "" : ` — ${STATE_LABEL[item.state]}`;
-    return `${index + 1}. [${KIND_LABEL[item.kind]}${state}] ${item.text} (${item.id})`;
+    const state = item.state === "unconfirmed" ? "" : ` — ${stateLabel(item.state)}`;
+    return `${index + 1}. [${kindLabel(item.kind)}${state}] ${item.text} (${item.id})`;
   }).join("\n");
 }
 
@@ -100,14 +102,14 @@ export interface AgreementSource {
  * У цели, созданной прежней парой расширений, договорённости нет: вместо неё идёт прежний договор (Т10.3).
  */
 export function renderAgreement(goal: AgreementSource): string {
-  if (!goal.agreement) return `## Договорённость\n\nДоговорённость не записана; действует договор цели:\n\n${goal.objective}`;
+  if (!goal.agreement) return say(`## Договорённость\n\nДоговорённость не записана; действует договор цели:\n\n${goal.objective}`, `## Agreement\n\nNo agreement is recorded; the goal contract applies:\n\n${goal.objective}`);
   return [
-    `## Договорённость (редакция ${goal.agreement.revision})`,
-    "### Чего хочет владелец",
+    say(`## Договорённость (редакция ${goal.agreement.revision})`, `## Agreement (revision ${goal.agreement.revision})`),
+    say("### Чего хочет владелец", "### What the owner wants"),
     goal.agreement.ownerWants,
-    "### Решаю сам — владелец не подтверждал",
+    say("### Решаю сам — владелец не подтверждал", "### Decided myself — not confirmed by the owner"),
     renderSelfDecided(goal.selfDecided ?? []),
-    "### Готово, когда",
+    say("### Готово, когда", "### Done when"),
     goal.agreement.doneWhen,
   ].join("\n\n");
 }
@@ -130,10 +132,10 @@ export function completionFingerprint(goal: AgreementSource, planRevision: numbe
 export function completionReturnMessage(goal: AgreementSource): string {
   const unconfirmed = unconfirmedSelfDecided(goal);
   return [
-    "Цель ещё не закрыта: сначала сверь работу с договорённостью.",
+    say("Цель ещё не закрыта: сначала сверь работу с договорённостью.", "The goal is not closed yet: first check the work against the agreement."),
     renderAgreement(goal),
-    "По каждому пункту «Готово, когда» назови доказательство. Назови, что из «Чего хочет владелец» не сделано; если что-то не сделано, продолжай работу.",
-    unconfirmed.length > 0 ? `Владелец не подтверждал ${unconfirmed.length} пункт(ов) «Решаю сам»; при закрытии он увидит их список.` : "",
-    "Если всё сделано, вызови update_goal(complete) ещё раз, не меняя договорённость и план.",
+    say("По каждому пункту «Готово, когда» назови доказательство. Назови, что из «Чего хочет владелец» не сделано; если что-то не сделано, продолжай работу.", "Name the evidence for each point of \"Done when\". Name what from \"What the owner wants\" is not done; if anything is not done, keep working."),
+    unconfirmed.length > 0 ? say(`Владелец не подтверждал ${unconfirmed.length} пункт(ов) «Решаю сам»; при закрытии он увидит их список.`, `The owner has not confirmed ${unconfirmed.length} \"Decided myself\" item(s); they will see the list at completion.`) : "",
+    say("Если всё сделано, вызови update_goal(complete) ещё раз, не меняя договорённость и план.", "If everything is done, call update_goal(complete) again without changing the agreement or the plan."),
   ].filter(Boolean).join("\n\n");
 }

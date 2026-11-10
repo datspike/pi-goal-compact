@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { STATUS_KEY } from "../records.js";
@@ -42,7 +43,7 @@ function compactSemanticText(value: string | undefined): string | null {
   return [...compact].length <= 160 ? compact : `${[...compact].slice(0, 157).join("").trimEnd()}…`;
 }
 
-const CURRENT_ACTION_FALLBACK = "Работаю над целью";
+const currentActionFallback = (): string => say("Работаю над целью", "Working on the goal");
 
 function completedActionText(item: GoalProgressHistoryEntry): string | null {
   return compactSemanticText(item.report.completed)
@@ -56,8 +57,8 @@ function currentActionText(item: GoalProgressHistoryEntry): string {
   const rawPhase = item.report.phase?.trim();
   const phase = compactSemanticText(item.report.phase);
   if (phase) return phase;
-  if (rawPhase) return CURRENT_ACTION_FALLBACK;
-  return compactSemanticText(item.report.problemOrDecision) ?? CURRENT_ACTION_FALLBACK;
+  if (rawPhase) return currentActionFallback();
+  return compactSemanticText(item.report.problemOrDecision) ?? currentActionFallback();
 }
 
 /** Kept as a pure formatter for non-TUI integrations and replay tests. */
@@ -67,12 +68,12 @@ export function formatGoalProgressWidget(goal: ThreadGoal, reportState: GoalRepo
   // blocked тоже держит продолжение, но в заголовке остаётся блокером, а не вопросом пользователю.
   const progress = progressOverride ?? (reportState.awaitingUser && !reportState.hasUserDecisionSinceAwaiting && (reportState.requiresUserDecision ?? reportStatus !== "blocked")
     ? "awaiting_user" : reportStatus);
-  const heading = goal.status === "complete" ? "✓ Завершена"
-    : goal.status === "paused" ? "На паузе"
-    : goal.status === "budgetLimited" ? "Лимит бюджета"
-    : progress === "awaiting_user" && !reportState.hasUserDecisionSinceAwaiting ? "Жду ответа"
-    : progress === "blocked" ? "Заблокировано"
-    : progress === "verifying" ? "Проверяю" : "Работаю";
+  const heading = goal.status === "complete" ? say("✓ Завершена", "✓ Complete")
+    : goal.status === "paused" ? say("На паузе", "Paused")
+    : goal.status === "budgetLimited" ? say("Лимит бюджета", "Budget limit")
+    : progress === "awaiting_user" && !reportState.hasUserDecisionSinceAwaiting ? say("Жду ответа", "Waiting for reply")
+    : progress === "blocked" ? say("Заблокировано", "Blocked")
+    : progress === "verifying" ? say("Проверяю", "Verifying") : say("Работаю", "Working");
   const lines = [`${heading} · ${formatDuration(goal.usage.activeSeconds)}`];
   if (goal.status !== "active") {
     return [...lines, ...reportState.recentReports
@@ -81,7 +82,7 @@ export function formatGoalProgressWidget(goal: ThreadGoal, reportState: GoalRepo
       .slice(-2)
       .map((text) => `✓ ${text}`)];
   }
-  if (!current) return [...lines, "→ Работаю над целью"];
+  if (!current) return [...lines, say("→ Работаю над целью", "→ Working on the goal")];
   const completed = reportState.recentReports
     .slice(0, -1)
     .map((item) => completedActionText(item))
@@ -106,12 +107,12 @@ function formatLiveStatus(deps: GoalRuntimeStatusDeps, resumedBlocker: boolean):
   const reportState = deps.getReportState();
   const reportStatus = (reportState.lastReport ?? reportState.recentReports.at(-1)?.report)?.status;
   const attention = deps.getRecoveryAttention();
-  const heading = goal.status === "complete" ? "✓ Завершена"
-    : goal.status === "paused" ? "На паузе"
-    : goal.status === "budgetLimited" ? "Лимит бюджета"
-    : reportState.awaitingUser && !reportState.hasUserDecisionSinceAwaiting && (reportState.requiresUserDecision ?? reportStatus !== "blocked") ? "Жду ответа"
-    : attention || (reportStatus === "blocked" && !resumedBlocker) ? "Заблокировано"
-    : reportStatus === "verifying" ? "Проверяю" : "Работаю";
+  const heading = goal.status === "complete" ? say("✓ Завершена", "✓ Complete")
+    : goal.status === "paused" ? say("На паузе", "Paused")
+    : goal.status === "budgetLimited" ? say("Лимит бюджета", "Budget limit")
+    : reportState.awaitingUser && !reportState.hasUserDecisionSinceAwaiting && (reportState.requiresUserDecision ?? reportStatus !== "blocked") ? say("Жду ответа", "Waiting for reply")
+    : attention || (reportStatus === "blocked" && !resumedBlocker) ? say("Заблокировано", "Blocked")
+    : reportStatus === "verifying" ? say("Проверяю", "Verifying") : say("Работаю", "Working");
   const base = `${heading} · ${formatDuration(goal.usage.activeSeconds)}`;
   const legacyAttention = formatFooterStatusForRuntime(deps);
   if (attention && legacyAttention) return `${base} — ${stripGoalTerminalControls(legacyAttention)}`;

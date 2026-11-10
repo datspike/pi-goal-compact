@@ -1,3 +1,4 @@
+import { say } from "../language.js";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CoreEffect, GoalGate, TicketKind } from "../core/model.js";
@@ -5,7 +6,7 @@ import { RECORD } from "../records.js";
 import type { CoreDriver } from "./driver.js";
 
 /** Неотправленный билет этого процесса заменяется в окне модели пустой пометкой (решение 0002). */
-const EXPIRED_TICKET = "Это служебное продолжение устарело; не выполняй его.";
+const expiredTicket = (): string => say("Это служебное продолжение устарело; не выполняй его.", "This service continuation is stale; do not act on it.");
 
 interface TicketDetails { id: string; runtime: string; epoch: number; kind: TicketKind }
 
@@ -55,7 +56,7 @@ export function registerTickets(pi: ExtensionAPI, driver: CoreDriver, gate: () =
 			const details = ticketDetails(message.details);
 			if (!details || details.runtime !== runtime || !issued.has(details.id) || admitted.has(details.id)) return message;
 			changed = true;
-			return { ...message, content: EXPIRED_TICKET };
+			return { ...message, content: expiredTicket() };
 		});
 		return changed ? { messages } : undefined;
 	});
