@@ -9,7 +9,7 @@ const result = (state: CoreState, ...effects: CoreEffect[]): StepResult => ({ st
  */
 function admissible(state: CoreState, ticket: Ticket, gate: GoalGate): boolean {
   const fresh = ticket.epoch === state.epoch && state.ticketEpoch === ticket.epoch;
-  return fresh && (ticket.kind === "goal" ? gate === "runs" : gate !== "held");
+  return fresh && state.transfer !== "applying" && state.transfer !== "failed" && (ticket.kind === "goal" ? gate === "runs" : gate !== "held");
 }
 
 /**
@@ -18,6 +18,19 @@ function admissible(state: CoreState, ticket: Ticket, gate: GoalGate): boolean {
  */
 export function step(state: CoreState, event: CoreEvent): StepResult {
   switch (event.type) {
+    case "checkpoint_cancel_requested":
+      if (state.checkpoint.phase === "pending") return result({ ...state, checkpoint: { phase: "none" } }, { type: "checkpoint_cancelled", reason: "aborted" });
+      return result(state.checkpoint.phase === "compacting" ? { ...state, checkpoint: { ...state.checkpoint, suppressed: true } } : state);
+    case "transfer_queued":
+      return result({ ...state, transfer: "queued" });
+    case "transfer_saved":
+      return result(state.transfer === "queued" ? { ...state, transfer: "applying" } : state);
+    case "transfer_applied":
+      return result({ ...state, transfer: event.ok ? "queued" : "failed" });
+    case "transfer_cancelled": {
+      const { transfer: _transfer, ...cleared } = state;
+      return result(cleared);
+    }
     case "owner_input":
     case "context_switched": {
       const cancelled = state.checkpoint.phase === "pending" && event.type === "context_switched";
@@ -37,7 +50,7 @@ export function step(state: CoreState, event: CoreEvent): StepResult {
     case "checkpoint_requested": {
       if (state.checkpoint.phase !== "none") return result(state, { type: "checkpoint_refused", reason: "in_progress" });
       if (event.alreadyCompacted) return result(state, { type: "checkpoint_refused", reason: "already_compacted" });
-      return result({ ...state, checkpoint: { phase: "pending", request: event.request, epoch: state.epoch, suppressed: false } }, { type: "checkpoint_scheduled" });
+      return result({ ...state, checkpoint: { phase: "pending", request: event.request, epoch: state.epoch, suppressed: false, ...(event.continueAfter === undefined ? {} : { continueAfter: event.continueAfter }) } }, { type: "checkpoint_scheduled" });
     }
     case "settled": {
       const idle: CoreState = { ...state, agent: "idle", selfAbort: false };
@@ -48,8 +61,8 @@ export function step(state: CoreState, event: CoreEvent): StepResult {
       return result({ ...idle, checkpoint: { ...state.checkpoint, phase: "compacting" } }, { type: "compact", request: state.checkpoint.request });
     }
     case "compaction_started": {
-      // Сжатие по порогу до успокоения хода делает ждущую контрольную точку лишней.
-      if (event.reason === "threshold" && state.checkpoint.phase === "pending") {
+      // Автоматическое сжатие до успокоения хода уже выполняет ждущую контрольную точку.
+      if (event.reason !== "manual" && state.checkpoint.phase === "pending") {
         return result({ ...state, checkpoint: { phase: "none" } }, { type: "checkpoint_cancelled", reason: "threshold" });
       }
       return result(suppressIfRetry(state, event.willRetry));
@@ -62,19 +75,19 @@ export function step(state: CoreState, event: CoreEvent): StepResult {
       const cleared: CoreState = { ...state, checkpoint: { phase: "none" } };
       if (!event.ok) return result(cleared, { type: "checkpoint_cancelled", reason: "failed" });
       // Pi повторит прерванный запрос сам, или владелец уже ответил: продолжение не нужно.
-      if (suppressed || event.pendingMessages || epoch !== state.epoch || state.agent !== "idle") return result(cleared);
+      if (state.checkpoint.continueAfter === false || suppressed || event.pendingMessages || epoch !== state.epoch || state.agent !== "idle") return result(cleared);
       const ticket: Ticket = { epoch: state.epoch, kind: "checkpoint" };
       return result({ ...cleared, ticketEpoch: state.epoch }, { type: "send_ticket", ticket, request });
     }
     case "before_settle": {
       // Ждущая контрольная точка сама запустит работу после сжатия; ошибку и обрыв разбирает модуль цели.
       const continues = event.gate === "runs" && event.outcome === "completed" && !event.pendingMessages &&
-        state.agent === "running" && state.checkpoint.phase === "none";
+        state.agent === "running" && state.checkpoint.phase === "none" && state.transfer !== "applying" && state.transfer !== "failed";
       return continues ? result(state, { type: "continue_goal" }) : result(state);
     }
     case "wake": {
       // Во время прогона будить не нужно: решение примет граница перед простоем. Свежий билет — один.
-      if (event.gate !== "runs" || state.agent !== "idle" || state.checkpoint.phase !== "none" || state.ticketEpoch === state.epoch) return result(state);
+      if (event.gate !== "runs" || state.agent !== "idle" || state.checkpoint.phase !== "none" || state.ticketEpoch === state.epoch || state.transfer === "applying" || state.transfer === "failed") return result(state);
       const ticket: Ticket = { epoch: state.epoch, kind: "goal" };
       return result({ ...state, ticketEpoch: state.epoch }, { type: "send_ticket", ticket, request: null });
     }

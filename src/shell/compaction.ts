@@ -1,3 +1,5 @@
+import { registerModelTransfer } from "./model-transfer.js";
+import type { GoalGate } from "../core/model.js";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { appendAudit, type AuditEntry, type AuditOrigin, type AuditReason } from "../compaction/audit.js";
@@ -61,10 +63,11 @@ type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durati
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
  * карточки и рабочая стадия (строки реестра С01–С14).
  */
-export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets): (effect: CoreEffect, ctx: ExtensionContext) => void {
+export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets, gate: () => GoalGate = () => "absent"): (effect: CoreEffect, ctx: ExtensionContext) => void {
 	const language = settings.summaryLanguage;
 	const say = sayFor(language);
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
+	const transfer = registerModelTransfer(pi, driver, gate);
 	const stage = createRequestStage();
 	let summarySequence = 0;
 	let pendingCard: PendingCard | undefined;
@@ -122,7 +125,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 					customInstructions: buildInstructions(buildLedger(params, language), language),
 					onComplete: () => {
 						// Окно меняется после того, как Pi отпустил блокировку сжатия.
-						void window.afterCompaction(ctx).then(() => driver.dispatch({ type: "checkpoint_compact_done", ok: true, pendingMessages: ctx.hasPendingMessages() }, ctx));
+						void window.afterCompaction(ctx).then(() => driver.dispatch({ type: "checkpoint_compact_done", ok: !transfer.failed(), pendingMessages: ctx.hasPendingMessages() }, ctx));
 					},
 					onError: () => {
 						driver.dispatch({ type: "checkpoint_compact_done", ok: false, pendingMessages: ctx.hasPendingMessages() }, ctx);
@@ -236,19 +239,25 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		route = routeOf(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
 		await window.restore(ctx);
+		transfer.restore(ctx);
 	});
 	const switched = (ctx: ExtensionContext): void => {
 		++summarySequence;
+		transfer.cancel(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
 	};
 	pi.on("session_before_switch", (_event, ctx) => { switched(ctx); });
 	pi.on("session_before_fork", (_event, ctx) => { switched(ctx); });
+	pi.on("session_tree", (_event, ctx) => { transfer.cancel(ctx); });
 	pi.on("model_select", async (event, ctx) => {
 		stage.observe("model_select", event, ctx);
 		++summarySequence;
 		// Своя смена окна меняет только contextWindow; другая модель, API или адрес — смена контекста даже во время неё.
 		const next = routeOf(ctx);
-		if (next !== route) { route = next; driver.dispatch({ type: "context_switched" }, ctx); }
+		if (next !== route) {
+			route = next;
+			if (!transfer.ownsModelChange(ctx)) { transfer.cancel(ctx); driver.dispatch({ type: "context_switched" }, ctx); }
+		}
 		if (window.isInternalTransition()) { window.updateFooter(ctx); return; }
 		await window.modelChanged(ctx);
 	});
@@ -266,6 +275,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	});
 	pi.on("context", (event, ctx) => {
 		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
+		if (transfer.failed()) ctx.abort();
 		return messages ? { messages } : undefined;
 	});
 	pi.on("session_before_tree", async (event, ctx) => {
@@ -290,6 +300,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		});
 		const reason = event.reason as CompactionReason;
 		const manualRun = reason === "manual" && manualCorrelation !== undefined;
+		await transfer.afterSaved(ctx, entry.id);
 		driver.dispatch({ type: "compaction_finished", reason, willRetry: event.willRetry, ok: true }, ctx);
 		if (manualRun) { manual(ctx, "success"); window.updateFooter(ctx); return; }
 		await window.afterCompaction(ctx);
@@ -298,6 +309,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_compact_failed", (event, ctx) => {
 		stage.observe("session_compact_failed", event, ctx);
 		pendingCard = undefined;
+		transfer.compactFailed(ctx);
 		const reason = event.reason as CompactionReason;
 		driver.dispatch({ type: "compaction_finished", reason, willRetry: event.willRetry, ok: false }, ctx);
 		if (reason !== "manual" || !manualCorrelation) external(ctx, "error", reason, event.willRetry);

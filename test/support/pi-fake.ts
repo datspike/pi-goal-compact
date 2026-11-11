@@ -26,6 +26,10 @@ export interface FakeOptions {
   modelId?: string;
   registryContextWindow?: number;
   registryTiers?: Array<{ inputTokensAbove: number }>;
+  models?: Model<Api>[];
+  hasAuth?: boolean;
+  contextTokens?: number | null;
+  projectionText?: string;
 }
 
 let sequence = 0;
@@ -62,11 +66,21 @@ export function fakePi(options: FakeOptions = {}) {
     cwd: "/tmp/goal-compact-test",
     signal: noSignal(),
     hasUI: true,
-    ui: { notify(text: string, level: string) { notices.push({ text, level }); }, setStatus(_key: string, value?: string) { footers.push(value ?? ""); } },
+    mode: "tui",
+    scopedModels: [],
+    ui: { notify(text: string, level: string) { notices.push({ text, level }); }, setStatus(_key: string, value?: string) { footers.push(value ?? ""); }, onTerminalInput: () => () => {} },
     model: initialModel,
-    modelRegistry: { getAll: () => [registryEntry], find: (p: string, m: string) => p === provider && m === id ? registryEntry : undefined },
-    sessionManager: { getEntries: () => branch, getBranch: () => branch, getSessionId: () => sessionId, getSessionFile: () => undefined },
-    getContextUsage: (): { tokens: number; contextWindow: number; percent: number } => ({ tokens: 1_000, contextWindow: ctx.model.contextWindow, percent: 1 }),
+    modelRegistry: {
+      getAll: () => [registryEntry, ...(options.models ?? [])],
+      getAvailable: () => options.models ?? [],
+      hasConfiguredAuth: () => options.hasAuth !== false,
+      find: (p: string, m: string) => options.models?.find(model => model.provider === p && model.id === m) ?? (p === provider && m === id ? registryEntry : undefined),
+    },
+    sessionManager: { getEntries: () => branch, getBranch: () => branch, getSessionId: () => sessionId, getSessionFile: () => undefined,
+      buildSessionProjection: () => ({ messages: [{ role: "user", content: options.projectionText ?? "fixture", timestamp: 0 }] }),
+    },
+    getSystemPrompt: () => "fixture system",
+    getContextUsage: (): { tokens: number | null; contextWindow: number; percent: number } => ({ tokens: options.contextTokens === undefined ? 1_000 : options.contextTokens, contextWindow: ctx.model.contextWindow, percent: 1 }),
     isIdle: () => idle,
     hasPendingMessages: () => pending,
     abort() { aborts++; },

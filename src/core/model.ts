@@ -13,14 +13,16 @@ export type CheckpointRequest = Readonly<CheckpointParams>;
 
 export type CheckpointState =
   | { readonly phase: "none" }
-  | { readonly phase: "pending"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean }
-  | { readonly phase: "compacting"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean };
+  | { readonly phase: "pending"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean }
+  | { readonly phase: "compacting"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean };
 
 export interface CoreState {
   /** Растёт на реплике владельца, смене ветки, сессии или модели. Билет прошлой эпохи устарел. */
   readonly epoch: number;
   readonly agent: "idle" | "running";
   readonly checkpoint: CheckpointState;
+  /** Передача блокирует продолжение только во время применения или после ошибки. */
+  readonly transfer?: "queued" | "applying" | "failed";
   /** Эпоха свежего билета в очереди Pi; свежий билет бывает только один. */
   readonly ticketEpoch: number | null;
   /** Свой отказ билету: следующее прерывание прогона — не обрыв владельцем. */
@@ -53,6 +55,11 @@ export interface Ticket {
 export type CompactionReason = "manual" | "threshold" | "overflow";
 
 export type CoreEvent =
+  | { readonly type: "transfer_queued" }
+  | { readonly type: "transfer_saved" }
+  | { readonly type: "transfer_applied"; readonly ok: boolean }
+  | { readonly type: "transfer_cancelled" }
+  | { readonly type: "checkpoint_cancel_requested" }
   /** Настоящая реплика владельца, не служебное сообщение. */
   | { readonly type: "owner_input" }
   /** Смена ветки, сессии или выбор другой модели владельцем. */
@@ -60,7 +67,7 @@ export type CoreEvent =
   | { readonly type: "run_started" }
   | { readonly type: "settled"; readonly aborted: boolean }
   /** Агент попросил контрольную точку; alreadyCompacted — сжатие уже было после последней реплики владельца. */
-  | { readonly type: "checkpoint_requested"; readonly request: CheckpointRequest; readonly alreadyCompacted: boolean }
+  | { readonly type: "checkpoint_requested"; readonly request: CheckpointRequest; readonly alreadyCompacted: boolean; readonly continueAfter?: boolean }
   | { readonly type: "compaction_started"; readonly reason: CompactionReason; readonly willRetry: boolean }
   | { readonly type: "compaction_finished"; readonly reason: CompactionReason; readonly willRetry: boolean; readonly ok: boolean }
   /** Сжатие по запросу агента полностью завершилось, Pi отпустил блокировку. */

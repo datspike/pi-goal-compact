@@ -548,7 +548,7 @@ test("model-created objectives can start with reports", async () => {
 test("report diagnostics do not add a slash command or persist a mode entry", async () => {
   const harness = createRuntimeHarness();
   await harness.runTool("create_goal", { objective: "ship reports" });
-  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw"]);
+  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw", "model-next", "model-next-now"]);
   assert.equal(harness.entries.some((entry) => entry.type === "custom" && entry.customType === GOAL_PROGRESS_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "mode"), false);
 });
 

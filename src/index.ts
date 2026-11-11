@@ -25,7 +25,7 @@ export function compose(pi: ExtensionAPI) {
 	// восстановленную цель и новую эпоху ядра.
 	let gate = (): GoalGate => "absent";
 	const tickets = registerTickets(pi, driver, () => gate());
-	const compaction = registerCompaction(pi, settings, driver, tickets);
+	const compaction = registerCompaction(pi, settings, driver, tickets, () => gate());
 	const continuation = registerGoalContinuation(pi, goal, driver, tickets);
 	gate = continuation.gate;
 	goal.bindRunHooks(continuation.hooks);

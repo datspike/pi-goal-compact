@@ -73,6 +73,14 @@ From there the agent works on its own. It publishes short progress reports, reco
 | `load_goal_language_guide` | Explain how to fix a rejected report text |
 | `checkpoint_compact_continue` | Save a checkpoint, compact context and continue the same task |
 
+### Switch models after compaction
+
+`/model-next` opens a model picker for the next successful compaction. `/model-next-now` requests compaction and switching after the current turn without interrupting a running tool. Both work with or without a goal: no argument opens search, an exact `provider/model` selects directly, and a partial name opens search with that text. Autocomplete and an optional `--thinking medium` (or another supported level) are available.
+
+`/model-next status` shows a pending transfer; `/model-next cancel` cancels it. Once model application is in progress, wait for its result before cancelling. Pending transfers survive `/reload` and restarts; navigating to another branch or session, or manually choosing a model, cancels them.
+
+The previous model writes the summary. The new model is applied only after compaction is saved; goal pauses and owner-decision holds remain in force. An idle session without an active task does not start new work. A failure stops the transfer and reports why: cancel it or select the model again. Smaller-window capacity is checked using an estimate of the summary, recent tail, system instructions and tools, not the provider's exact tokenizer. System instructions and the recent tail remain in the new model's input; cache transfer is not promised.
+
 ### Window modes
 
 - `economy` — the default: a window of at most 272 thousand tokens; Pi starts compacting at about 256 thousand.

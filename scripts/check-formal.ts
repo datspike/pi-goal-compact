@@ -20,7 +20,7 @@ const JAR_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla
 const JAR_SHA256 = "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f";
 
 interface Run {
-  model: "Continuation" | "Agreement";
+  model: "Continuation" | "Agreement" | "ModelTransfer";
   bug: string;
   /** Имя нарушенного свойства или null для исправной модели. */
   expect: string | null;
@@ -42,6 +42,11 @@ export const RUNS: readonly Run[] = [
   { model: "Agreement", bug: "ignoreRevisions", expect: "P8_NoStaleClose", meaning: "возврат договорённости не привязан к версиям" },
   { model: "Agreement", bug: "noVerifying", expect: "P8_NoStaleClose", meaning: "закрытие без отчёта verifying" },
   { model: "Agreement", bug: "noOwnerCheck", expect: "P9_OwnerOnlyEdits", meaning: "договорённость правится в автономном прогоне" },
+  { model: "ModelTransfer", bug: "none", expect: null, meaning: "исправная модель передачи" },
+  { model: "ModelTransfer", bug: "beforeSaved", expect: "P10_SavedBeforeSwitch", meaning: "смена модели до сохранения сжатия" },
+  { model: "ModelTransfer", bug: "earlyRequest", expect: "P11_SwitchedBeforeRequest", meaning: "продолжение до применения модели" },
+  { model: "ModelTransfer", bug: "doubleResume", expect: "P12_OneTransferContinuation", meaning: "повтор Pi и своё продолжение одновременно" },
+  { model: "ModelTransfer", bug: "noHold", expect: "P13_TransferRespectsHold", meaning: "передача обходит удержание цели" },
 ];
 
 function sha256(path: string): string {

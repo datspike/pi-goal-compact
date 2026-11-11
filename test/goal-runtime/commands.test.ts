@@ -32,9 +32,9 @@ const noTurn = (harness: ReturnType<typeof createRuntimeHarness>) => {
 
 test("goal lifecycle and observability commands are registered, including after reload", () => {
   const harness = createRuntimeHarness();
-  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw"]);
+  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw", "model-next", "model-next-now"]);
   harness.reloadExtension();
-  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw"]);
+  assert.deepEqual(harness.commandNames().sort(), ["context", "gc", "gp", "gr", "gs", "gw", "model-next", "model-next-now"]);
 });
 
 test("/gp pauses active work without sending a prompt", async () => {
