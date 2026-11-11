@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 
 import { fakePi, type FakeEntry } from "../support/pi-fake.js";
+import { STATUS_KEY } from "../../src/records.js";
 
 const OBJECTIVE = "Перенести модуль цели в новое расширение и проверить жизненный цикл.";
 
@@ -27,6 +28,7 @@ test("цель проходит путь от создания до закрыт
   const { fake, done } = setup();
   try {
     await fake.event("session_start", { reason: "startup" });
+    assert.ok(STATUS_KEY.goal.localeCompare(STATUS_KEY.context) < 0, "ключ цели сортируется в футере раньше окна");
     const created = await call(fake, "create_goal", { objective: OBJECTIVE });
     assert.match(text(created), /active/);
     assert.ok(fake.entries.some((entry) => entry.type === "goal-compact-goal"), "цель записана под новым именем");

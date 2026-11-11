@@ -49,4 +49,4 @@ export function withCurrentRecordNames<T extends NamedEntry>(entries: Iterable<T
 }
 
 /** Ключи нижней строки Pi: окно контекста и цель показываются рядом и не затирают друг друга. */
-export const STATUS_KEY = { context: "goal-compact-context", goal: "goal-compact-goal" } as const;
+export const STATUS_KEY = { goal: "goal-compact-goal", context: "goal-compact-window" } as const;
