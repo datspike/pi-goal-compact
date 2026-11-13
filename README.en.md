@@ -26,6 +26,8 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 **Work without extra nudging.** While a goal is active and the agent is idle, the extension continues the work with a hidden message. It accounts time and tokens, pauses the goal on Esc, and survives provider errors, context overflow, restarts and `/reload`. When the agent is waiting for the owner's answer, there are no continuations.
 
+In a native subagent fork, the parent's Goal remains history: it neither starts a turn nor controls the child's completion. The child can create its own Goal, which survives restarts and `/reload`. Interactive forks keep their previous continuation behavior.
+
 **A controlled window.** Context window modes: an economy mode by default, an enlarged window for one compaction or for the whole conversation. The footer shows how full the window is, the compaction threshold and the goal state.
 
 ## Installation

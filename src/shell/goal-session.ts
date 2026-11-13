@@ -19,7 +19,7 @@ import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clear
 import type { GoalProgressReport } from "../goal/report-schema.js";
 import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
-import { goalContext } from "./goal-context.js";
+import { createGoalContext } from "./goal-context.js";
 
 /** Новая редакция договорённости, принятая по реплике владельца, несёт ссылку на эту реплику (Т7.1). */
 function withOwnerReference(before: ThreadGoal, after: ThreadGoal, ownerEntryId: string | null): ThreadGoal {
@@ -70,6 +70,7 @@ type AmendmentOutcome = { language: { verdict: string }; state: { languageRepair
  * Переходы статусов решает `planGoalTransition`; здесь — запись, документ и проверки допуска.
  */
 export function createGoalSession(pi: ExtensionAPI) {
+  const goalContext = createGoalContext(pi);
   let hooks: GoalRunHooks = NO_RUN_HOOKS;
   const recovery = createGoalRecoveryMachine();
   const accountingState = createAccountingState();

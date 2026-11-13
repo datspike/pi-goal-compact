@@ -8,6 +8,7 @@
  */
 export const RECORD = {
   goal: "goal-compact-goal",
+  childScope: "goal-compact-child-scope",
   progress: "goal-compact-progress",
   projection: "goal-compact-projection",
   observability: "goal-compact-observability",
