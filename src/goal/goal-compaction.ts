@@ -15,6 +15,11 @@ const NAMESPACED_GET_GOAL = " (or the exposed namespaced equivalent, such as pi_
 const SHIPPED_FOOTERS = new Set([
   "a3851424877dd4ef2e00267b01532ead231e3e5819ed603676b652ce5933b094",
   "a0593c2c1950b2294f859d3c2436168fd7cc50dcddd0ecf932265f1fbf3c030c",
+  // Кадры compact и full до развилки «продолжить или закрыть» (ru, en).
+  "0b6c14624c7ca2adec245277f5a295e2bb3dc164ddda5195d58962f1b20aee4e",
+  "20ee50becb13c6d09a6a1ec34c195a26fd93b5aa37616a8d0cce761081a45d64",
+  "161ee9e8610d0efb51aff299b7ecac5c4d118736b83d9db307e45a7d4d1872cd",
+  "ff9d6766b4b80e5f2a1cdba6db75366f5471854922160ca582bf27b9cf22eacf",
 ]);
 
 /** Ignore only the known accounting counters when recognizing a pure control copy. */

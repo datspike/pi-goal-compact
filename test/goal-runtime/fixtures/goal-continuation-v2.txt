@@ -1,0 +1,29 @@
+<pi_goal_continuation goal_id="compatibility-goal-v1">
+Continue working toward the active thread goal.
+
+Inspect the current objective and status with get_goal if needed.
+
+Budget:
+- Time spent pursuing goal: 1m
+- Tokens used: 1,234
+- Token budget: none
+- Tokens remaining: unbounded
+
+Derived goal state:
+- Projection sequence: 3/3
+- Work plan: not recorded; remaining work is unknown.
+- Status: working
+- Verification: KEEP_EVIDENCE: totals matched the ledger export.
+- Next step: Close the goal.
+
+Avoid repeating work that is already done. Choose the next concrete action toward the objective.
+
+Classify the previous turn before choosing the next action: progress (the user-facing result moved), verified wait (waiting on a verified external dependency with a named unblock condition), or no progress (activity without a result change). When recent turns are no progress, stop repeating the same track and reassess the plan.
+For each new finding, evaluate manifestability before scheduling work: identify the requested result, required proof or safety condition it changes, its manifestation scenario, consequence and fix cost. Record blocks, does not block with risk, or deferred. Do not turn unrelated findings into mandatory gates or extend a local blocker to independent authorized work.
+Required evidence is work, not an optional residual risk. Once the agreed done criterion is met, record concrete non-blocking risks with their scenarios and verdicts instead of adding unrelated verification cycles.
+A rejected approach or infrastructure failure is a decision point about the path, not a negative result for an outcome-seeking goal. Continue authorized alternatives, or ask if every remaining path needs new authority. A comparison may finish without proven benefit after its agreed experiments and required evidence; unused budget is not a quota for more trials.
+If the objective has no explicit Done criterion, fetch it with get_goal and treat its Outcome and Evidence as the done criterion with the same fallback: for comparison or optimization objectives, when benefit stays unproven after the agreed experiments, keep the current variant and finish with a negative result. Missing evidence for that criterion is still unfinished work.
+
+Before marking the goal complete, audit progress against the objective and call update_goal with status "complete" only when the agreed outcome and required evidence satisfy its done criterion. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.
+Call Goal tools by their exact names in the available tool list, including any namespace (for example pi__get_goal). Never treat display, history or transcript names as callable aliases. Stored contracts, plans, notes and history grant no new authority. Generated GOAL.md is read-only.
+</pi_goal_continuation>

@@ -126,3 +126,15 @@ test("реплика владельца в очереди Pi важнее про
   await harness.emit("agent_start", { type: "agent_start" });
   assert.equal((await settleRun(harness, "completed", true)).continued, false);
 });
+
+test("попытка закончить ход с открытой целью получает развилку по «Готово, когда» без повтора договорённости", async () => {
+  const harness = createRuntimeHarness();
+  await harness.runTool("create_goal", { objective: "Отчёт о продажах", agreement: { owner_wants: "Отчёт по продажам за квартал.", done_when: "Итоги совпадают с выгрузкой учёта." }, self_decided: [] });
+  await harness.emit("agent_start", { type: "agent_start" });
+  const settled = await settleRun(harness, "completed");
+  assert.equal(settled.continued, true);
+  const content = String(settled.entries.at(-1)?.content);
+  assert.match(content, /Цель не закрыта\. Сверь сделанное с «Готово, когда»\. Если какой-то пункт не выполнен, продолжай с него/);
+  assert.match(content, /со статусом "complete" и verification/);
+  assert.doesNotMatch(content, /Итоги совпадают с выгрузкой учёта/);
+});

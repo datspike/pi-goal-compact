@@ -158,7 +158,7 @@ test("recognized pure controls with finite budgets and large counters remain rem
 });
 
 test("shipped continuation frames stay clean when current instruction wording changes", () => {
-  for (const file of ["goal-continuation-v1.txt", "goal-continuation-v1-legacy.txt"]) {
+  for (const file of ["goal-continuation-v1.txt", "goal-continuation-v1-legacy.txt", "goal-continuation-v2.txt"]) {
     const content = readFileSync(new URL(`./fixtures/${file}`, import.meta.url), "utf8");
     const message = { role: "custom" as const, customType: CUSTOM_ENTRY_TYPE, content, display: false,
       details: { kind: "continuation", goalId: "compatibility-goal-v1" }, timestamp: 17 };

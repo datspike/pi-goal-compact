@@ -292,8 +292,10 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
     "",
     ...stepDisciplineLines(),
     "",
-    say(`Прежде чем отметить цель завершённой, сверь прогресс с целью и вызывай ${goalToolReference("update_goal")} со статусом "complete", только когда согласованный результат и обязательные доказательства удовлетворяют её критерию готовности. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
-      `Before marking the goal complete, audit progress against the objective and call ${goalToolReference("update_goal")} with status \"complete\" only when the agreed outcome and required evidence satisfy its done criterion. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.`),
+    // Продолжение приходит, когда модель пытается закончить ход с открытой целью (решение 0017): развилка
+    // «продолжить или закрыть с проверкой» ссылается на «Готово, когда», не повторяя текст договорённости.
+    say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
+      `The goal is not closed. Check the work against "Done when". If an item is not met, continue with it. If all are met, close the goal: call ${goalToolReference("update_goal")} with status \"complete\" and verification — how the work meets each item. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.`),
     goalToolNameGuidance(),
     "</pi_goal_continuation>",
   ].join("\n");
