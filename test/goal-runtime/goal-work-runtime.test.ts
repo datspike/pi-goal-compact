@@ -201,6 +201,27 @@ test("one milestone call stores the plan and its report, and each write returns 
   assert.deepEqual([progress.details.workingState.workRevision, progress.details.workingState.workStateStale], [3, false]);
 });
 
+test("a milestone report saved before the goal document fails is not offered for republication", async () => {
+  const root = await mkdtemp(join(tmpdir(), "goal-work-report-"));
+  try {
+    const harness = createRuntimeHarness({ cwd: root });
+    await harness.runTool("create_goal", { objective: "Единая сводка цели" });
+    const goalId = harness.snapshot().goal!.goalId;
+    await harness.waitForGoalProjection();
+    const file = goalFilePath(root, goalId);
+    await rm(file);
+    await mkdir(file);
+    let payload: { workRevision?: number; report?: { applied: boolean | null; reportId: string | null } } | undefined;
+    let message = "";
+    try { await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work(), report: milestone }); }
+    catch (error) { message = (error as Error).message; payload = (error as { details?: typeof payload }).details ?? JSON.parse(message); }
+    assert.equal(payload?.report?.applied, true);
+    assert.ok(payload?.report?.reportId);
+    assert.match(message, /Repeat neither update_goal_work nor the report/);
+    assert.equal(harness.entries.filter((entry) => entry.type === "custom" && (entry.data as { kind?: string }).kind === "progress_reported").length, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("an invalid milestone report or a paused goal rejects the call before the plan is written", async () => {
   const { harness, goalId } = await setup();
   await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work(), report: { ...milestone, status: "verifying" } }), /verification/);

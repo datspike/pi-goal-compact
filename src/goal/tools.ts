@@ -340,8 +340,16 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
           const notes = languageNotes(published.projection);
           reported = { reportId: published.reportId, ...(notes.length > 0 ? { languageNotes: notes } : {}) };
         } catch (error) {
+          const text = error instanceof Error ? error.message : String(error);
+          // Квитанция reportGoal различает «отчёт в журнале, документ не пересобран» и «запись не подтверждена»: повтор сохранённого отчёта дал бы второй отчёт того же рубежа.
+          let receipt: { applied?: boolean | null; reportId?: string | null; remediation?: string } = {};
+          try { receipt = JSON.parse(text) as typeof receipt; } catch { /* не квитанция */ }
+          if (receipt.applied === true) throwToolError(say("План и отчёт сохранены, документ цели не пересобран. Не повторяй ни update_goal_work, ни отчёт.", "The plan and the report were saved; the goal document was not rebuilt. Repeat neither update_goal_work nor the report."),
+            { operation: "update_goal_work", ...result, report: { applied: true, reportId: receipt.reportId ?? null, remediation: receipt.remediation ?? null, error: text } });
+          if (receipt.applied === null) throwToolError(say("План сохранён; неизвестно, записан ли отчёт. Не повторяй update_goal_work и не публикуй отчёт, пока get_goal не покажет, что его нет.", "The plan was saved; it is unknown whether the report was. Do not repeat update_goal_work or publish the report until get_goal shows it is missing."),
+            { operation: "update_goal_work", ...result, report: { applied: null, remediation: receipt.remediation ?? null, error: text } });
           throwToolError(say("План сохранён, отчёт не записан. Не повторяй update_goal_work: опубликуй отчёт через report_goal_progress.", "The plan was saved but the report was not. Do not repeat update_goal_work: publish the report with report_goal_progress."),
-            { operation: "update_goal_work", ...result, report: { applied: false, error: error instanceof Error ? error.message : String(error) } });
+            { operation: "update_goal_work", ...result, report: { applied: false, error: text } });
         }
       }
       const response = { operation: "update_goal_work", ...result, ...(reported ? { report: reported } : {}) };

@@ -709,6 +709,18 @@ test("a substantive chat note in a tool-use turn counts as a report and releases
   assert.equal(replayed.lastChatReport?.text, CHAT_NOTE);
 });
 
+test("a milestone report inside update_goal_work is not duplicated as a chat report", async () => {
+  const withWork = (args: Record<string, unknown>) => ({ ...chatToolTurn(CHAT_NOTE), content: [{ type: "text" as const, text: CHAT_NOTE }, { type: "toolCall" as const, id: "work-1", name: "update_goal_work", arguments: args }] });
+  for (const [args, expected] of [[{ report: { status: "working" } }, null], [{}, CHAT_NOTE]] as const) {
+    const harness = createRuntimeHarness();
+    await startDueGoal(harness);
+    await harness.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+    await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, message: withWork(args), toolResults: [] });
+    const state = await harness.runTool("get_goal", {}) as { details: { lastChatReport: { text: string } | null } };
+    assert.equal(state.details.lastChatReport?.text ?? null, expected);
+  }
+});
+
 test("a short chat line or a final answer does not count as a report", async () => {
   const harness = createRuntimeHarness();
   await startDueGoal(harness);

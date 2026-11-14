@@ -57,22 +57,18 @@ export function isToolUseAssistantMessage(message: AssistantTurnMessage): boolea
   return message.role === "assistant" && message.stopReason === "toolUse";
 }
 
-/** Возвращает true, если ход ассистента вызвал инструмент отчёта по цели. */
+/** Возвращает true, если ход ассистента уже опубликовал отчёт по цели: отдельным вызовом или полем report в update_goal_work. */
 export function hasGoalProgressToolCall(message: AssistantTurnMessage): boolean {
-  return (
-    message.role === "assistant" &&
-    Array.isArray(message.content) &&
-    message.content.some(
-      (content) =>
-        typeof content === "object" &&
-        content !== null &&
-        "type" in content &&
-        content.type === "toolCall" &&
-        "name" in content &&
-        typeof content.name === "string" &&
-        (content.name === "report_goal_progress" || content.name.endsWith("__report_goal_progress")),
-    )
-  );
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return false;
+  const named = (name: string, tool: string) => name === tool || name.endsWith(`__${tool}`);
+  return message.content.some((content) => {
+    if (typeof content !== "object" || content === null || !("type" in content) || content.type !== "toolCall") return false;
+    if (!("name" in content) || typeof content.name !== "string") return false;
+    if (named(content.name, "report_goal_progress")) return true;
+    if (!named(content.name, "update_goal_work")) return false;
+    const args = "arguments" in content ? content.arguments : null;
+    return typeof args === "object" && args !== null && "report" in args && typeof args.report === "object" && args.report !== null;
+  });
 }
 
 interface GoalAccountingDeps {
