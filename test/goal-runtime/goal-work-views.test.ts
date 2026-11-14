@@ -168,9 +168,9 @@ test("registered work guidance uses the public schema and a camel-case revision 
   const metadata = harness.getToolMetadata("update_goal_work");
   assert.ok(metadata);
   const schema = metadata.parameters as { properties: Record<string, unknown>; required: string[] };
-  assert.deepEqual(Object.keys(schema.properties).sort(), ["expected_revision", "goal_id", "state"]);
+  assert.deepEqual(Object.keys(schema.properties).sort(), ["expected_revision", "goal_id", "report", "state"]);
   assert.deepEqual([...schema.required].sort(), ["expected_revision", "goal_id", "state"]);
-  assert.match((metadata.promptGuidelines ?? []).join("\n"), /goal_id, expected_revision и полным состоянием/);
+  assert.match((metadata.promptGuidelines ?? []).join("\n"), /goal_id, expected_revision \(workRevision из ответа последнего вызова цели\) и полным планом/);
   await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expectedRevision: 1, state: plan() }), /malformed goal projection event/);
   assert.equal((await current(harness)).workRevision, 1);
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), summary: "Проверены имена публичных полей" } });

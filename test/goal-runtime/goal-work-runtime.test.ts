@@ -180,3 +180,34 @@ test("an item disposition never amends the contract, grants approval, releases a
   assert.equal(harness.sentMessages.length, 0);
   assert.equal(harness.sentUserMessages.length, 0);
 });
+
+const milestone = { status: "working", phase: "Подключаю представления", summary: "Основа плана готова. Дальше подключаю представления.", changed: "Записан план работы.", nextStep: "Подключить представления." };
+
+test("one milestone call stores the plan and its report, and each write returns the fresh revision", async () => {
+  const { harness, goalId } = await setup();
+  const first = await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work(), report: milestone }) as { details: { workRevision: number; report: { reportId: string } } };
+  assert.equal(first.details.workRevision, 1);
+  assert.match(first.details.report.reportId, /^[0-9a-f-]{36}$/);
+  const reports = harness.entries.filter((entry) => entry.type === "custom" && (entry.data as { kind?: string }).kind === "progress_reported");
+  assert.equal(reports.length, 1);
+  const note = await harness.runTool("record_goal_note", { kind: "decision", title: "Порядок", decision: "Сначала обзор, затем подробности.", rationale: "Обзор нужен владельцу раньше." }) as { details: { workingState: { workRevision: number } } };
+  assert.equal(note.details.workingState.workRevision, 1);
+  const amended = await harness.runTool("amend_goal", { amendment: "Добавить сводку по рискам." }) as { details: { workRevision: number } };
+  assert.equal(amended.details.workRevision, 2);
+  await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: work() }), /устарела|Stale/);
+  const second = await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: amended.details.workRevision, state: work() }) as { details: { workRevision: number } };
+  assert.equal(second.details.workRevision, 3);
+  const progress = await harness.runTool("report_goal_progress", { action: "publish", ...milestone, changed: "Обновлён план после поправки." }) as { details: { workingState: { workRevision: number; workStateStale: boolean } } };
+  assert.deepEqual([progress.details.workingState.workRevision, progress.details.workingState.workStateStale], [3, false]);
+});
+
+test("an invalid milestone report or a paused goal rejects the call before the plan is written", async () => {
+  const { harness, goalId } = await setup();
+  await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work(), report: { ...milestone, status: "verifying" } }), /verification/);
+  assert.equal((await read(harness)).workRevision, 0);
+  await harness.runSlashCommand("gp");
+  await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work(), report: milestone }), /active goal|активной цели/);
+  assert.equal((await read(harness)).workRevision, 0);
+  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: work() });
+  assert.equal((await read(harness)).workRevision, 1);
+});

@@ -128,9 +128,17 @@ export const progressReportParams = () => Type.Object({
   needUser: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEED_USER_CHARS, description: say("Обязательно для статуса awaiting_user; конкретное решение, нужное от пользователя.", "Required for awaiting_user status; concrete decision needed from the user.") })),
 }, { additionalProperties: false });
 
+/** Отчёт о том же рубеже внутри update_goal_work. Смысл полей описывает report_goal_progress: повтор описаний удвоил бы схему. */
+const workReportParams = () => {
+  const { action: _action, ...fields } = progressReportParams().properties;
+  for (const field of Object.values(fields)) delete (field as { description?: string }).description;
+  return Type.Optional(Type.Object(fields, { additionalProperties: false, description: say("Необязательный отчёт о том же рубеже: поля report_goal_progress(publish) без action.", "Optional report for the same milestone: report_goal_progress(publish) fields without action.") }));
+};
+
 const goalWorkParams = () => Type.Object({
   goal_id: Type.String({ minLength: 1 }),
-  expected_revision: Type.Integer({ minimum: 0, description: say("Бери workRevision из get_goal. При устаревшей ревизии перед повтором прочитай текущее состояние.", "Use workRevision from get_goal. A stale revision requires reading the current state before retrying.") }),
+  expected_revision: Type.Integer({ minimum: 0, description: say("workRevision из ответа последнего вызова цели или из get_goal; для первого плана 0. При устаревшей ревизии перечитай состояние.", "workRevision from the latest Goal tool response or get_goal; 0 for the first plan. Re-read state after a stale revision.") }),
+  report: workReportParams(),
   state: Type.Object({
     outcome: Type.String({ description: say("Краткий результат для пользователя; не заменяет и не меняет одобренную цель.", "Concise user result; does not replace or amend the approved objective.") }),
     doneWhen: Type.String({ description: say("Краткое объяснение согласованного критерия завершения.", "Concise explanation of the agreed completion criterion.") }),
@@ -319,14 +327,28 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     name: "update_goal_work",
     defaultActive: false,
     label: say("Обновить план цели", "Update Goal Work"),
-    description: `${say("После существенного изменения заменяет весь текущий план, используя goal_id и expected_revision из get_goal. Сохраняй незавершённые обязательства, ограничения, доказательства и причины решений. applied=true с projectionFresh=false означает, что план сохранён, но его документ требует восстановления: перед новой записью прочитай текущее состояние. Это не поправка, не возобновление, не отчёт и не закрытие цели.", "After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal.")} ${goalProseDescription()}`,
+    description: `${say("После существенного изменения заменяет весь текущий план. goal_id и workRevision бери из ответа последнего вызова цели, get_goal для этого не нужен. Сохраняй незавершённые обязательства, ограничения, доказательства и причины решений. applied=true с projectionFresh=false означает, что план сохранён, но его документ требует восстановления: перед новой записью прочитай текущее состояние. Необязательный report публикует отчёт о том же рубеже. Это не поправка, не возобновление и не закрытие цели.", "After a material change, replace the whole current plan. Take goal_id and workRevision from the latest Goal tool response; get_goal is not needed for that. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. The optional report publishes progress for the same milestone. This does not amend, resume or complete the Goal.")} ${goalProseDescription()}`,
     promptSnippet: say("Заменяй план всей задачи после существенного изменения; сохраняй незавершённые обязательства.", "Replace the whole-task plan after a material change; preserve unfinished obligations."),
     promptGuidelines: goalToolGuidelines("update_goal_work"),
     parameters: goalWorkParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
       if (!isGoalWorkState(params.state)) throwToolError("Malformed goal work state.");
+      // Отчёт проверяется до записи плана, чтобы ошибка в нём не оставила план без отчёта.
+      const report = params.report ? requiredReport(params.report) : null;
+      if (report && host.getGoal()?.status !== "active") throwToolError(say("Отчёт в update_goal_work требует активной цели; план не записан.", "A report in update_goal_work requires an active goal; the plan was not written."));
       const result = await host.updateGoalWork(params.goal_id, params.state, params.expected_revision, ctx, toolCallId);
-      const response = { operation: "update_goal_work", ...result };
+      let reported: { reportId: string | null; languageNotes?: unknown[] } | null = null;
+      if (report) {
+        try {
+          const published = await host.reportGoal("publish", report, ctx, toolCallId);
+          const notes = languageNotes(published.projection);
+          reported = { reportId: published.reportId, ...(notes.length > 0 ? { languageNotes: notes } : {}) };
+        } catch (error) {
+          throwToolError(say("План сохранён, отчёт не записан. Не повторяй update_goal_work: опубликуй отчёт через report_goal_progress.", "The plan was saved but the report was not. Do not repeat update_goal_work: publish the report with report_goal_progress."),
+            { operation: "update_goal_work", ...result, report: { applied: false, error: error instanceof Error ? error.message : String(error) } });
+        }
+      }
+      const response = { operation: "update_goal_work", ...result, ...(reported ? { report: reported } : {}) };
       return { content: [{ type: "text", text: JSON.stringify(response) }], details: response };
     },
   });
@@ -358,7 +380,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
         ...(result.remediation ? { remediation: result.remediation } : {}),
       };
       if (!result.ok || !result.goal) throwToolError(result.message, receipt);
-      const response = { ...goalToolResponse(result.goal, true), ...receipt, goal: toToolGoal(result.goal) };
+      const response = { ...goalToolResponse(result.goal, true), ...receipt, workRevision: host.getGoalWorkingState(ctx).workRevision, goal: toToolGoal(result.goal) };
       // Начало окна держит редакцию на момент сжатия (решение 0012): действующая редакция идёт в конце окна.
       const head = goalAtCompaction(ctx.sessionManager.getBranch(), result.goal);
       const stale = head?.goalId === result.goal.goalId && renderAgreement(head) !== renderAgreement(result.goal);

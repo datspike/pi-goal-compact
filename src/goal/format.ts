@@ -66,6 +66,9 @@ export type GoalStatusWorkingState = Omit<GoalWorkingState, "goal" | "workState"
 
 export interface GoalActionWorkingState {
   lifecycle: GoalStatus | null;
+  /** Свежая ревизия плана: следующий update_goal_work берёт её отсюда, без get_goal. */
+  workRevision: number;
+  workStateStale: boolean;
   currentStep: string | null;
   progressStatus: string | null;
   nextStep: string | null;
@@ -339,6 +342,8 @@ export function goalActionWorkingState(workingState: GoalWorkingState): GoalActi
   const projection = workingState.projection;
   return {
     lifecycle: workingState.lifecycle,
+    workRevision: workingState.workRevision,
+    workStateStale: workingState.workStateStale,
     currentStep: workingState.currentStep,
     progressStatus: workingState.progressStatus,
     nextStep: workingState.nextStep,
