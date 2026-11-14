@@ -154,6 +154,8 @@ export function createRuntimeHarness(options: {
   const sentMessages: SentMessage[] = [];
   const sentUserMessages: SentUserMessage[] = [];
   const tools = new Map<string, (params: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>>();
+  // Объявленный модели набор: как в Pi, регистрация включает инструмент, если не задано defaultActive: false.
+  const activeTools = new Set<string>();
   const toolMetadata = new Map<string, { parameters: unknown; description: string; exposure: Parameters<ExtensionAPI["registerTool"]>[0]["exposure"]; promptSnippet: string | undefined; promptGuidelines: string[] | undefined }>();
   const entryRenderers = new Map<string, Parameters<ExtensionAPI["registerEntryRenderer"]>[1]>();
   const widgets: Array<string[] | undefined> = [];
@@ -197,6 +199,7 @@ export function createRuntimeHarness(options: {
 
   const registerTool: ExtensionAPI["registerTool"] = (tool) => {
     toolMetadata.set(tool.name, { parameters: tool.parameters, description: tool.description, exposure: tool.exposure, promptSnippet: tool.promptSnippet, promptGuidelines: tool.promptGuidelines });
+    if (tool.defaultActive !== false) activeTools.add(tool.name);
     tools.set(tool.name, (params, signal) =>
       tool.execute(
         "tool-call",
@@ -261,7 +264,7 @@ export function createRuntimeHarness(options: {
       },
     },
     exec: async () => ({ stdout: "", stderr: "", code: 0, killed: false }),
-    getActiveTools: () => [],
+    getActiveTools: () => [...activeTools],
     getAllTools: () => (options.tools ?? []).map((name) => toolInfo(name)),
     getCommands: () => options.commands ?? [],
     getFlag: () => undefined,
@@ -295,8 +298,9 @@ export function createRuntimeHarness(options: {
     sendUserMessage(content: Parameters<ExtensionAPI["sendUserMessage"]>[0], options: Parameters<ExtensionAPI["sendUserMessage"]>[1]) {
       sentUserMessages.push({ content, options });
     },
-    setActiveTools() {
-      unsupportedHarnessMethod("pi.setActiveTools");
+    setActiveTools(names: string[]) {
+      activeTools.clear();
+      for (const name of names) if (tools.has(name)) activeTools.add(name);
     },
     setLabel() {
       unsupportedHarnessMethod("pi.setLabel");
@@ -528,6 +532,8 @@ export function createRuntimeHarness(options: {
 
   return {
     getToolMetadata: (name: string) => toolMetadata.get(name),
+    /** Инструменты, объявленные модели сейчас, по порядку включения. */
+    activeTools: () => [...activeTools],
     compactCalls,
     busListenerCount(channel: string): number {
       return eventHandlers.get(channel)?.length ?? 0;

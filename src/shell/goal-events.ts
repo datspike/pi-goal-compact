@@ -19,7 +19,7 @@ import {
 } from "../goal/goal-reports.js";
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
 import { isAssistantContextOverflow, isErrorAssistantMessage, reasonFromRecoveryPendingAttention } from "../goal/recovery.js";
-import { registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goal/tools.js";
+import { goalToolLoadout, registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goal/tools.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
@@ -114,6 +114,19 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     cancelProviderLimitAutoResume: (_goalId, ctx) => session.cancelProviderLimitAutoResume(ctx),
   });
 
+  // Без цели модели объявлен только create_goal (решение 0013). Pi хранит набор в журнале и сам
+  // восстанавливает его при открытии сессии и смене ветки; здесь набор сверяется с целью.
+  // Смена посреди окна уходит провайдеру системным сообщением перед следующим запросом, но если
+  // обработчик `context` меняет окно (после сжатия — всегда), Pi сворачивает её в начало окна.
+  // Поэтому закрытие не снимает инструменты сразу: это делают старт сессии, смена ветки и сжатие.
+  const syncGoalTools = (allowRemoval: boolean): void => {
+    const goal = session.getGoal();
+    const active = pi.getActiveTools();
+    const next = goalToolLoadout(active, goal !== null && goal.status !== "complete", allowRemoval);
+    if (next.length === active.length && next.every((name) => active.includes(name))) return;
+    pi.setActiveTools(next);
+  };
+
   let terminalUsageAccounted = false;
   let terminalFallbackHandled = false;
   let agentEndHandled = false;
@@ -136,8 +149,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     if (!ctx.isIdle()) session.accounting.beginAccounting();
   };
 
-  pi.on("session_start", async (_event, ctx) => { await reload(ctx); refreshToolRules(); });
-  pi.on("session_tree", async (_event, ctx) => { await reload(ctx); refreshToolRules(); });
+  pi.on("session_start", async (_event, ctx) => { await reload(ctx); refreshToolRules(); syncGoalTools(true); });
+  pi.on("session_tree", async (_event, ctx) => { await reload(ctx); refreshToolRules(); syncGoalTools(true); });
 
   pi.on("input", async (event, ctx) => {
     // Слово владельца снимает накопленные попытки восстановления после ошибок.
@@ -157,6 +170,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("before_agent_start", async (event) => {
+    // Команды /gc, /gr и другие меняют цель в простое; набор сверяется до первого запроса прогона.
+    syncGoalTools(false);
     session.markRun(isForeignRun(event));
     if (session.runIsForeign()) return undefined;
     // Напоминание об отчёте уходит в ход между вызовами инструментов, а не в системный промпт:
@@ -214,6 +229,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
+    // create_goal и закрытие меняют набор уже к следующему запросу этого прогона.
+    syncGoalTools(false);
     if (session.runIsForeign()) return;
     activeToolCalls.delete(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`);
     if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? say(`ошибка инструмента: ${event.toolName}`, `tool error: ${event.toolName}`) : say(`завершён инструмент: ${event.toolName}`, `tool finished: ${event.toolName}`) });
@@ -304,6 +321,8 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   });
 
   pi.on("session_compact", async (_event, ctx) => {
+    // Окно после сжатия начинается заново, поэтому снятие набора здесь кэш не сбрасывает.
+    syncGoalTools(true);
     session.flush("runtime");
     session.reports.markCompactionDue(session.getGoal(), session.getTurnIndex());
     session.status.refreshUi(ctx);

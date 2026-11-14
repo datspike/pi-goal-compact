@@ -44,6 +44,8 @@ export function fakePi(options: FakeOptions = {}) {
   const busListeners = new Map<string, Array<(data: unknown) => void>>();
   const renderers = new Map<string, Parameters<ExtensionAPI["registerEntryRenderer"]>[1]>();
   const tools = new Map<string, ToolDefinition>();
+  // Объявленный модели набор: как в Pi, регистрация включает инструмент, если не задано defaultActive: false.
+  const activeTools = new Set<string>();
   let idle = false;
   let branch: FakeEntry[] = options.branch ?? [{ id: "user-1", type: "message", message: { role: "user", content: "Начать работу" } }];
   let sessionId = options.sessionId ?? `session-${++sequence}`;
@@ -87,7 +89,9 @@ export function fakePi(options: FakeOptions = {}) {
     compact(value?: Parameters<ExtensionContext["compact"]>[0]) { compactOptions.push(value); },
   };
   const pi = {
-    registerTool(value: ToolDefinition) { tools.set(value.name, value); },
+    registerTool(value: ToolDefinition) { tools.set(value.name, value); if (value.defaultActive !== false) activeTools.add(value.name); },
+    getActiveTools() { return [...activeTools]; },
+    setActiveTools(names: string[]) { activeTools.clear(); for (const name of names) if (tools.has(name)) activeTools.add(name); },
     registerCommand(name: string, value: Omit<RegisteredCommand, "name" | "sourceInfo">) {
       if (commands.has(name)) throw new Error(`вторая команда ${name}`);
       commands.set(name, { name, source: "extension", ...value });
@@ -146,7 +150,7 @@ export function fakePi(options: FakeOptions = {}) {
     rmSync(agentDir, { recursive: true, force: true });
   }
   return {
-    ctx, context: asPi<ExtensionContext>(ctx), tools, commands, entries, renderers, compactOptions, sent, notices, footers, setModelCalls,
+    ctx, context: asPi<ExtensionContext>(ctx), tools, activeTools, commands, entries, renderers, compactOptions, sent, notices, footers, setModelCalls,
     /** Команда `/context` с аргументами; контекст по умолчанию — подделка Pi. */
     async command(args: string, context: object = ctx) {
       const handler = commands.get("context")?.handler;

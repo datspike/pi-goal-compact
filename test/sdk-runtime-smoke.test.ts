@@ -18,6 +18,7 @@ import { RECORD } from "../src/records.js";
 import { CUSTOM_ENTRY_TYPE } from "../src/goal/types.js";
 import { isGoalProjectionEvent } from "../src/goal/goal-projection-reducer.js";
 import { loadedGoalRuntimeRevision } from "../src/goal/goal-runtime-revision.js";
+import { OPEN_GOAL_TOOLS } from "../src/goal/tools.js";
 
 function goalIdFromToolResult(result: unknown): string {
   assert.ok(result && typeof result === "object");
@@ -92,22 +93,12 @@ test("настоящий SDK Pi сохраняет ревизию создани
     assert.deepEqual(recordGoalNoteSchema.required, ["kind"]);
     const reportGoalProgress = runner.getToolDefinition("report_goal_progress");
     assert.ok(reportGoalProgress);
-    const declaredReportTool = session.agent.state.tools.find((tool) => tool.name === "report_goal_progress");
-    assert.ok(declaredReportTool, "The progress tool must be declared before its first call.");
-    assert.equal(declaredReportTool.description, reportGoalProgress.description);
-    assert.match(declaredReportTool.description, /Пиши прозу по-русски/);
-    assert.match(declaredReportTool.description, /не длиннее 700 знаков/);
-    assert.match(declaredReportTool.description, /без изменений во встроенном или блочном коде/);
-    assert.match(declaredReportTool.description, /Независимые факты разделяй пустыми строками/);
     const updateGoal = runner.getToolDefinition("update_goal");
     assert.ok(updateGoal);
-    const declaredUpdateTool = session.agent.state.tools.find((tool) => tool.name === "update_goal");
-    assert.ok(declaredUpdateTool, "The update tool must be declared before its first call.");
-    assert.equal(declaredUpdateTool.description, updateGoal.description);
-    assert.match(updateGoal.description, /согласованный результат и обязательные доказательства/);
-    assert.match(updateGoal.description, /ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство/);
-    assert.match(updateGoal.description, /status=verifying.*дождись успеха перед отдельным вызовом закрытия/);
-    assert.match(updateGoal.description, /goal_completed со статусом working недостаточно/);
+    const declared = (): string[] => session.agent.state.tools.map((tool) => tool.name);
+    // Спящий Goal (решение 0013): до цели модель видит только create_goal.
+    assert.ok(declared().includes("create_goal"));
+    assert.deepEqual(declared().filter((name) => (OPEN_GOAL_TOOLS as readonly string[]).includes(name)), []);
     const reportGoalProgressSchema = reportGoalProgress.parameters as { type?: unknown; anyOf?: unknown };
     assert.equal(reportGoalProgressSchema.type, "object");
     assert.equal(reportGoalProgressSchema.anyOf, undefined);
@@ -120,6 +111,22 @@ test("настоящий SDK Pi сохраняет ревизию создани
       undefined,
       toolContext,
     );
+    await runner.emit({ type: "tool_execution_end", toolCallId: "tool-call", toolName: "create_goal", result, isError: false });
+    const declaredReportTool = session.agent.state.tools.find((tool) => tool.name === "report_goal_progress");
+    assert.ok(declaredReportTool, "The progress tool must be declared once the goal exists.");
+    assert.deepEqual(OPEN_GOAL_TOOLS.filter((name) => !declared().includes(name)), []);
+    assert.equal(declaredReportTool.description, reportGoalProgress.description);
+    assert.match(declaredReportTool.description, /Пиши прозу по-русски/);
+    assert.match(declaredReportTool.description, /не длиннее 700 знаков/);
+    assert.match(declaredReportTool.description, /без изменений во встроенном или блочном коде/);
+    assert.match(declaredReportTool.description, /Независимые факты разделяй пустыми строками/);
+    const declaredUpdateTool = session.agent.state.tools.find((tool) => tool.name === "update_goal");
+    assert.ok(declaredUpdateTool, "The update tool must be declared once the goal exists.");
+    assert.equal(declaredUpdateTool.description, updateGoal.description);
+    assert.match(updateGoal.description, /согласованный результат и обязательные доказательства/);
+    assert.match(updateGoal.description, /ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство/);
+    assert.match(updateGoal.description, /status=verifying.*дождись успеха перед отдельным вызовом закрытия/);
+    assert.match(updateGoal.description, /goal_completed со статусом working недостаточно/);
     const goalId = goalIdFromToolResult(result);
     const sessionFile = sessionManager.getSessionFile();
     assert.ok(sessionFile);

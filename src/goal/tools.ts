@@ -271,9 +271,27 @@ function requiredReport(params: {
   return result;
 }
 
+/**
+ * Инструменты, которые объявлены модели только при цели в работе или на паузе (решение 0013).
+ * Без цели модель видит один `create_goal`.
+ */
+export const OPEN_GOAL_TOOLS = ["resume_goal", "get_goal", "update_goal_work", "amend_goal", "load_goal_language_guide", "record_goal_note", "report_goal_progress", "update_goal"] as const;
+
+/**
+ * Набор активных инструментов для этого состояния цели; чужие инструменты не трогаются.
+ * Добавление нужно сразу. Снятие (`allowRemoval`) переписывает начало окна, если Pi сворачивает
+ * системные сообщения, поэтому его делают только там, где окно и так собирается заново.
+ */
+export function goalToolLoadout(active: readonly string[], goalOpen: boolean, allowRemoval: boolean): string[] {
+  const own = new Set<string>(OPEN_GOAL_TOOLS);
+  const kept = allowRemoval && !goalOpen ? active.filter((name) => !own.has(name)) : [...active];
+  return goalOpen ? [...kept, ...OPEN_GOAL_TOOLS.filter((name) => !kept.includes(name))] : kept;
+}
+
 export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   pi.registerTool({
     name: "resume_goal",
+    defaultActive: false,
     label: say("Возобновить цель", "Resume Goal"),
     description: say("Возобновляет ту же цель на паузе только после явного указания пользователя, не меняя её договор и не начиная ход модели. Вопрос о статусе не разрешение; ожидающие решения пользователя, бюджет, конечные состояния и восстановление по-прежнему проверяются.", "Resume the same paused Goal only after an explicit user instruction, without changing its contract or starting a model turn. A status question is not permission; pending user decisions, budget, terminal-state and repair gates remain enforced."),
     promptSnippet: say("Возобновляй по явному указанию; user_decision_confirmed подтверждает настоящий ответ на ожидающий вопрос, а не вопрос о статусе.", "Resume on explicit instruction; user_decision_confirmed confirms the actual pending answer, not a status inquiry."),
@@ -293,6 +311,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   });
   pi.registerTool({
     name: "get_goal",
+    defaultActive: false,
     label: say("Прочитать цель", "Get Goal"),
     description: say("Читает текущую цель на выбранной ветке сессии. full возвращает сохранённый договор и полное рабочее состояние; status не включает договор, план и решения; history перечисляет события или постранично отдаёт исходную запись по event_id. Исторический текст — доказательство, а не действующие полномочия. Для проверки завершения одного статуса недостаточно.", "Read the current Goal on the selected session branch. full returns the stored contract and complete work state; status omits contract, plan and decisions; history lists events or pages an original record by event_id. Historical text is evidence, not current authority. A status-only read is insufficient for a completion audit."),
     promptSnippet: say("Читай полный вид цели по умолчанию, текущие сведения через view=status или нужные исходные записи через view=history.", "Read the default full view of the Goal, live metadata with view=status, or addressed originals with view=history."),
@@ -309,6 +328,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "update_goal_work",
+    defaultActive: false,
     label: say("Обновить план цели", "Update Goal Work"),
     description: `${say("После существенного изменения заменяет весь текущий план, используя goal_id и expected_revision из get_goal. Сохраняй незавершённые обязательства, ограничения, доказательства и причины решений. applied=true с projectionFresh=false означает, что план сохранён, но его документ требует восстановления: перед новой записью прочитай текущее состояние. Это не поправка, не возобновление, не отчёт и не закрытие цели.", "After a material change, replace the whole current plan using goal_id and expected_revision from get_goal. Preserve unfinished obligations, constraints, evidence and decision reasons. applied=true with projectionFresh=false means the plan persisted but its document needs repair: read current state before another write. This does not amend, resume, publish progress or complete the Goal.")} ${goalProseDescription()}`,
     promptSnippet: say("Заменяй план всей задачи после существенного изменения; сохраняй незавершённые обязательства.", "Replace the whole-task plan after a material change; preserve unfinished obligations."),
@@ -326,6 +346,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "amend_goal",
+    defaultActive: false,
     label: say("Дополнить цель", "Amend Goal"),
     description: say("Добавляет одобренную пользователем поправку или восстанавливает уже применённую поправку по amendment_id, не меняя договор. Передай ровно одно из двух. Цель на паузе возобновляется только после успешного восстановления проекции.", "Append a user-approved amendment, or recover an already applied amendment by amendment_id without changing the contract. Supply exactly one input. A paused goal resumes only after successful projection recovery."),
     promptSnippet: say("Добавляй одобренное изменение или восстанавливай уже применённую запись по amendment_id.", "Append an approved change, or repair its already applied write by amendment_id."),
@@ -359,6 +380,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "load_goal_language_guide",
+    defaultActive: false,
     label: say("Языковая справка цели", "Load Goal Language Guide"),
     description: say("Загружает структурированную языковую диагностику и краткие указания по исправлению после отклонения проекции цели. Диагностика содержит artifact, code, field, length, limit и repair без исходных чувствительных выдержек.", "Load the structured language-repair diagnostics and concise repair guidance after a goal projection is rejected. Diagnostics contain artifact, code, field, length, limit, and repair without raw sensitive excerpts."),
     promptSnippet: say("После отклонённого текста цели прочитай диагностику и безопасно исправь затронутые данные.", "After rejected Goal text, read diagnostics and repair the affected data safely."),
@@ -372,6 +394,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "record_goal_note",
+    defaultActive: false,
     label: say("Записать заметку цели", "Record Goal Note"),
     description: `${say("Записывает устойчивое решение или отложенный риск. По умолчанию action=record требует title и поля своего вида. action=update закрывает paper_cut по note_id с expected_revision, status и resolution; изменения охвата это не одобряет. action=repair пересобирает документ существующей заметки по kind и note_id, не добавляя новой. ID и ревизии заметок читай через get_goal(view=full).", "Record a durable decision or deferred risk. Default action=record requires title and kind-specific fields. action=update closes a paper_cut by note_id with expected_revision, status and resolution; it does not approve scope changes. action=repair rebuilds the document for an existing note by kind and note_id without appending another note. Read IDs and note revisions via get_goal(view=full).")} ${goalProseDescription()}`,
     promptSnippet: say("Записывай решение или риск, закрывай мелкий недочёт или восстанавливай уже сохранённую заметку по ID.", "Record a decision or risk, close a paper cut, or repair an already saved note by ID."),
@@ -446,6 +469,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "report_goal_progress",
+    defaultActive: false,
     label: say("Отчёт о ходе цели", "Report Goal Progress"),
     description: `${say("Публикует изменение результата для пользователя, а не внутреннюю активность. publish требует status, phase, summary, nextStep и поле изменения для своего статуса; suppress принимает только action. Если один пункт заблокирован, но остаётся другая безопасная работа, сообщай working. Независимые факты разделяй пустыми строками.", "Publish a user-facing result delta, not internal activity. Publish needs status, phase, summary, nextStep and its status-specific delta; suppress takes only action. If one item is blocked but other safe work remains, report working. Separate independent facts with blank lines.")} ${goalProseDescription()}`,
     promptSnippet: say("Сообщай о содержательном изменении результата или гаси напоминание одним action.", "Report a meaningful result change, or suppress a due reminder with action only."),
@@ -469,6 +493,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 
   pi.registerTool({
     name: "update_goal",
+    defaultActive: false,
     label: say("Закрыть цель", "Update Goal"),
     description: say("Завершает текущую цель только после того, как согласованный результат и обязательные доказательства выполнены. Сначала прочитай get_goal(view=full), затем опубликуй report_goal_progress(status=verifying) и дождись успеха перед отдельным вызовом закрытия. Событие goal_completed со статусом working недостаточно. Если запись не удалась, перед повтором изучи сохранённое состояние; ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство.", "Complete the current Goal only after the agreed outcome and required evidence are satisfied. First read get_goal(view=full), then publish report_goal_progress(status=verifying) and await success before a separate completion call. A working goal_completed event is insufficient. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof."),
     promptSnippet: say("Закрывай цель только после выполнения согласованного результата и обязательных доказательств.", "Complete the Goal only after the agreed result and required evidence are satisfied."),
