@@ -64,7 +64,7 @@ From there the agent works on its own. It reports progress briefly in chat; a se
 
 ### Model tools
 
-Without a goal the model is offered only `create_goal` and `checkpoint_compact_continue`.
+Without a goal the model is offered only `create_goal`; `checkpoint_compact_continue` is available when its feature flag is enabled.
 
 | Tool | Purpose |
 |---|---|
@@ -126,14 +126,15 @@ Goal behavior is configured in `goal-reports.json`: globally in Pi's agent direc
     "askBeforeGoal": true,
     "singleFactOwner": true,
     "ownerRepliesWithoutGoal": true,
-    "amendNeedsOwner": true
+    "amendNeedsOwner": true,
+    "checkpointCompactContinue": false
   }
 }
 ```
 
 `afterActiveSeconds` and `afterAssistantTurns` set how often the agent publishes a report. `maxHiddenContinuations` limits hidden continuations in a row without an owner message; `0` means no limit.
 
-The switches in `features` restore the behavior of the earlier pair of extensions one improvement at a time. That lets you compare or roll back a single improvement without touching the rest.
+The switches in `features` change one improvement without touching the others. Goal settings reload when opening a session or switching branches; the checkpoint registration flag is read when loading the extension.
 
 | Switch | What it turns on |
 |---|---|
@@ -144,6 +145,9 @@ The switches in `features` restore the behavior of the earlier pair of extension
 | `singleFactOwner` | Each fact lives in one place: the summary does not retell the goal, the continuation does not repeat it |
 | `ownerRepliesWithoutGoal` | Without a goal, the owner's latest messages follow the summary verbatim |
 | `amendNeedsOwner` | An agreement change is accepted only after a real owner message |
+| `checkpointCompactContinue` | Offers `checkpoint_compact_continue` to the model; defaults to `false` |
+
+To restore the tool, set `features.checkpointCompactContinue: true` in `goal-reports.json` and run `/reload` or restart Pi in the project directory. With `false`, the tool is not registered at all. The flag does not change automatic threshold or overflow compaction, `/compact`, `session_before_compact`, or `session_compact`.
 
 `create_goal` always requires an agreement; the switches do not change that.
 

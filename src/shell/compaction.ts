@@ -1,3 +1,4 @@
+import { goalFeatures, loadGoalReportPolicySync } from "../goal/goal-report-config.js";
 import { registerModelTransfer } from "./model-transfer.js";
 import type { GoalGate } from "../core/model.js";
 import { randomUUID } from "node:crypto";
@@ -161,7 +162,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		}
 	};
 
-	pi.registerTool({
+	if (goalFeatures(loadGoalReportPolicySync().policy).checkpointCompactContinue) pi.registerTool({
 		name: "checkpoint_compact_continue",
 		label: "Checkpoint Compact Continue",
 		description: say("Сохраняет checkpoint, сжимает контекст и продолжает ту же цель после успешного compact.", "Saves a checkpoint, compacts context, and continues the same objective after successful compaction."),

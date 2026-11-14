@@ -16,6 +16,7 @@ type FakeModel = { provider: string; id: string; api?: string; baseUrl?: string;
 export interface FakeOptions {
   branch?: FakeEntry[];
   sessionId?: string;
+  checkpointCompactContinue?: boolean;
   setModelResult?: boolean;
   setModelResults?: Array<boolean | "reject">;
   emitModelSelect?: boolean;
@@ -142,6 +143,7 @@ export function fakePi(options: FakeOptions = {}) {
   const priorAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
     writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ contextCompaction: { summaryLanguage: options.language ?? "ru" } }));
+    if (options.checkpointCompactContinue !== undefined) writeFileSync(join(agentDir, "goal-reports.json"), JSON.stringify({ features: { checkpointCompactContinue: options.checkpointCompactContinue } }));
     process.env.PI_CODING_AGENT_DIR = agentDir;
     extension(asPi<ExtensionAPI>(pi));
   } finally {

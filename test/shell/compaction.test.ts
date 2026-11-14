@@ -4,7 +4,9 @@ import { getContextArgumentCompletions } from "../../src/shell/compaction.js";
 import { describe, expect, test } from "../support/expect.js";
 import type { CustomEntry, EntryRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
 import { asPi } from "../support/as-pi.js";
-import { fakePi, type FakePi } from "../support/pi-fake.js";
+import { fakePi as buildFakePi, type FakePi, type FakeOptions } from "../support/pi-fake.js";
+
+const fakePi = (options: FakeOptions = {}) => buildFakePi({ checkpointCompactContinue: true, ...options });
 
 const modeOf = (data: unknown): unknown => typeof data === "object" && data !== null && "mode" in data ? data.mode : undefined;
 

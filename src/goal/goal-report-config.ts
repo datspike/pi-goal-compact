@@ -1,10 +1,10 @@
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /**
- * Выключатели доработок Д2–Д8. Выключенная доработка возвращает поведение прежней пары
- * расширений: так можно сравнить сборки и откатить одну доработку, не трогая остальные.
+ * Выключатели поведения цели и доступности инструментов; значения по умолчанию
+ * позволяют откатить одну доработку, не трогая остальные.
  */
 export interface GoalFeatures {
   /** Д2: договорённость стоит в начале окна сразу после сводки сжатия. */
@@ -21,9 +21,11 @@ export interface GoalFeatures {
   ownerRepliesWithoutGoal: boolean;
   /** Д8: правка цели принимается только после настоящей реплики владельца. */
   amendNeedsOwner: boolean;
+  /** Объявлять модели инструмент сжатия по контрольной точке; по умолчанию скрыт. */
+  checkpointCompactContinue: boolean;
 }
 
-export const GOAL_FEATURE_NAMES = ["agreementInWindow", "completionReturn", "selfDecidedList", "askBeforeGoal", "singleFactOwner", "ownerRepliesWithoutGoal", "amendNeedsOwner"] as const satisfies readonly (keyof GoalFeatures)[];
+export const GOAL_FEATURE_NAMES = ["agreementInWindow", "completionReturn", "selfDecidedList", "askBeforeGoal", "singleFactOwner", "ownerRepliesWithoutGoal", "amendNeedsOwner", "checkpointCompactContinue"] as const satisfies readonly (keyof GoalFeatures)[];
 
 export const DEFAULT_GOAL_FEATURES: Readonly<GoalFeatures> = Object.freeze({
   agreementInWindow: true,
@@ -33,6 +35,7 @@ export const DEFAULT_GOAL_FEATURES: Readonly<GoalFeatures> = Object.freeze({
   singleFactOwner: true,
   ownerRepliesWithoutGoal: true,
   amendNeedsOwner: true,
+  checkpointCompactContinue: false,
 });
 
 export interface GoalReportPolicy {
@@ -118,10 +121,10 @@ function parsePolicyFile(value: unknown, path: string, warnings: string[]): Goal
   return policy;
 }
 
-async function readPolicyFile(path: string, warnings: string[]): Promise<GoalReportPolicyFile> {
+function readPolicyFile(path: string, warnings: string[]): GoalReportPolicyFile {
   let content: string;
   try {
-    content = await readFile(path, "utf8");
+    content = readFileSync(path, "utf8");
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return {};
     warnings.push(`${path} could not be read; defaults or lower-precedence values will be used.`);
@@ -135,7 +138,8 @@ async function readPolicyFile(path: string, warnings: string[]): Promise<GoalRep
   }
 }
 
-export async function loadGoalReportPolicy(options: GoalReportPolicyLoadOptions = {}): Promise<GoalReportPolicyLoadResult> {
+/** Читает настройки при синхронной регистрации расширения до открытия сессии. */
+export function loadGoalReportPolicySync(options: GoalReportPolicyLoadOptions = {}): GoalReportPolicyLoadResult {
   const agentDir = options.agentDir ?? getAgentDir();
   const cwd = options.cwd ?? process.cwd();
   const paths = {
@@ -143,8 +147,8 @@ export async function loadGoalReportPolicy(options: GoalReportPolicyLoadOptions 
     project: join(cwd, ".pi", CONFIG_FILE_NAME),
   };
   const warnings: string[] = [];
-  const user = await readPolicyFile(paths.user, warnings);
-  const project = await readPolicyFile(paths.project, warnings);
+  const user = readPolicyFile(paths.user, warnings);
+  const project = readPolicyFile(paths.project, warnings);
   const { features: userFeatures, ...userPolicy } = user;
   const { features: projectFeatures, ...projectPolicy } = project;
   return {
@@ -158,4 +162,8 @@ export async function loadGoalReportPolicy(options: GoalReportPolicyLoadOptions 
     warnings,
     paths,
   };
+}
+
+export async function loadGoalReportPolicy(options: GoalReportPolicyLoadOptions = {}): Promise<GoalReportPolicyLoadResult> {
+  return loadGoalReportPolicySync(options);
 }

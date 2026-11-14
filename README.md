@@ -64,7 +64,7 @@ pi install "$PWD"
 
 ### Инструменты модели
 
-Без цели модели объявлены только `create_goal` и `checkpoint_compact_continue`.
+Без цели модели объявлен только `create_goal`; `checkpoint_compact_continue` доступен при включённом флаге.
 
 | Инструмент | Назначение |
 |---|---|
@@ -126,14 +126,15 @@ pi install "$PWD"
     "askBeforeGoal": true,
     "singleFactOwner": true,
     "ownerRepliesWithoutGoal": true,
-    "amendNeedsOwner": true
+    "amendNeedsOwner": true,
+    "checkpointCompactContinue": false
   }
 }
 ```
 
 `afterActiveSeconds` и `afterAssistantTurns` задают, как часто агент публикует отчёт. `maxHiddenContinuations` ограничивает скрытые продолжения подряд без сообщения владельца; `0` — без предела.
 
-Выключатели в `features` возвращают поведение прежней пары расширений по одной доработке. Так можно сравнить или откатить одну доработку, не трогая остальные.
+Выключатели в `features` позволяют менять одну доработку, не трогая остальные. Настройки цели перечитываются при открытии сессии и смене ветки; флаг регистрации checkpoint — при загрузке расширения.
 
 | Выключатель | Что включает |
 |---|---|
@@ -144,6 +145,9 @@ pi install "$PWD"
 | `singleFactOwner` | Каждый факт живёт в одном месте: сводка не пересказывает цель, продолжение не повторяет её |
 | `ownerRepliesWithoutGoal` | Без цели после сводки стоят последние реплики владельца дословно |
 | `amendNeedsOwner` | Правка договорённости принимается только после настоящей реплики владельца |
+| `checkpointCompactContinue` | Объявляет модели `checkpoint_compact_continue`; по умолчанию `false` |
+
+Чтобы вернуть инструмент, задай `features.checkpointCompactContinue: true` в `goal-reports.json` и выполни `/reload` или перезапусти Pi в каталоге проекта. При `false` инструмент вообще не регистрируется. Флаг не меняет автоматическое сжатие по порогу и переполнению, `/compact`, `session_before_compact` и `session_compact`.
 
 Договорённость в `create_goal` нужна всегда, выключатели этого не отменяют.
 
