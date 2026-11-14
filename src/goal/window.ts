@@ -1,10 +1,11 @@
 import { say } from "../language.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
 
-import { RECORD } from "../records.js";
+import { RECORD, withCurrentRecordNames } from "../records.js";
 import { renderAgreement } from "./agreement.js";
 import type { GoalFeatures } from "./goal-report-config.js";
-import type { ThreadGoal } from "./types.js";
+import { reconstructGoal } from "./state.js";
+import type { SessionEntryLike, ThreadGoal } from "./types.js";
 
 /** Сколько знаков последних реплик владельца ставится после сводки, когда цели нет (решение Р4). */
 export const OWNER_REPLIES_CHARS = 1500;
@@ -57,6 +58,7 @@ const openGoal = (goal: ThreadGoal | null): goal is ThreadGoal => goal !== null 
 /**
  * Собирает начало окна при каждом запросе (решение 0004): сводка последнего сжатия, за ней при
  * незакрытой цели — договорённость последней редакции, без цели — последние реплики владельца.
+ * Вызывающий передаёт цель на момент сжатия (`goalAtCompaction`), если она есть (решение 0012).
  * В журнал собранное не пишется; без сжатия окно не меняется.
  */
 export function assembleWindow(messages: readonly AgentMessage[], input: WindowInput): AgentMessage[] | undefined {
@@ -135,4 +137,46 @@ export function compactedOwnerReplies(branch: readonly BranchEntry[]): string[] 
     if (text) replies.push(text);
   }
   return replies;
+}
+
+/**
+ * Цель, которую держит начало окна (решение 0012): та, что была открыта при последнем сжатии,
+ * в своём состоянии на момент сжатия. Поправки, пункты «Решаю сам», закрытие и снятие этой цели
+ * до следующего сжатия начало окна не меняют: иначе провайдер заново пишет кэш всего хвоста.
+ * null — снимка нет или поставлена другая открытая цель; тогда окно строится по текущей цели.
+ * Источник — только записи ветки, поэтому ответ одинаков при каждом запросе, после /reload и в копии сессии.
+ */
+export function goalAtCompaction(branch: readonly SessionEntryLike[], current: ThreadGoal | null): ThreadGoal | null {
+  const entries = withCurrentRecordNames(branch);
+  let compactionIndex = -1;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    if (entries[index]!.type === "compaction") {
+      compactionIndex = index;
+      break;
+    }
+  }
+  if (compactionIndex < 0) return null;
+  const atCompaction = reconstructGoal(entries.slice(0, compactionIndex)).goal;
+  if (!openGoal(atCompaction)) return null;
+  if (openGoal(current) && current.goalId !== atCompaction.goalId) return null;
+  return atCompaction;
+}
+
+/** Поправка видна в конце окна, пока в его начале прежняя редакция той же цели. */
+export function amendedAfterCompactionNotice(current: ThreadGoal): string {
+  return [
+    say(
+      `В начале окна договорённость этой цели в редакции на момент сжатия. Действует новая редакция ниже; в начало окна она встанет при следующем сжатии.`,
+      `The start of the window holds this goal's agreement as of compaction. The new revision below applies; it moves to the start of the window at the next compaction.`,
+    ),
+    renderAgreement(current),
+  ].join("\n\n");
+}
+
+/** Пометка в ответе на закрытие, когда договорённость закрытой цели остаётся в начале окна. */
+export function retainedAgreementNotice(): string {
+  return say(
+    "Договорённость в начале окна относится к этой цели и остаётся там до следующего сжатия только как история. Цель закрыта: по договорённости больше не работай, следующую работу задаёт владелец.",
+    "The agreement at the start of the window belongs to this goal and stays there until the next compaction only as history. The goal is closed: do not work from that agreement any more; the owner sets the next work.",
+  );
 }

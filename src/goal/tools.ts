@@ -8,8 +8,9 @@ import { goalActionWorkingState, goalStatusWorkingState, goalToolResponse, toToo
 import { type GoalReportAction, type GoalReportState } from "./goal-reports.js";
 import { MAX_REPORT_CHANGED_CHARS, MAX_REPORT_COMPLETED_CHARS, MAX_REPORT_NEED_USER_CHARS, MAX_REPORT_NEXT_STEP_CHARS, MAX_REPORT_PHASE_CHARS, MAX_REPORT_PROBLEM_CHARS, MAX_REPORT_RISK_CHARS, MAX_REPORT_SUMMARY_CHARS, MAX_REPORT_VERIFICATION_CHARS, type GoalProgressReport, type GoalProgressEventKind, type GoalProgressStatus, validateNewGoalProgressReport } from "./report-schema.js";
 import { createGoal, replaceGoal, type AgreementInput } from "./state.js";
-import { SELF_DECIDED_KINDS, renderSelfDecided, unconfirmedSelfDecided, type SelfDecidedKind } from "./agreement.js";
+import { SELF_DECIDED_KINDS, renderAgreement, renderSelfDecided, unconfirmedSelfDecided, type SelfDecidedKind } from "./agreement.js";
 import { DEFAULT_GOAL_FEATURES, type GoalFeatures } from "./goal-report-config.js";
+import { amendedAfterCompactionNotice, goalAtCompaction, retainedAgreementNotice } from "./window.js";
 import { GoalCanonicalWriteError } from "./goal-persistence.js";
 import { doneCriterionGuidance, goalToolGuidelines } from "./prompts.js";
 import { MAX_GOAL_PROSE_PARAGRAPH_CHARS } from "./goal-language-quality.js";
@@ -348,7 +349,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       };
       if (!result.ok || !result.goal) throwToolError(result.message, receipt);
       const response = { ...goalToolResponse(result.goal, true), ...receipt, goal: toToolGoal(result.goal) };
-      return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: { ...response, error: null } };
+      // Начало окна держит редакцию на момент сжатия (решение 0012): действующая редакция идёт в конце окна.
+      const head = goalAtCompaction(ctx.sessionManager.getBranch(), result.goal);
+      const stale = head?.goalId === result.goal.goalId && renderAgreement(head) !== renderAgreement(result.goal);
+      const text = JSON.stringify(response, null, 2) + (stale ? `\n\n${amendedAfterCompactionNotice(result.goal)}` : "");
+      return { content: [{ type: "text", text }], details: { ...response, error: null } };
     },
   });
 
@@ -491,7 +496,11 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       };
       // При закрытии владелец видит, что агент решил сам без его слова (Т6.4).
       const unconfirmed = unconfirmedSelfDecided(result.goal);
-      const text = JSON.stringify(response, null, 2) + (unconfirmed.length > 0 ? `\n\n${say("Не подтверждено владельцем:", "Not confirmed by the owner:")}\n${renderSelfDecided(unconfirmed)}` : "");
+      // Договорённость закрытой цели стоит в начале окна до следующего сжатия (решение 0012): модели нужно знать, что она больше не действует.
+      const retained = goalAtCompaction(ctx.sessionManager.getBranch(), result.goal)?.goalId === result.goal.goalId;
+      const text = JSON.stringify(response, null, 2)
+        + (unconfirmed.length > 0 ? `\n\n${say("Не подтверждено владельцем:", "Not confirmed by the owner:")}\n${renderSelfDecided(unconfirmed)}` : "")
+        + (retained ? `\n\n${retainedAgreementNotice()}` : "");
       return { content: [{ type: "text", text }], details: { ...response, ...(unconfirmed.length > 0 ? { unconfirmedSelfDecided: unconfirmed } : {}), error: null } };
     },
   });

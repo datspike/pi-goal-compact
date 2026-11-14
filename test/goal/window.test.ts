@@ -4,8 +4,8 @@ import test from "node:test";
 import type { AgentMessage } from "../../src/compaction/file-hints.js";
 
 import { DEFAULT_GOAL_FEATURES } from "../../src/goal/goal-report-config.js";
-import { createThreadGoal, withAgreement } from "../../src/goal/state.js";
-import { assembleWindow, compactedOwnerReplies, lastOwnerReplies, withoutGoalSection } from "../../src/goal/window.js";
+import { clearEntry, createThreadGoal, setEntry, withAgreement } from "../../src/goal/state.js";
+import { assembleWindow, compactedOwnerReplies, goalAtCompaction, lastOwnerReplies, withoutGoalSection } from "../../src/goal/window.js";
 import { RECORD } from "../../src/records.js";
 import type { ThreadGoal } from "../../src/goal/types.js";
 
@@ -92,4 +92,40 @@ test("в реплики попадает только сжатая часть в
   ];
   assert.deepEqual(compactedOwnerReplies(branch), ["Первая реплика.", "Вторая"]);
   assert.deepEqual(compactedOwnerReplies(branch.slice(0, 4)), []);
+});
+
+const goalRecord = (data: unknown) => ({ type: "custom", customType: RECORD.goal, data });
+const compaction = { type: "compaction" };
+
+const headOf = (branch: readonly { type: string; customType?: string; data?: unknown }[], current: ThreadGoal | null) =>
+  assembleWindow([summary, kept], { goal: goalAtCompaction(branch, current) ?? current, features: DEFAULT_GOAL_FEATURES, ownerReplies: ["Реплика."] })!;
+
+test("закрытие и поправка той же цели после сжатия не меняют начало окна до следующего сжатия", () => {
+  const open = goalWithAgreement();
+  const amended = withAgreement(open, { ownerWants: "Отчёт по регионам.", doneWhen: "Сходится." });
+  const closed: ThreadGoal = { ...amended, status: "complete" };
+  const atCompaction = [goalRecord(setEntry(open, "tool", 1)), compaction];
+  const before = headOf(atCompaction, open);
+  const afterAmend = [...atCompaction, goalRecord(setEntry(amended, "tool", 2))];
+  // Начало окна байт в байт то же: кэш провайдера после сводки не сбрасывается.
+  assert.deepEqual(headOf(afterAmend, amended), before);
+  assert.match(textOf(before[1]), /редакция 1/);
+  const afterClose = [...afterAmend, goalRecord(setEntry(closed, "tool", 3))];
+  assert.deepEqual(headOf(afterClose, closed), before);
+  const afterClear = [...afterAmend, goalRecord(clearEntry(open.goalId, "command", 3))];
+  assert.deepEqual(headOf(afterClear, null), before);
+  // Следующее сжатие ставит наверх состояние на свой момент.
+  assert.match(textOf(headOf([...afterAmend, compaction], amended)[1]), /редакция 2[\s\S]*по регионам/);
+  assert.equal(goalAtCompaction([...afterClose, compaction], null), null);
+});
+
+test("другая открытая цель сразу встаёт в начало окна, без сжатия снимка нет", () => {
+  const first = goalWithAgreement();
+  const second = createThreadGoal("Другая цель", null, 5, { ownerWants: "Другая работа.", doneWhen: "Сделано." });
+  const replaced = [goalRecord(setEntry(first, "tool", 1)), compaction, goalRecord(clearEntry(first.goalId, "command", 2)), goalRecord(setEntry(second, "tool", 3))];
+  assert.equal(goalAtCompaction(replaced, second), null);
+  assert.match(textOf(headOf(replaced, second)[1]), /Другая работа\./);
+  const closedBefore = [goalRecord(setEntry(first, "tool", 1)), goalRecord(setEntry({ ...first, status: "complete" }, "tool", 2)), compaction];
+  assert.equal(goalAtCompaction(closedBefore, null), null);
+  assert.equal(goalAtCompaction([goalRecord(setEntry(first, "tool", 1))], first), null);
 });

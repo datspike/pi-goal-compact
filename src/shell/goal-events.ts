@@ -23,7 +23,7 @@ import { registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goa
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
-import { assembleWindow, compactedOwnerReplies } from "../goal/window.js";
+import { assembleWindow, compactedOwnerReplies, goalAtCompaction } from "../goal/window.js";
 
 /** Скрытые сообщения PiRetry продолжают работу цели и не считаются чужим запуском. */
 const RETRY_CARRIERS = new Set(["pi-retry:retry", "pi-retry:continue"]);
@@ -175,10 +175,12 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
       changed = true;
       return { ...message, content: say("Это напоминание об отчёте устарело, не обращай на него внимания.", "This expired run-scoped progress reminder must be ignored."), display: false };
     });
+    const branch = ctx.sessionManager.getBranch();
+    const current = session.getGoal();
     const assembled = assembleWindow(messages, {
-      goal: session.getGoal(),
+      goal: goalAtCompaction(branch, current) ?? current,
       features: session.getFeatures(),
-      ownerReplies: compactedOwnerReplies(ctx.sessionManager.getBranch()),
+      ownerReplies: compactedOwnerReplies(branch),
     });
     if (assembled) return { messages: assembled };
     return changed ? { messages } : undefined;

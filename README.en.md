@@ -16,7 +16,7 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 ## What the owner gets
 
-**The agreement in every window.** When setting a goal, the agent records an agreement in three parts: what the owner wants, what the agent decides on its own without confirmation, and when the work is done. After every compaction the agreement sits at the start of the window right after the summary, so the model sees it, not only its own retelling.
+**The agreement in every window.** When setting a goal, the agent records an agreement in three parts: what the owner wants, what the agent decides on its own without confirmation, and when the work is done. After every compaction the agreement sits at the start of the window right after the summary, so the model sees it, not only its own retelling. Until the next compaction the start of the window does not change: it holds the agreement revision as of compaction. A new revision arrives in the `amend_goal` result and closing arrives as a note in the `update_goal` result, both at the end of the window. Changing the start of the window would reset the provider cache for the whole history after the summary. A different goal set after compaction moves to the start of the window at once.
 
 **"Decided by me" as a separate list.** Assumptions and choices the agent made without the owner do not dissolve into the goal text. Only the owner can confirm or reject an item.
 
