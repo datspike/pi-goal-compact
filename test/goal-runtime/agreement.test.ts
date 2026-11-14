@@ -133,15 +133,40 @@ test("правка плана или нового пункта после пер
   await harness.runTool("report_goal_progress", verifying);
   await assert.rejects(complete(harness), /agreement_check/);
   await harness.runTool("record_goal_note", { kind: "decision", title: "Округление", decision: "Округляю суммы до рубля.", rationale: "Так в выгрузке.", self_decided: "assumption" });
-  // Новый пункт делает прежнюю проверку устаревшей (П8), а после новой проверки договорённость возвращается снова.
+  // Новый пункт делает прежнюю проверку устаревшей (П8): договорённость возвращается снова, а без новой проверки цель не закрывается.
+  await assert.rejects(complete(harness), /agreement_check/);
   await assert.rejects(complete(harness), /свежий отчёт со статусом verifying/);
   await harness.runTool("report_goal_progress", { ...verifying, verification: "Округление сверено с выгрузкой." });
-  await assert.rejects(complete(harness), /agreement_check/);
   const plan = { outcome: "Отчёт о продажах.", doneWhen: "Отчёт сходится.", summary: "Отчёт собран.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "done", source: "user" }] };
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: plan });
-  await harness.runTool("report_goal_progress", { ...verifying, verification: "План сверен, итоги совпали с выгрузкой." });
-  await assert.rejects(complete(harness), /agreement_check/);
+  // Новый план — новая пара: проверка из первой попытки засчитывается ей, вторая попытка закрывает.
+  await assert.rejects(harness.runTool("update_goal", { status: "complete", verification: "План сверен, итоги совпали с выгрузкой." }, undefined, { agreementCheck: "raw" }), /agreement_check/);
   await complete(harness);
+  assert.equal((await read(harness)).goal!.status, "complete");
+});
+
+test("закрытие укладывается в два вызова: текст проверки в первой попытке, закрытие во второй", async () => {
+  const harness = await setup();
+  const before = harness.entries.length;
+  await assert.rejects(harness.runTool("update_goal", { status: "complete", verification: "Итоги отчёта совпали с выгрузкой за квартал." }, undefined, { agreementCheck: "raw" }), (error: unknown) => {
+    const payload = JSON.parse((error as Error).message) as { stage: string; message: string };
+    assert.equal(payload.stage, "agreement_check");
+    assert.match(payload.message, /Проверка для этой редакции и плана записана/);
+    return true;
+  });
+  const reports = harness.entries.slice(before).flatMap((entry) => entry.type === "custom" ? [entry.data as { kind?: string; report?: { status: string; verification: string } }] : [])
+    .filter((data) => data.kind === "progress_reported");
+  assert.deepEqual([reports[0]?.report?.status, reports[0]?.report?.verification], ["verifying", "Итоги отчёта совпали с выгрузкой за квартал."]);
+  await complete(harness);
+  assert.equal((await read(harness)).goal!.status, "complete");
+});
+
+test("без текста проверки первая попытка просит его, вторая с текстом закрывает", async () => {
+  const harness = await setup();
+  await harness.runTool("report_goal_progress", { ...verifying, status: "working", verification: undefined, summary: "Отчёт собирается.", changed: "Собраны продажи за квартал." });
+  await assert.rejects(complete(harness), /передай verification/);
+  assert.equal((await read(harness)).goal!.status, "active");
+  await harness.runTool("update_goal", { status: "complete", verification: "Итоги отчёта совпали с выгрузкой." }, undefined, { agreementCheck: "raw" });
   assert.equal((await read(harness)).goal!.status, "complete");
 });
 

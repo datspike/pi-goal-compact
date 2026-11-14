@@ -93,6 +93,7 @@ const updateGoalParams = () => Type.Object({
   status: stringEnum(["complete"] as const, {
     description: say("Принимается только complete. Не вызывай, пока остаётся обязательная работа.", "Only complete is accepted. Do not call this until no required work remains."),
   }),
+  verification: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_VERIFICATION_CHARS, description: say("Чем сделанное отвечает каждому пункту «Готово, когда»; засчитывается как отчёт verifying для текущих договорённости и плана.", "How the work meets each \"Done when\" item; recorded as the verifying report for the current agreement and plan.") })),
 });
 
 const recordGoalNoteParams = () => Type.Object({
@@ -172,7 +173,7 @@ export interface ToolHost {
   getFeatures?(): GoalFeatures;
   addSelfDecided?(kind: SelfDecidedKind, text: string, ctx: ExtensionContext): Promise<{ ok: boolean; message: string; itemId?: string }>;
   setSelfDecidedState?(itemId: string, state: "confirmed" | "rejected", ctx: ExtensionContext): Promise<{ ok: boolean; message: string }>;
-  completeGoal(source: GoalEntrySource, ctx: ExtensionContext): Promise<GoalResult>;
+  completeGoal(source: GoalEntrySource, ctx: ExtensionContext, verification?: string): Promise<GoalResult>;
   reportGoal(
     action: GoalReportAction,
     report: GoalProgressReport | null,
@@ -488,12 +489,12 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     name: "update_goal",
     defaultActive: false,
     label: say("Закрыть цель", "Update Goal"),
-    description: say("Завершает текущую цель только после того, как согласованный результат и обязательные доказательства выполнены. Сначала прочитай get_goal(view=full), затем опубликуй report_goal_progress(status=verifying) и дождись успеха перед отдельным вызовом закрытия. Событие goal_completed со статусом working недостаточно. Если запись не удалась, перед повтором изучи сохранённое состояние; ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство.", "Complete the current Goal only after the agreed outcome and required evidence are satisfied. First read get_goal(view=full), then publish report_goal_progress(status=verifying) and await success before a separate completion call. A working goal_completed event is insufficient. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof."),
+    description: say("Закрывает цель, когда согласованный результат и обязательные доказательства готовы. Передай verification — это отчёт verifying. Первая попытка при этих договорённости и плане возвращает договорённость для сверки, вторая без правок закрывает цель. Если запись не удалась, перед повтором изучи сохранённое состояние; ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство.", "Complete the Goal once the agreed outcome and required evidence are satisfied. Pass verification; it is the verifying report. The first attempt for this agreement and plan returns the agreement for a check; a second one without edits closes the Goal. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof."),
     promptSnippet: say("Закрывай цель только после выполнения согласованного результата и обязательных доказательств.", "Complete the Goal only after the agreed result and required evidence are satisfied."),
     promptGuidelines: goalToolGuidelines("update_goal"),
     parameters: updateGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const result = await host.completeGoal("tool", ctx);
+      const result = await host.completeGoal("tool", ctx, _params.verification);
       if (!result.ok || !result.goal) {
         throwToolError(result.message, {
           operation: "update_goal", applied: result.applied === undefined ? false : result.applied,

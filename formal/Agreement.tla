@@ -15,14 +15,16 @@
 (*                                                                         *)
 (* Закрытие идёт в два шага: первая попытка возвращает договорённость,     *)
 (* вторая закрывает, если с тех пор не менялись ни договорённость, ни план *)
-(* и есть отчёт verifying по тем же версиям.                               *)
+(* и есть отчёт verifying по тем же версиям. Текст проверки можно передать *)
+(* в саму попытку закрытия (решение 0016): он становится отчётом verifying *)
+(* для текущих версий в том же шаге, но первую попытку не отменяет.        *)
 (***************************************************************************)
 EXTENDS Naturals
 
 CONSTANTS Bug, MaxRev
 
 Bugs == {"none", "noStrip", "liveHead", "noTailCopy", "noCloseNote",
-         "ignoreRevisions", "noVerifying", "noOwnerCheck"}
+         "ignoreRevisions", "noVerifying", "noOwnerCheck", "verifyOnly"}
 
 MaxGen == 2
 ASSUME Bug \in Bugs
@@ -174,6 +176,22 @@ CompleteAttempt ==
     /\ UNCHANGED <<agRev, planRev, verifying, running, ownerTurn, gen, tailRev>>
     /\ UNCHANGED win
 
+\* Попытка закрыть с текстом проверки: отчёт verifying для текущих версий и
+\* попытка закрытия одним шагом. Поломка verifyOnly закрывает по одному тексту.
+CompleteVerified ==
+    /\ running
+    /\ goal = "open"
+    /\ verifying' = Cur
+    /\ IF ReturnedOk \/ Bug = "verifyOnly"
+       THEN /\ goal' = "complete"
+            /\ closedNote' = (Bug # "noCloseNote")
+            /\ IF returned = Cur THEN UNCHANGED bad ELSE Flag("P8_StaleClose")
+            /\ UNCHANGED returned
+       ELSE /\ returned' = Cur
+            /\ UNCHANGED <<goal, bad, closedNote>>
+    /\ UNCHANGED <<agRev, planRev, running, ownerTurn, gen, tailRev>>
+    /\ UNCHANGED win
+
 \* Сжатие: модель пишет сводку и может пересказать в ней цель. Начало окна
 \* фиксируется по цели на этот момент; конец окна начинается заново.
 Compact ==
@@ -209,7 +227,7 @@ Request ==
 Next ==
     \/ OwnerInput \/ AutonomousStart \/ EndRun
     \/ CreateGoal \/ EditAgreement \/ UpdatePlan \/ ReportVerifying
-    \/ CompleteAttempt \/ Compact \/ Request
+    \/ CompleteAttempt \/ CompleteVerified \/ Compact \/ Request
 
 Spec == Init /\ [][Next]_vars
 

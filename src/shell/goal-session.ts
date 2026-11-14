@@ -16,7 +16,7 @@ import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
 import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
 import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
-import type { GoalProgressReport } from "../goal/report-schema.js";
+import { MAX_REPORT_SUMMARY_CHARS, type GoalProgressReport } from "../goal/report-schema.js";
 import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { createGoalContext } from "./goal-context.js";
@@ -422,7 +422,26 @@ export function createGoalSession(pi: ExtensionAPI) {
   };
 
   /** Закрывает цель только после свежего отчёта `verifying`; документ закрытия чинится без отката. */
-  const completeGoal = async (source: GoalEntrySource, ctx: ExtensionContext): Promise<GoalResult> => {
+  /** Текст проверки из `update_goal` становится отчётом verifying для текущих договорённости и плана (решение 0016). */
+  const recordCompletionVerification = async (goal: ThreadGoal, verification: string, fingerprint: string, ctx: ExtensionContext): Promise<GoalResult | null> => {
+    const chars = [...verification.trim()];
+    const report: GoalProgressReport = {
+      status: "verifying", eventKind: "verification",
+      phase: say("Сверяю результат с договорённостью", "Checking the result against the agreement"),
+      summary: chars.length <= MAX_REPORT_SUMMARY_CHARS ? chars.join("") : `${chars.slice(0, MAX_REPORT_SUMMARY_CHARS - 1).join("")}…`,
+      verification: chars.join(""), nextStep: say("Закрыть цель.", "Close the goal."),
+    };
+    try {
+      await reportGoal("publish", report, ctx, `update_goal:${fingerprint}`);
+      return null;
+    } catch (error) {
+      return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false, goal,
+        message: say(`Текст проверки не записан: ${error instanceof Error ? error.message : String(error)}`, `The verification text was not recorded: ${error instanceof Error ? error.message : String(error)}`),
+        remediation: say("Прочитай get_goal; цель не закрыта.", "Read get_goal; the goal is not closed.") };
+    }
+  };
+
+  const completeGoal = async (source: GoalEntrySource, ctx: ExtensionContext, verification?: string): Promise<GoalResult> => {
     const pending = unconfirmedWrite();
     if (pending) return canonicalFailure("update_goal", pending);
     hooks.cancelProviderLimitAutoResume();
@@ -438,27 +457,44 @@ export function createGoalSession(pi: ExtensionAPI) {
     const goal = getGoal();
     if (initialGoal?.goalId !== goal?.goalId) return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
       message: "Goal changed while waiting for completion.", goal, remediation: say("Прочитай текущий контракт; не завершай другую цель по старому запросу.", "Read the current contract; do not complete a different goal from an old request.") };
-    if (goal && goal.status !== "complete" && (amendmentProjectionPending || (projections.isManaged() && !projections.isCompletionReady()))) {
+    if (goal && goal.status !== "complete" && amendmentProjectionPending) {
       return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
-        message: say("Перед завершением цели нужен свежий отчёт со статусом verifying.", "Managed goals require a fresh verifying progress report before completion."), goal,
-        remediation: say("Сними удержание из-за исправления или согласования и после выполнения контракта опубликуй свежий отчёт verifying.", "Resolve the repair or approval hold and publish a fresh verifying report after satisfying the contract.") };
+        message: say("Поправка цели ещё не записана в документ; закрывать рано.", "The goal amendment is not yet in the document; it is too early to close."), goal,
+        remediation: say("Восстанови поправку через amend_goal(amendment_id), затем повтори закрытие.", "Repair the amendment with amend_goal(amendment_id), then retry completion.") };
     }
-    // Первая попытка при этих договорённости и плане возвращает договорённость (Д3). Правка любого
-    // из них меняет отпечаток, и сверка нужна заново (Т6.3).
-    if (goal && goal.status !== "complete" && features().completionReturn) {
-      const fingerprint = completionFingerprint(goal, projections.current()?.goalId === goal.goalId ? projections.current()!.workRevision : 0);
-      if (goal.completionCheck !== fingerprint) {
-        const checked = cloneGoal(goal);
-        checked.completionCheck = fingerprint;
-        try { await saveGoalChange(checked, source, ctx); }
-        catch (error) {
-          if (error instanceof GoalCanonicalWriteError) return canonicalFailure("update_goal", error);
-          throw error;
-        }
-        return { ok: false, operation: "update_goal", applied: false, stage: "agreement_check", retryable: true, goal: checked,
-          message: completionReturnMessage(checked),
-          remediation: say("Сверь работу с договорённостью. Если чего-то не хватает, продолжай работу; иначе снова вызови update_goal(complete), не меняя договорённость и план.", "Check the work against the agreement. If something is missing, keep working; otherwise call update_goal(complete) again without changing the agreement or the plan.") };
+    const fingerprint = goal ? completionFingerprint(goal, projections.current()?.goalId === goal.goalId ? projections.current()!.workRevision : 0) : "";
+    // Первая попытка при этих договорённости и плане возвращает договорённость (Д3, решение 0005). Правка любого
+    // из них меняет отпечаток, и сверка нужна заново (Т6.3). Текст проверки из того же вызова засчитывается этой паре.
+    let returned: GoalResult | null = null;
+    if (goal && goal.status !== "complete" && features().completionReturn && goal.completionCheck !== fingerprint) {
+      const checked = cloneGoal(goal);
+      checked.completionCheck = fingerprint;
+      try { await saveGoalChange(checked, source, ctx); }
+      catch (error) {
+        if (error instanceof GoalCanonicalWriteError) return canonicalFailure("update_goal", error);
+        throw error;
       }
+      returned = { ok: false, operation: "update_goal", applied: false, stage: "agreement_check", retryable: true, goal: checked,
+        message: completionReturnMessage(checked),
+        remediation: say("Сверь работу с договорённостью. Если чего-то не хватает, продолжай работу; иначе снова вызови update_goal(complete), не меняя договорённость и план.", "Check the work against the agreement. If something is missing, keep working; otherwise call update_goal(complete) again without changing the agreement or the plan.") };
+    }
+    if (goal && goal.status !== "complete" && verification?.trim()) {
+      const failure = await recordCompletionVerification(goal, verification, fingerprint, ctx);
+      if (failure) return failure;
+    }
+    // Цель без отчётов и плана и раньше закрывалась без verifying; для неё ничего не добавляем.
+    const managed = projections.isManaged();
+    const verified = !managed || projections.isCompletionReady();
+    if (returned) {
+      const note = !managed ? ""
+        : verified ? say("Проверка для этой редакции и плана записана.", "The verification for this agreement and plan is recorded.")
+          : say("Во втором вызове передай verification: чем сделанное отвечает каждому пункту «Готово, когда».", "In the second call pass verification: how the work meets each \"Done when\" item.");
+      return note ? { ...returned, message: `${returned.message}\n\n${note}` } : returned;
+    }
+    if (goal && goal.status !== "complete" && !verified) {
+      return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
+        message: say("Для закрытия нужен свежий отчёт со статусом verifying для этой редакции и плана.", "Completion needs a fresh verifying progress report for this agreement and plan."), goal,
+        remediation: say("Передай verification в update_goal(complete): чем сделанное отвечает каждому пункту «Готово, когда».", "Pass verification to update_goal(complete): how the work meets each \"Done when\" item.") };
     }
     if (goal?.status !== "complete") accounting.accountProgress(ctx, false, 0, true);
     let persisted: GoalResult;

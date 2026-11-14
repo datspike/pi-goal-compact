@@ -35,3 +35,4 @@
 | [0013](0013-spyashchiy-goal.md) | Без цели модель видит один `create_goal`, снятие инструментов — на границах окна |
 | [0014](0014-otchyot-iz-chata-i-yazyk-bez-otkaza.md) | Отчёт из чата и языковая проверка без отказа |
 | [0015](0015-odin-vyzov-na-rubezh.md) | Один вызов на рубеж: свежая ревизия в ответе, отчёт внутри `update_goal_work` |
+| [0016](0016-zakrytie-s-tekstom-proverki.md) | Закрытие с текстом проверки в `update_goal` при прежних двух шагах |

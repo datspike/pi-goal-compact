@@ -125,8 +125,8 @@ test("настоящий SDK Pi сохраняет ревизию создани
     assert.equal(declaredUpdateTool.description, updateGoal.description);
     assert.match(updateGoal.description, /согласованный результат и обязательные доказательства/);
     assert.match(updateGoal.description, /ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство/);
-    assert.match(updateGoal.description, /status=verifying.*дождись успеха перед отдельным вызовом закрытия/);
-    assert.match(updateGoal.description, /goal_completed со статусом working недостаточно/);
+    assert.match(updateGoal.description, /Передай verification — это отчёт verifying/);
+    assert.match(updateGoal.description, /Первая попытка .* возвращает договорённость/);
     const goalId = goalIdFromToolResult(result);
     const sessionFile = sessionManager.getSessionFile();
     assert.ok(sessionFile);

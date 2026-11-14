@@ -44,6 +44,7 @@ export const RUNS: readonly Run[] = [
   { model: "Agreement", bug: "ignoreRevisions", expect: "P8_NoStaleClose", meaning: "возврат договорённости не привязан к версиям" },
   { model: "Agreement", bug: "noVerifying", expect: "P8_NoStaleClose", meaning: "закрытие без отчёта verifying" },
   { model: "Agreement", bug: "noOwnerCheck", expect: "P9_OwnerOnlyEdits", meaning: "договорённость правится в автономном прогоне" },
+  { model: "Agreement", bug: "verifyOnly", expect: "P8_NoStaleClose", meaning: "текст проверки закрывает цель без возврата договорённости" },
   { model: "ModelTransfer", bug: "none", expect: null, meaning: "исправная модель передачи" },
   { model: "ModelTransfer", bug: "beforeSaved", expect: "P10_SavedBeforeSwitch", meaning: "смена модели до сохранения сжатия" },
   { model: "ModelTransfer", bug: "earlyRequest", expect: "P11_SwitchedBeforeRequest", meaning: "продолжение до применения модели" },
