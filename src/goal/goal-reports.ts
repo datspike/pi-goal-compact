@@ -43,6 +43,8 @@ export type GoalReportEntry =
   | (GoalReportEntryBase & {
       kind: "assistant_turn";
       assistantTurns: number;
+      /** Выдержка содержательного сообщения в чат, засчитанного как отчёт (решение 0014). */
+      chat?: string;
     })
   | (GoalReportEntryBase & {
       kind: "publish";
@@ -69,8 +71,15 @@ export interface GoalProgressHistoryEntry {
   report: GoalProgressReport;
 }
 
+/** Последнее содержательное сообщение агента в чат, засчитанное как отчёт. */
+export interface GoalChatReport {
+  text: string;
+  createdAt: number;
+}
+
 export interface GoalReportState {
   policy: GoalReportPolicy;
+  lastChatReport: GoalChatReport | null;
   lastReportId: string | null;
   lastReportAt: number | null;
   lastReportTurn: number | null;
@@ -94,6 +103,7 @@ export interface GoalReportState {
 export function createGoalReportState(policy: GoalReportPolicy = DEFAULT_GOAL_REPORT_POLICY): GoalReportState {
   return {
     policy: { ...policy },
+    lastChatReport: null,
     lastReportId: null,
     lastReportAt: null,
     lastReportTurn: null,
@@ -222,7 +232,7 @@ export function isGoalReportEntry(value: unknown): value is GoalReportEntry {
     return false;
   }
   if (value.kind === "assistant_turn") {
-    return isAssistantTurnCount(value.assistantTurns);
+    return isAssistantTurnCount(value.assistantTurns) && (value.chat === undefined || typeof value.chat === "string");
   }
   if (value.kind === "suppress") {
     return value.assistantTurns === undefined || isAssistantTurnCount(value.assistantTurns);
@@ -288,6 +298,34 @@ function applyActionAnchor(
   state.dueReason = null;
   state.dueReasons = [];
   state.instructionInjected = false;
+}
+
+/** Сообщение в чат гасит напоминание так же, как отчёт, но не снимает и не ставит удержание. */
+function applyChatReport(state: GoalReportState, entry: Extract<GoalReportEntry, { kind: "assistant_turn" }>): void {
+  state.lastActionActiveSeconds = Math.max(0, Math.trunc(entry.activeSeconds));
+  state.lastActionTurn = entry.assistantTurns;
+  state.lastChatReport = { text: entry.chat ?? "", createdAt: entry.createdAt };
+  state.dueReason = null;
+  state.dueReasons = [];
+  state.instructionInjected = false;
+}
+
+/** С этой длины промежуточный текст ассистента считается сообщением о ходе работы, а не репликой между делом. */
+export const MIN_CHAT_REPORT_CHARS = 60;
+const MAX_CHAT_REPORT_CHARS = 480;
+
+/**
+ * Выдержка содержательного текста ассистента из хода с вызовами инструментов; `null` — текста нет или
+ * он короче порога. Последний ответ без вызовов ход завершает и отчётом не считается.
+ */
+export function chatReportText(message: unknown): string | null {
+  if (!isRecord(message) || message.role !== "assistant" || message.stopReason !== "toolUse" || !Array.isArray(message.content)) return null;
+  const text = message.content
+    .filter((part): part is { type: "text"; text: string } => isRecord(part) && part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text.trim()).filter(Boolean).join("\n\n");
+  const chars = [...text];
+  if (chars.length < MIN_CHAT_REPORT_CHARS || !isGoalProgressSemanticText(text)) return null;
+  return chars.length <= MAX_CHAT_REPORT_CHARS ? text : `${chars.slice(0, MAX_CHAT_REPORT_CHARS - 1).join("")}…`;
 }
 
 function legacySuppressFingerprint(entry: Extract<GoalReportEntry, { kind: "suppress" }>): string | null {
@@ -384,6 +422,7 @@ export function reconstructGoalReportState(
     }
     if (entry.data.kind === "assistant_turn") {
       state.assistantTurns = Math.max(state.assistantTurns, entry.data.assistantTurns);
+      if (entry.data.chat !== undefined) applyChatReport(state, entry.data);
       continue;
     }
     if (entry.data.kind === "due") {
@@ -439,12 +478,10 @@ export function reportDueReasons(
 
 export function goalProgressInstruction(dueReason: GoalReportDueReason): string {
   return [
-    say("Пора отчитаться о ходе активной цели.", "A progress report is due for the active goal."),
-    say(`Вызови report_goal_progress с action \"publish\" или \"suppress\" до продолжения работы или вместе с ним (reason: ${dueReason}).`, `Call report_goal_progress with action \"publish\" or \"suppress\" before or alongside further work (reason: ${dueReason}).`),
-    say("Сообщай только фактические изменения. summary пиши для вернувшегося пользователя: 1–3 связных предложения о том, что изменилось с прошлого отчёта, что это значит сейчас и что будет дальше. Не описывай работу инструментов и не повторяй цель. В phase коротко назови текущее содержательное действие в настоящем времени.", "Report only the factual delta. Write summary for the returning user: 1–3 connected sentences linking what changed since the previous report, what it means now, and what happens next. Do not include harness/tool activity or repeat the objective. Write phase as the short current meaningful action in present tense."),
-    say("Для awaiting_user назови нужное решение. После обычного ответа пользователя при необходимости добавь согласованное изменение, затем опубликуй working; suppress и другие статусы не снимают удержание скрытого продолжения.", "For awaiting_user, state the needed decision. After an ordinary user answer, append an approved amendment if needed, then publish working; suppress and other statuses do not release the hidden-continuation hold."),
-    say("Не пересказывай ход рассуждений и внутренние размышления.", "Do not include chain-of-thought, hidden reasoning, or a narrative of internal deliberation."),
-    say("Это относится только к текущему моменту: если после этого сообщения отчёт уже опубликован, не обращай внимания.", "This applies to the current moment only: ignore it if a progress report was published after this message."),
+    say(`Пора сообщить владельцу о ходе цели (reason: ${dueReason}).`, `A progress update to the owner is due (reason: ${dueReason}).`),
+    say("Вместе со следующим вызовом инструмента напиши в чат 1–3 связных предложения: что изменилось с прошлого сообщения, что это значит сейчас и что дальше. Такое сообщение засчитывается как отчёт. Не описывай работу инструментов, не повторяй цель и не пересказывай ход рассуждений.", "Alongside your next tool call, write 1–3 connected sentences in chat: what changed since the last update, what it means now and what comes next. That message counts as the report. Do not describe tool activity, repeat the objective or narrate your reasoning."),
+    say("Если нужен ответ владельца или вся цель заблокирована, вместо этого опубликуй report_goal_progress со статусом awaiting_user или blocked.", "If you need the owner's answer or the whole goal is blocked, publish report_goal_progress with status awaiting_user or blocked instead."),
+    say("Если сообщение уже написано после этого напоминания, не обращай на него внимания.", "Ignore this if an update was already written after this reminder."),
   ].join(" ");
 }
 
@@ -535,9 +572,10 @@ export function createGoalReports(pi: Pick<ExtensionAPI, "appendEntry">) {
     return state.dueReason;
   };
 
-  const completeAssistantTurn = (goal: ThreadGoal, turnIndex: number): void => {
+  /** Учитывает ход ассистента; содержательный текст в чат вместе с вызовами засчитывается как отчёт. */
+  const completeAssistantTurn = (goal: ThreadGoal, turnIndex: number, chat: string | null = null): void => {
     const assistantTurns = state.assistantTurns + 1;
-    pi.appendEntry(GOAL_PROGRESS_ENTRY_TYPE, {
+    const entry: Extract<GoalReportEntry, { kind: "assistant_turn" }> = {
       version: 1,
       kind: "assistant_turn",
       goalId: goal.goalId,
@@ -546,8 +584,11 @@ export function createGoalReports(pi: Pick<ExtensionAPI, "appendEntry">) {
       activeSeconds: goal.usage.activeSeconds,
       tokensUsed: goal.usage.tokensUsed,
       assistantTurns,
-    } satisfies GoalReportEntry);
+      ...(chat === null ? {} : { chat }),
+    };
+    pi.appendEntry(GOAL_PROGRESS_ENTRY_TYPE, entry);
     state.assistantTurns = assistantTurns;
+    if (chat !== null) applyChatReport(state, entry);
   };
 
   const resetInstructionForNextRun = (): void => {

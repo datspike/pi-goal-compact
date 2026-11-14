@@ -8,22 +8,19 @@ import { GOAL_PROJECTION_ENTRY_TYPE } from "./goal-reports.js";
 import type { GoalProgressReport } from "./report-schema.js";
 import type { GoalArtifactContext, GoalArtifacts } from "./goal-artifacts.js";
 import { lintGoalMarkdown, type LanguageLintResult } from "./goal-language-quality.js";
-import { renderGoalDocument, renderCurrentProjection, renderDecisions, renderPaperCuts, renderTimeline, sanitizeMarkdownBlock, sanitizeTitle } from "./goal-projection-renderer.js";
+import { renderGoalDocument, renderCurrentProjection, sanitizeMarkdownBlock, sanitizeTitle } from "./goal-projection-renderer.js";
 import { applyGoalProjectionEvent, isGoalProjectionEvent, type GoalProjectionEvent } from "./goal-projection-reducer.js";
 import {
   createGoalProjectionState,
   type GoalDecisionEntry,
   type GoalImportedDocument,
   type GoalPaperCutEntry,
-  type GoalProjectionLanguageDiagnostic,
-  type GoalProjectionLanguageRepair,
   type GoalProjectionState,
 } from "./goal-projection-state.js";
 import { say } from "../language.js";
 
 
 
-export type GoalLanguageRepair = GoalProjectionLanguageRepair;
 
 export interface GoalPaperCutUpdate {
   id: string;
@@ -128,24 +125,28 @@ export function reconstructGoalProjectionState(entries: Iterable<SessionEntryLik
   return state;
 }
 
-function renderCurrentFor(state: GoalProjectionState): string {
-  return renderCurrentProjection(state);
-}
-
-function renderTimelineFor(state: GoalProjectionState): string {
-  return renderTimeline(state.progressEvents);
-}
-
-function lintTimeline(state: GoalProjectionState): LanguageLintResult {
-  // TIMELINE is append-only. Lint only the newest event here so warnings
-  // accumulated by older entries cannot permanently block future reports; the
-  // new report itself is already checked through CURRENT before append().
-  const latestEvent = state.progressEvents.at(-1);
-  return lintGoalMarkdown(renderTimeline(latestEvent ? [latestEvent] : []));
-}
-
+/**
+ * Языковая проверка документа не отклоняет запись (решение 0014): находки остаются в результате,
+ * а замечания модели строит ответ инструмента по её собственному тексту.
+ */
 function lintCurrent(state: GoalProjectionState): LanguageLintResult {
-  return lintGoalMarkdown(renderCurrentFor(state));
+  const result = lintGoalMarkdown(renderCurrentProjection(state));
+  return result.verdict === "repair_required" ? { ...result, verdict: "review" } : result;
+}
+
+const REPORT_TEXT_FIELDS = ["phase", "summary", "changed", "completed", "problemOrDecision", "riskAndComplexity", "verification", "nextStep", "needUser"] as const;
+
+/** Подписывает находку полем отчёта, где она нашлась; общие находки документа получают `projection`. */
+function withReportFields(report: GoalProgressReport, language: LanguageLintResult): LanguageLintResult {
+  const matches = new Map<string, string[]>();
+  for (const field of REPORT_TEXT_FIELDS) {
+    const value = report[field];
+    if (!value?.trim()) continue;
+    for (const diagnostic of lintGoalMarkdown(field === "phase" ? sanitizeTitle(value) : sanitizeMarkdownBlock(value)).diagnostics) {
+      matches.set(diagnostic.code, [...(matches.get(diagnostic.code) ?? []), field]);
+    }
+  }
+  return { ...language, diagnostics: language.diagnostics.map((diagnostic) => ({ ...diagnostic, field: matches.get(diagnostic.code)?.shift() ?? "projection" })) };
 }
 
 function noteSemanticHash(entry: Record<string, unknown>): string {
@@ -242,81 +243,11 @@ export function createGoalProjections(
     return state!;
   };
 
-  const setRepair = (goal: ThreadGoal, repair: GoalLanguageRepair, key: string): GoalProjectionState => {
-    const event = {
-      kind: "language_repair_required" as const,
-      idempotencyKey: `repair:${goal.goalId}:${key}`,
-      goalId: goal.goalId,
-      repair,
-    };
-    if (!current().appliedEventKeys.includes(event.idempotencyKey)) append(event);
-    return current();
-  };
-
-  const clearRepair = (goal: ThreadGoal, key: string): GoalProjectionState => {
-    const repairKey = current().languageRepairKey;
-    if (!repairKey) return current();
-    const event = {
-      kind: "language_repair_cleared" as const,
-      idempotencyKey: `repair-cleared:${goal.goalId}:${key}:${repairKey}`,
-      goalId: goal.goalId,
-      repairKey,
-    };
-    if (!current().appliedEventKeys.includes(event.idempotencyKey)) append(event);
-    return current();
-  };
-
-  const repairFromLanguage = (
-    artifact: GoalLanguageRepair["artifact"],
-    fields: string[],
-    language: LanguageLintResult,
-    diagnosticFields: readonly (string | null)[] = [],
-  ): GoalLanguageRepair => ({
-    artifact,
-    fields,
-    findings: language.errors.map((finding) => finding.message),
-    diagnostics: language.diagnostics.map((diagnostic, index): GoalProjectionLanguageDiagnostic => ({
-      artifact,
-      code: diagnostic.code,
-      field: diagnosticFields[index] ?? diagnostic.field,
-      length: diagnostic.length,
-      limit: diagnostic.limit,
-      repair: diagnostic.repair,
-    })),
-  });
-
-  const reportDiagnosticFields = (report: GoalProgressReport, language: LanguageLintResult): readonly (string | null)[] => {
-    const candidates = [
-      "phase",
-      "summary",
-      "changed",
-      "completed",
-      "problemOrDecision",
-      "riskAndComplexity",
-      "verification",
-      "nextStep",
-      "needUser",
-    ] as const;
-    const matches = new Map<string, string[]>();
-    for (const field of candidates) {
-      const value = report[field];
-      if (!value?.trim()) continue;
-      const renderedValue = field === "phase" ? sanitizeTitle(value) : sanitizeMarkdownBlock(value);
-      const fieldLanguage = lintGoalMarkdown(renderedValue);
-      for (const diagnostic of fieldLanguage.diagnostics) {
-        const existing = matches.get(diagnostic.code) ?? [];
-        existing.push(field);
-        matches.set(diagnostic.code, existing);
-      }
-    }
-    return language.diagnostics.map((diagnostic) => matches.get(diagnostic.code)?.shift() ?? "projection");
-  };
-
   /** Текст `GOAL.md` на диске: перезапись идёт только поверх того, что прочитано под блокировкой. */
   const readGoalFile = (goal: ThreadGoal, ctx: GoalArtifactContext): Promise<string | null> =>
     artifacts.readExisting(goal, "GOAL", { cwd: ctx.cwd });
 
-  const syncProjections = async (goal: ThreadGoal, ctx: GoalArtifactContext, clearLanguageRepair = false): Promise<GoalProjectionOutcome> => {
+  const syncProjections = async (goal: ThreadGoal, ctx: GoalArtifactContext): Promise<GoalProjectionOutcome> => {
     assertWritable();
     ctx.assertCurrent?.();
     restore(ctx.sessionManager.getBranch(), goal);
@@ -327,23 +258,6 @@ export function createGoalProjections(
     const currentState = current();
     const refs = () => artifacts.managedRefs(goal, ctx, ctx.sessionManager.getBranch());
     const currentLanguage = lintCurrent(currentState);
-    if (currentLanguage.verdict === "repair_required") {
-      const repair = repairFromLanguage("CURRENT", ["current"], currentLanguage);
-      const repairedState = setRepair(goal, repair, `sync:CURRENT:${currentState.stateSeq}`);
-      return { state: repairedState, refs: refs(), language: currentLanguage };
-    }
-    const checks = [
-      { artifact: "TIMELINE", field: "timeline", language: lintTimeline(currentState) },
-      { artifact: "DECISIONS", field: "decisions", language: lintGoalMarkdown(renderDecisions(currentState.decisions, currentState.legacyDecisions)) },
-      { artifact: "PAPER-CUTS", field: "paperCuts", language: lintGoalMarkdown(renderPaperCuts(currentState.paperCuts, currentState.legacyPaperCuts)) },
-    ] as const;
-    for (const check of checks) {
-      if (check.language.verdict !== "repair_required") continue;
-      const repair = repairFromLanguage(check.artifact, [check.field], check.language);
-      const repairedState = setRepair(goal, repair, `sync:${check.artifact}:${currentState.stateSeq}`);
-      return { state: repairedState, refs: artifacts.managedRefs(goal, ctx, ctx.sessionManager.getBranch()), language: check.language };
-    }
-    if (clearLanguageRepair && currentState.languageRepair) clearRepair(goal, `clean-retry:${currentState.latestReportId ?? currentState.stateSeq}`);
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const snapshot = current();
       const ref = artifacts.managedRefs(goal, ctx, ctx.sessionManager.getBranch()).find((item) => item.artifact === "GOAL");
@@ -394,14 +308,14 @@ export function createGoalProjections(
     }
     if (current().stateSeq === 0) append({ kind: "goal_created", idempotencyKey: `init:${goal.goalId}`, goalId: goal.goalId, goal });
     else append({ kind: goal.status === "complete" ? "goal_completed" : "goal_updated", idempotencyKey: `goal:${goal.goalId}:${key}`, goalId: goal.goalId, goal });
-    return syncProjections(goal, ctx, false);
+    return syncProjections(goal, ctx);
   });
 
   const completeGoal = (goal: ThreadGoal, ctx: GoalArtifactContext, key: string): Promise<GoalProjectionOutcome> => enqueue(ctx, async (ctx) => {
     if (getCurrentGoal()?.goalId !== goal.goalId) throw new Error("Goal changed while completing projection.");
     const event = { kind: "goal_completed", idempotencyKey: `complete:${goal.goalId}:${key}`, goalId: goal.goalId, goal } as const;
     if (!current().appliedEventKeys.includes(event.idempotencyKey)) append(event);
-    return syncProjections(goal, ctx, false);
+    return syncProjections(goal, ctx);
   });
 
   const updateWork = (goalId: string, workState: GoalWorkState, expectedRevision: number, ctx: GoalArtifactContext, callId: string): Promise<GoalWorkUpdateResult> => enqueue(ctx, async (ctx) => {
@@ -420,13 +334,9 @@ export function createGoalProjections(
     const accepted = current();
     let snapshot = accepted;
     let error: string | null = null;
-    try {
-      const synchronized = await syncProjections(goal, ctx, true);
-      snapshot = synchronized.state;
-      if (synchronized.language.verdict === "repair_required") error = synchronized.language.errors.map((item) => item.message).join("; ");
-    }
+    try { snapshot = (await syncProjections(goal, ctx)).state; }
     catch (failure) { error = failure instanceof Error ? failure.message : String(failure); }
-    const projectionFresh = error === null && snapshot.currentProjectionSeq === snapshot.stateSeq && snapshot.languageRepair === null;
+    const projectionFresh = error === null && snapshot.currentProjectionSeq === snapshot.stateSeq;
     return { applied: true, goalId, workRevision: snapshot.workRevision, workStateStale: snapshot.workStateStale,
       projectionFresh, stage: projectionFresh ? "complete" : "projection",
       retryable: !projectionFresh && getCurrentGoal()?.goalId === goalId, error };
@@ -446,45 +356,27 @@ export function createGoalProjections(
     const eventKind = report.eventKind ?? "progress_checkpoint";
     const workChangedSinceVerification = currentState.workState !== null && currentState.verifiedWorkRevision !== currentState.workRevision;
     if (!workChangedSinceVerification && eventKind === "progress_checkpoint" && currentState.latestProgress && !currentState.appliedEventKeys.includes(eventKey) && sameProgressContent(currentState.latestProgress, report)) {
-      const outcome = await syncProjections(goal, ctx, false);
+      const outcome = await syncProjections(goal, ctx);
       return { ...outcome, eventApplied: false };
-    }
-    const candidate = applyGoalProjectionEvent(currentState, {
-      kind: "progress_reported",
-      idempotencyKey: eventKey,
-      report: { ...report, eventKind },
-      reportId,
-      eventKind,
-      createdAt: Date.now(),
-      ...(reportAnchor ? { reportAnchor } : {}),
-      goalId: goal.goalId,
-    });
-    const language = lintGoalMarkdown(renderCurrentProjection(candidate));
-    if (language.verdict === "repair_required") {
-      const diagnosticFields = reportDiagnosticFields(report, language);
-      const reportFields = [...new Set(diagnosticFields.filter((field): field is string => field !== null && field !== "projection"))];
-      const repair = repairFromLanguage("CURRENT", reportFields.length > 0 ? reportFields : ["projection"], language, diagnosticFields);
-      const repairedState = setRepair(goal, repair, eventKey);
-      return { state: repairedState, refs: artifacts.managedRefs(goal, ctx, ctx.sessionManager.getBranch()), language };
     }
     if (!current().appliedEventKeys.includes(eventKey)) {
       append({ kind: "progress_reported", idempotencyKey: eventKey, report: { ...report, eventKind }, reportId, eventKind, createdAt: Date.now(), goalId: goal.goalId, ...(reportAnchor ? { reportAnchor } : {}) });
     }
-    const outcome = await syncProjections(goal, ctx, true);
-    return { ...outcome, eventApplied: true };
+    const outcome = await syncProjections(goal, ctx);
+    return { ...outcome, language: withReportFields(report, outcome.language), eventApplied: true };
   });
 
   // Canonical note events survive a failed document write. Keep their address
   // in the failure so the caller repairs the projection, not the note itself.
   const syncNoteProjection = async (goal: ThreadGoal, kind: "decision" | "paper_cut", id: string, ctx: GoalArtifactContext): Promise<GoalProjectionOutcome> => {
-    try { return { ...await syncProjections(goal, ctx, true), entryId: id }; }
+    try { return { ...await syncProjections(goal, ctx), entryId: id }; }
     catch (error) {
       ctx.assertCurrent?.();
       throw new Error(JSON.stringify({
         operation: "record_goal_note", applied: true, stage: "projection",
         retryable: getCurrentGoal()?.goalId === goal.goalId, goalId: goal.goalId,
         noteId: id, kind, message: error instanceof Error ? error.message : String(error),
-        remediation: say("Прочитай get_goal. Исправь существующий документ через record_goal_note(action=repair, kind, note_id); новую запись не создавай. Для замечаний к тексту сначала открой load_goal_language_guide и исправь названные данные.", "Read get_goal. Repair the existing document via record_goal_note(action=repair, kind, note_id); do not record another note. For text diagnostics use load_goal_language_guide and repair the named data first."),
+        remediation: say("Прочитай get_goal. Исправь существующий документ через record_goal_note(action=repair, kind, note_id); новую запись не создавай.", "Read get_goal. Repair the existing document via record_goal_note(action=repair, kind, note_id); do not record another note."),
       }));
     }
   };
@@ -501,14 +393,6 @@ export function createGoalProjections(
     const eventKey = legacyEntry ? noteEventKey("decision", callId, { ...legacyEntry }) :
       approvedAmendment ? `decision:${callId}` : noteEventKey("decision", callId, eventEntry);
     const event = { kind: "decision_recorded", idempotencyKey: eventKey, goalId: goal.goalId, entry: eventEntry } as const;
-    const candidate = applyGoalProjectionEvent(current(), event);
-    const text = renderDecisions(candidate.decisions);
-    const language = lintGoalMarkdown(text);
-    if (language.verdict === "repair_required") {
-      const repair = repairFromLanguage("DECISIONS", ["decision"], language);
-      const repairedState = setRepair(goal, repair, event.idempotencyKey);
-      return { state: repairedState, refs: [], language };
-    }
     append(event);
     return syncNoteProjection(goal, "decision", id, ctx);
   });
@@ -518,14 +402,6 @@ export function createGoalProjections(
     const id = noteEntryId("paper_cut", callId, entry);
     const eventEntry = { ...entry, id, status: "open" as const };
     const event = { kind: "paper_cut_recorded", idempotencyKey: noteEventKey("paper_cut", callId, eventEntry), goalId: goal.goalId, entry: eventEntry } as const;
-    const candidate = applyGoalProjectionEvent(current(), event);
-    const text = renderPaperCuts(candidate.paperCuts);
-    const language = lintGoalMarkdown(text);
-    if (language.verdict === "repair_required") {
-      const repair = repairFromLanguage("PAPER-CUTS", ["paperCut"], language);
-      const repairedState = setRepair(goal, repair, event.idempotencyKey);
-      return { state: repairedState, refs: [], language };
-    }
     append(event);
     return syncNoteProjection(goal, "paper_cut", id, ctx);
   });
@@ -547,11 +423,6 @@ export function createGoalProjections(
     const key = createHash("sha256").update(JSON.stringify({ callId, update })).digest("hex");
     const event = { kind: "paper_cut_updated" as const, idempotencyKey: `note-update:${key}`, goalId: goal.goalId,
       id: update.id, expectedRevision: update.expectedRevision, status: update.status, resolution: update.resolution };
-    const candidate = applyGoalProjectionEvent(current(), event);
-    const language = lintGoalMarkdown(renderPaperCuts(candidate.paperCuts));
-    if (language.verdict === "repair_required") {
-      return { state: setRepair(goal, repairFromLanguage("PAPER-CUTS", ["paperCut"], language), event.idempotencyKey), refs: [], language };
-    }
     append(event);
     return syncNoteProjection(goal, "paper_cut", update.id, ctx);
   });
@@ -577,7 +448,6 @@ export function createGoalProjections(
     updatePaperCut,
     repairNote,
     completeGoal,
-    repair: () => state?.languageRepair ?? null,
     // Bootstrap and lifecycle status events do not make a goal managed. The
     // managed contract starts with a durable v2 projection payload (or a
     // preserved legacy payload), not with pause/resume bookkeeping.
@@ -585,7 +455,7 @@ export function createGoalProjections(
       key.startsWith("report:") || key.startsWith("work:") || key.startsWith("note:") || key.startsWith("legacy:") || key.startsWith("documents:")
     )), 
     isCompletionReady: (report?: GoalProgressReport | null) => {
-      if (!state || state.stateSeq === 0 || state.languageRepair || state.currentProjectionSeq !== state.stateSeq) return false;
+      if (!state || state.stateSeq === 0 || state.currentProjectionSeq !== state.stateSeq) return false;
       if (state.workState && (state.workStateStale || state.verifiedWorkRevision !== state.workRevision)) return false;
       return report?.status === "verifying" || state.latestProgress?.status === "verifying";
     },

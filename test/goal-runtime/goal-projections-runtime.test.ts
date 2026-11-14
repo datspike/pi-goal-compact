@@ -149,81 +149,51 @@ test("canonical completion persistence failure is retryable after reload", async
   assert.match(current, /Завершена/);
 });
 
-test("rejected first report keeps a durable repair gate across reload before clean completion", async () => {
+type LanguageNote = { code: string; field: string | null };
+
+async function publishNotes(harness: ReturnType<typeof createRuntimeHarness>, report: Record<string, unknown>): Promise<LanguageNote[]> {
+  const result = await harness.runTool("report_goal_progress", { action: "publish", ...report }) as { details: { applied: boolean; languageNotes?: LanguageNote[] } };
+  assert.equal(result.details.applied, true);
+  return result.details.languageNotes ?? [];
+}
+
+test("a report with language findings is accepted and the notes come back in the same response", async () => {
   const harness = createRuntimeHarness();
-  await harness.runTool("create_goal", { objective: "Восстановить языковую блокировку", token_budget: null });
-  const badReport = {
-    action: "publish" as const,
-    status: "working" as const,
-    phase: "проверка",
+  await harness.runTool("create_goal", { objective: "Проверить языковые замечания", token_budget: null });
+  const result = await harness.runTool("report_goal_progress", {
+    action: "publish", status: "working", phase: "проверка",
     changed: "Controlled flow validated, блокеры отсутствуют.",
     nextStep: "Controlled flow validated, блокеры отсутствуют.",
-  };
-
-  await assert.rejects(
-    () => harness.runTool("report_goal_progress", badReport),
-    (error: unknown) => {
-      assert.match(String(error), /Текст документа цели нужно исправить/);
-      assert.match(String(error), /diagnostics=/);
-      assert.doesNotMatch(String(error), /Controlled flow validated/);
-      return true;
-    },
-  );
-  const guide = await harness.runTool("load_goal_language_guide", {});
-  const guideResult = (guide as { details: { result: { diagnostics: Array<{ artifact: string; code: string; field: string | null; length: number | null; limit: number | null; repair: string }>; guide: string[] } } }).details.result;
-  const mixedDiagnostics = guideResult.diagnostics.filter((diagnostic) => diagnostic.artifact === "CURRENT" && diagnostic.code === "mixed-language");
-  assert.deepEqual(mixedDiagnostics.map((diagnostic) => diagnostic.field), ["changed", "nextStep"]);
-  assert.ok(mixedDiagnostics.every((diagnostic) => diagnostic.field && !diagnostic.field.includes(",")));
-  assert.ok(guideResult.diagnostics.every((diagnostic) => !Object.prototype.hasOwnProperty.call(diagnostic, "excerpt")));
-  assert.ok(guideResult.guide.some((line) => line.includes("Markdown")));
+  }) as { details: { languageNotes: Array<LanguageNote & { repair: string }> } };
+  const mixed = result.details.languageNotes.filter((note) => note.code === "mixed-language");
+  assert.deepEqual(mixed.map((note) => note.field), ["changed", "nextStep"]);
+  assert.ok(result.details.languageNotes.every((note) => note.repair.length > 0 && !Object.prototype.hasOwnProperty.call(note, "excerpt")));
+  assert.doesNotMatch(JSON.stringify(result.details.languageNotes), /Controlled flow validated/);
   await harness.reloadSession("reload");
   await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
-
-  await harness.runTool("report_goal_progress", {
-    action: "publish",
-    status: "verifying",
-    phase: "проверка",
-    verification: "Проверка завершена.",
-    nextStep: "Завершить цель.",
-  });
+  await publishNotes(harness, { status: "verifying", phase: "проверка", verification: "Проверка завершена.", nextStep: "Завершить цель." });
   await harness.reloadSession("reload");
   const completed = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((completed as { details: { status: string } }).details.status, "complete");
 });
 
-test("projection diagnostics attribute renderer-sanitized headings to the source field", async () => {
+test("language notes attribute renderer-sanitized headings to the source field", async () => {
   const harness = createRuntimeHarness();
   await harness.runTool("create_goal", { objective: "Проверить привязку поля", token_budget: null });
-  const nextStep = `# Заголовок\n${"слово ".repeat(116).trim()}`;
-  await assert.rejects(() => harness.runTool("report_goal_progress", {
-    action: "publish",
-    status: "working",
-    phase: "работа",
-    changed: "Изменение подготовлено.",
-    nextStep,
-  }), /long-paragraph/);
-  const guide = await harness.runTool("load_goal_language_guide", {}) as { details: { result: { diagnostics: Array<{ code: string; field: string | null }> } } };
-  const diagnostic = guide.details.result.diagnostics.find((item) => item.code === "long-paragraph");
-  assert.equal(diagnostic?.field, "nextStep");
+  const notes = await publishNotes(harness, { status: "working", phase: "работа", changed: "Изменение подготовлено.", nextStep: `# Заголовок\n${"слово ".repeat(116).trim()}` });
+  assert.equal(notes.find((note) => note.code === "long-paragraph")?.field, "nextStep");
 });
 
-test("projection-wide diagnostics remain replayable across reload", async () => {
+test("projection-wide language notes do not block the report", async () => {
   const harness = createRuntimeHarness();
   await harness.runTool("create_goal", { objective: "Проверить общую диагностику", token_budget: null });
-  await assert.rejects(() => harness.runTool("report_goal_progress", {
-    action: "publish",
-    status: "verifying",
-    phase: "проверка",
-    changed: "Важно отметить факт.",
-    completed: "Ключевой результат подтверждён.",
-    verification: "По сути проверка работает.",
-    nextStep: "Завершить проверку после исправления.",
-  }), /ai-cluster/);
-  const guide = await harness.runTool("load_goal_language_guide", {}) as { details: { result: { diagnostics: Array<{ code: string; field: string | null }> } } };
-  assert.ok(guide.details.result.diagnostics.some((item) => item.code === "ai-cluster" && item.field === "projection"));
-  await harness.reloadSession("reload");
-  const reloadedGuide = await harness.runTool("load_goal_language_guide", {}) as { details: { result: { diagnostics: Array<{ code: string; field: string | null }> } } };
-  assert.ok(reloadedGuide.details.result.diagnostics.some((item) => item.code === "ai-cluster" && item.field === "projection"));
+  const notes = await publishNotes(harness, {
+    status: "verifying", phase: "проверка",
+    changed: "Важно отметить факт.", completed: "Ключевой результат подтверждён.",
+    verification: "По сути проверка работает.", nextStep: "Завершить проверку после исправления.",
+  });
+  assert.ok(notes.some((note) => note.code === "ai-cluster" && note.field === "projection"));
+  assert.equal(harness.snapshot().goal!.status, "active");
 });
 
 test("historical TIMELINE language warnings do not block later progress reports", async () => {

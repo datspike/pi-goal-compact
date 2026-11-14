@@ -5,6 +5,7 @@ import { Check } from "typebox/value";
 
 import {
   GOAL_PROGRESS_ENTRY_TYPE,
+  chatReportText,
   createGoalProgressEntryComponent,
   createGoalReportState,
   formatGoalProgressReport,
@@ -124,20 +125,15 @@ test("report_goal_progress publishes a durable entry without starting a message 
   assert.equal(harness.sentUserMessages.length, userMessageCount);
 });
 
-test("only the model narrative is visible and repair events never become chat entries", async () => {
+test("only the model narrative is visible and a report with language findings is accepted", async () => {
   const harness = createRuntimeHarness();
   await harness.runCommand("Проверить историю отчётов");
   const summary = "Проверил исходное состояние и зафиксировал границы. Теперь проверяю следующий шаг.";
-  await assert.rejects(
-    () => harness.runTool("report_goal_progress", { ...reportParams(), summary, changed: "Controlled flow validated, блокеры отсутствуют." }),
-    /Текст документа цели нужно исправить/,
-  );
-  const repair = harness.entries.find((entry) => entry.type === "custom" && entry.customType === GOAL_PROJECTION_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "language_repair_required");
-  assert.ok(repair && repair.type === "custom");
-  assert.equal(harness.renderEntry(GOAL_PROJECTION_ENTRY_TYPE, repair.data), null);
-  await harness.runTool("report_goal_progress", { ...reportParams(), summary });
+  const result = await harness.runTool("report_goal_progress", { ...reportParams(), summary, changed: "Controlled flow validated, блокеры отсутствуют." }) as { details: { languageNotes?: unknown[] } };
+  assert.ok((result.details.languageNotes ?? []).length > 0);
   const published = harness.entries.filter((entry) => entry.type === "custom" && entry.customType === GOAL_PROJECTION_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "progress_reported");
   assert.equal(published.length, 1);
+  assert.equal(harness.entries.filter((entry) => entry.type === "custom" && (entry.data as { kind?: string }).kind === "language_repair_required").length, 0);
   const visible = harness.renderEntry(GOAL_PROJECTION_ENTRY_TYPE, (published[0]! as { data: unknown }).data);
   assert.equal(visible?.map((line) => line.trim()).join(" ").trim(), summary);
   assert.doesNotMatch(visible?.join("\n") ?? "", /Статус:|Следующий шаг:|Артефакты:|reportId/);
@@ -145,95 +141,38 @@ test("only the model narrative is visible and repair events never become chat en
   assert.equal(reconstructGoalReportState(harness.entries, harness.snapshot().goal!.goalId).lastReport?.summary, summary);
 });
 
-test("first rejected report blocks completion until a clean retry", async () => {
+test("a working report with language findings does not replace the verifying report before completion", async () => {
   const harness = createRuntimeHarness();
   await harness.runCommand("ship reports");
-  const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
+  await harness.runTool("report_goal_progress", { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." });
   await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
-  await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проверка завершена." });
-  const completed = await harness.runTool("update_goal", { status: "complete" });
-  assert.equal((completed as { details: { status: string } }).details.status, "complete");
-});
-
-test("semantic checkpoint dedup does not clear a pending language repair", async () => {
-  const harness = createRuntimeHarness();
-  await harness.runCommand("ship reports");
-  await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying" });
-  const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
-  const duplicate = await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", eventKind: "progress_checkpoint" }) as { details: { reportId: string | null } };
-  assert.equal(duplicate.details.reportId, null);
-  assert.equal(harness.entries.filter((entry) => entry.type === "custom" && entry.customType === GOAL_PROJECTION_ENTRY_TYPE && (entry.data as { kind?: string }).kind === "language_repair_cleared").length, 0);
-  await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт со статусом verifying/);
-});
-
-test("language repair clears after a clean retry and does not leak into a replacement goal", async () => {
-  const harness = createRuntimeHarness();
-  await harness.runCommand("ship reports");
-  const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
   await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проверка завершена." });
   const completed = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((completed as { details: { status: string } }).details.status, "complete");
 
   await harness.runCommand("new replacement");
-  const replacement = harness.snapshot().goal;
-  assert.equal(replacement?.objective, "new replacement");
-  const replacementReport = { ...reportParams(), status: "verifying", changed: "Добавлен новый этап проверки.", verification: "Проверка завершена." };
-  await harness.runTool("report_goal_progress", replacementReport);
+  assert.equal(harness.snapshot().goal?.objective, "new replacement");
+  await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", changed: "Добавлен новый этап проверки.", verification: "Проверка завершена." });
   const replacementCompleted = await harness.runTool("update_goal", { status: "complete" });
   assert.equal((replacementCompleted as { details: { status: string } }).details.status, "complete");
 });
 
-test("amendment repair_required outcome is retryable and does not resume a paused goal", async () => {
+test("an old pending language repair from the journal stays hidden and holds neither pause nor amendment", async () => {
   const harness = createRuntimeHarness();
-  await harness.runCommand("Проверить amendment repair");
-  const bad = { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." };
+  await harness.runCommand("Проверить старый журнал");
   await harness.runTool("report_goal_progress", reportParams());
-  await assert.rejects(() => harness.runTool("report_goal_progress", bad), /Текст документа цели нужно исправить/);
+  const goal = harness.snapshot().goal!;
+  const legacy = { kind: "language_repair_required", idempotencyKey: "legacy-repair", goalId: goal.goalId,
+    repair: { artifact: "DECISIONS", fields: ["decision"], findings: ["абзац слишком длинный; разделите независимые мысли"] } };
+  harness.entries.push({ type: "custom", id: "legacy-repair", parentId: null, timestamp: new Date().toISOString(), customType: GOAL_PROJECTION_ENTRY_TYPE, data: legacy });
+  assert.equal(harness.renderEntry(GOAL_PROJECTION_ENTRY_TYPE, legacy), null);
+  await harness.reloadSession("reload");
   await harness.runSlashCommand("gp");
   assert.equal(harness.snapshot().goal?.status, "paused");
-  await assert.rejects(
-    () => harness.runTool("amend_goal", { amendment: "Исправить проекцию." }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      const payload = JSON.parse(error.message) as { applied: boolean; stage: string; retryable: boolean; remediation: string };
-      assert.equal(payload.applied, true);
-      assert.equal(payload.stage, "projection");
-      assert.equal(payload.retryable, true);
-      assert.match(payload.remediation, /load_goal_language_guide/);
-      return true;
-    },
-  );
-  assert.equal(harness.snapshot().goal?.status, "paused");
-  await harness.runSlashCommand("gr");
-  assert.equal(harness.snapshot().goal?.status, "paused");
-  await harness.runTool("record_goal_note", { kind: "decision", title: "Проверка ремонта", decision: "Проверка завершена, исходный договор сохранён.", rationale: "Исправляем проекции до активации." });
+  const amended = await harness.runTool("amend_goal", { amendment: "Исправить проекцию." }) as { details: { goal: { objective: string } } };
+  assert.equal((amended.details.goal.objective.match(/Approved amendment:/g) ?? []).length, 1);
   await harness.runSlashCommand("gr");
   assert.equal(harness.snapshot().goal?.status, "active");
-  assert.equal(harness.snapshot().goal?.objective.includes("Исправить проекцию."), true);
-  await harness.runTool("report_goal_progress", { ...reportParams(), status: "verifying", verification: "Проекция исправлена." });
-  const retry = await harness.runTool("amend_goal", { amendment: "Исправить проекцию." }) as { details: { goal: { objective: string } } };
-  assert.equal((retry.details.goal.objective.match(/Approved amendment:/g) ?? []).length, 1);
-});
-
-test("repair_required amendment errors remain bounded after a long report history", async () => {
-  const harness = createRuntimeHarness();
-  await harness.runCommand("Проверить bounded repair error");
-  for (let index = 0; index < 100; index += 1) {
-    await harness.runTool("report_goal_progress", { action: "publish", status: "working", phase: "Проверяю", summary: `Проверил шаг ${index}. Перехожу дальше.`, changed: `Изменил шаг ${index}.`, nextStep: "Продолжить." });
-  }
-  await assert.rejects(() => harness.runTool("report_goal_progress", { ...reportParams(), changed: "Controlled flow validated, блокеры отсутствуют." }), /Текст документа цели нужно исправить/);
-  await assert.rejects(
-    () => harness.runTool("amend_goal", { amendment: "Ограниченное исправление." }),
-    (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.ok(error.message.length < 1200);
-      assert.doesNotMatch(error.message, /progressEvents|decisions|paperCuts|appliedAmendments|Проверил шаг 99/);
-      return true;
-    },
-  );
 });
 
 test("amendment blocks an immediate completion race and requires a new verifying report", async () => {
@@ -748,6 +687,37 @@ test("a pending report is steered into a running turn between tool calls, once p
   await harness.emit("agent_end", { type: "agent_end", messages: [] });
   await endToolUseTurn(harness);
   assert.equal(dueNudges(harness).length, 2);
+});
+
+function chatToolTurn(text: string) {
+  return { ...toolUseMessage("bash"), content: [{ type: "text" as const, text }, ...toolUseMessage("bash").content] };
+}
+
+const CHAT_NOTE = "Собрал список падающих тестов: все связаны со старым языковым ремонтом. Переписываю их по одному.";
+
+test("a substantive chat note in a tool-use turn counts as a report and releases the due reminder", async () => {
+  const harness = createRuntimeHarness();
+  const goal = await startDueGoal(harness);
+  await harness.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, message: chatToolTurn(CHAT_NOTE), toolResults: [] });
+  assert.equal(dueNudges(harness).length, 0);
+  const state = await harness.runTool("get_goal", {}) as { details: { lastChatReport: { text: string } | null } };
+  assert.equal(state.details.lastChatReport?.text, CHAT_NOTE);
+  await harness.reloadSession("reload");
+  const replayed = reconstructGoalReportState(harness.entries, goal.goalId);
+  assert.equal(replayed.dueReason, null);
+  assert.equal(replayed.lastChatReport?.text, CHAT_NOTE);
+});
+
+test("a short chat line or a final answer does not count as a report", async () => {
+  const harness = createRuntimeHarness();
+  await startDueGoal(harness);
+  await harness.emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 1 });
+  await harness.emit("turn_end", { type: "turn_end", turnIndex: 0, message: chatToolTurn("Смотрю файл."), toolResults: [] });
+  assert.equal(dueNudges(harness).length, 1);
+  assert.equal(chatReportText({ ...assistantMessage("stop", { input: 1, output: 1 }), content: [{ type: "text", text: CHAT_NOTE }] }), null);
+  assert.equal(chatReportText(chatToolTurn("инструмент: bash · завершён, ожидание следующего действия и ещё немного текста для длины")), null);
+  assert.equal([...chatReportText(chatToolTurn(CHAT_NOTE.repeat(10)))!].length, 480);
 });
 
 test("a final answer turn is never nudged because a steer would force an extra turn", async () => {

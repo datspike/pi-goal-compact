@@ -9,7 +9,7 @@ import type { GoalWorkState } from "../../src/goal/goal-work-state.js";
 
 function definitions() {
   const harness = createRuntimeHarness();
-  return ["resume_goal", "get_goal", "update_goal_work", "create_goal", "amend_goal", "load_goal_language_guide", "record_goal_note", "report_goal_progress", "update_goal"].map(name => {
+  return ["resume_goal", "get_goal", "update_goal_work", "create_goal", "amend_goal", "record_goal_note", "report_goal_progress", "update_goal"].map(name => {
     const metadata = harness.getToolMetadata(name);
     assert.ok(metadata);
     return { name, ...metadata };

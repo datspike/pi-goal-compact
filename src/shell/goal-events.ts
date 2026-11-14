@@ -8,6 +8,7 @@ import { GOAL_OBSERVABILITY_ENTRY_TYPE, renderGoalObservabilityEntry } from "../
 import { isGoalProjectionEvent } from "../goal/goal-projection-reducer.js";
 import {
   answeredQuestionCallIds,
+  chatReportText,
   createGoalProgressEntryComponent,
   formatGoalProgressReport,
   goalProgressInstruction,
@@ -91,7 +92,6 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     recordGoalPaperCut: session.recordGoalPaperCut,
     updateGoalPaperCut: session.updateGoalPaperCut,
     repairGoalNote: session.repairGoalNote,
-    loadGoalLanguageGuide: session.loadGoalLanguageGuide,
   };
   registerGoalTools(pi, toolHost);
   // Описание `create_goal` зависит от выключателя Д5, а настройки читаются при старте сессии.
@@ -267,7 +267,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     // Удачный ход обнуляет счётчики повторов, внимание к ошибке остаётся до слова владельца.
     onRecoverySuccessfulTurn(session.recovery, event.message as Parameters<typeof onRecoverySuccessfulTurn>[1]);
     const goal = session.getGoal();
-    if (goal?.status === "active" && !hasGoalProgressToolCall(message)) session.reports.completeAssistantTurn(goal, event.turnIndex);
+    if (goal?.status === "active" && !hasGoalProgressToolCall(message)) session.reports.completeAssistantTurn(goal, event.turnIndex, chatReportText(message));
     session.reports.maybeMarkDue(goal, event.turnIndex);
     // Напоминание подхватывается перед следующим запросом к модели. После финального ответа
     // его не шлём: оно вызвало бы лишний ход.

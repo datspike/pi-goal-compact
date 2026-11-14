@@ -34,8 +34,8 @@ test("approved long amendment is rendered verbatim without a language-repair loo
   assert.match(result.details.amendment_id, /^amendment-[a-f0-9]{64}$/);
   const objective = harness.snapshot().goal!.objective;
   assert.equal(objective.split(amendment).length - 1, 1);
-  const state = await harness.runTool("get_goal", {}) as { details: { projection: { repairPending: boolean } } };
-  assert.equal(state.details.projection.repairPending, false);
+  const state = await harness.runTool("get_goal", {}) as { details: { projection: { fresh: boolean } } };
+  assert.equal(state.details.projection.fresh, true);
   const entries = harness.entries.filter((r) => r.type === "custom").map((r) => r.data as { kind?: string; entry?: GoalDecisionEntry })
     .filter((r) => r.kind === "decision_recorded").map((r) => r.entry!);
   const decisions = renderDecisions(entries);
@@ -92,7 +92,7 @@ test("a projection repair resumes a paused goal only after the documents are rep
   assert.equal(harness.sentMessages.length, sent);
 });
 
-test("recovery can finish a rejected amendment decision with an old pending repair", async () => {
+test("an old pending language repair from the journal blocks neither recovery nor reading", async () => {
   const harness = createRuntimeHarness();
   await harness.runCommand("Восстановить прежнюю диагностику решения");
   await harness.runTool("report_goal_progress", progress);
@@ -105,12 +105,12 @@ test("recovery can finish a rejected amendment decision with an old pending repa
       repair: { artifact: "DECISIONS", fields: ["decision"], findings: ["абзац слишком длинный; разделите независимые мысли"] } },
   });
   await harness.reloadSession("reload");
-  const before = await harness.runTool("get_goal", {}) as { details: { projection: { repairPending: boolean } } };
-  assert.equal(before.details.projection.repairPending, true);
+  const before = await harness.runTool("get_goal", {}) as { details: { projection: { fresh: boolean } } };
+  assert.equal(before.details.projection.fresh, true);
   await harness.runTool("amend_goal", { amendment_id: result.details.amendment_id });
-  const after = await harness.runTool("get_goal", {}) as { details: { projection: { repairPending: boolean } } };
-  assert.equal(after.details.projection.repairPending, false);
   assert.equal(harness.snapshot().goal!.objective, goal.objective);
+  await harness.runTool("resume_goal", {}).catch(() => undefined);
+  assert.equal(harness.snapshot().goal!.status, "active");
 });
 
 test("amendment recovery guidance matches the registered root object schema", () => {

@@ -7,7 +7,7 @@ import { createExpandedRuntimeHarness, useHarnessLanguage } from "../support/run
 
 useHarnessLanguage("en");
 
-test("each corrected note clears its own repair under the same progress report", async () => {
+test("a decision note with language findings is recorded at once and leaves resume open", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "goal-clean-retry-"));
   try {
     const h = createExpandedRuntimeHarness();
@@ -20,19 +20,15 @@ test("each corrected note clears its own repair under the same progress report",
     });
     const originalContract = h.snapshot().goal!.objective;
     for (let n = 1; n <= 2; n++) {
-      await assert.rejects(() => h.runTool("record_goal_note", {
-        kind: "decision", title: `Проверка ${n}`,
-        decision: "Подготовка + проверка.", rationale: "Сохраняем исходные ограничения.",
-      }), /language repair/);
-      const rejected = await h.runTool("get_goal", {}) as { details: { projection: { repairPending: boolean } } };
-      assert.equal(rejected.details.projection.repairPending, true);
       await h.runTool("record_goal_note", {
         kind: "decision", title: `Проверка ${n}`,
-        decision: "Выполнить подготовку, затем проверку.", rationale: "Сохраняем исходные ограничения.",
+        decision: "Подготовка + проверка.", rationale: "Сохраняем исходные ограничения.",
       });
-      const corrected = await h.runTool("get_goal", {}) as { details: { projection: { repairPending: boolean } } };
-      assert.equal(corrected.details.projection.repairPending, false, `clean retry ${n}`);
+      const state = await h.runTool("get_goal", {}) as { details: { projection: { fresh: boolean } } };
+      assert.equal(state.details.projection.fresh, true, `note ${n}`);
     }
+    const decisions = h.entries.filter((r) => r.type === "custom").map((r) => r.data as { kind?: string }).filter((r) => r.kind === "decision_recorded");
+    assert.equal(decisions.length, 2);
     await h.runSlashCommand("gp");
     await h.emit("input", { type: "input", source: "interactive", text: "продолжай" });
     const sentBefore = [h.sentMessages.length, h.sentUserMessages.length];

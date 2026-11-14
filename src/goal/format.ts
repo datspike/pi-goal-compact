@@ -3,7 +3,7 @@ import type { GoalDecisionEntry, GoalPaperCutEntry } from "./goal-projection-sta
 
 export type GoalPaperCutSummary = Pick<GoalPaperCutEntry, "id" | "title" | "severity" | "status" | "resolution"> & { revision: number };
 import { formatRecoveryAttention, type RecoveryAttention } from "./recovery.js";
-import type { GoalReportState } from "./goal-reports.js";
+import type { GoalChatReport, GoalReportState } from "./goal-reports.js";
 import type { GoalProgressReport } from "./report-schema.js";
 import { goalPreservedContext, type GoalProjectionState } from "./goal-projection-state.js";
 import type { GoalArtifactRef, GoalStatus, ThreadGoal } from "./types.js";
@@ -44,13 +44,15 @@ export interface GoalWorkingState {
   progressStatus: string | null;
   nextStep: string | null;
   latestUsefulVerification: string | null;
+  /** Последнее сообщение агента в чат, засчитанное как отчёт. */
+  lastChatReport: GoalChatReport | null;
   blocker: string | null;
   needUser: string | null;
   awaitingUser: boolean;
   requiresUserDecision?: boolean;
   continuationHeld: boolean;
   usage: { tokensUsed: number; activeSeconds: number };
-  projection: { stateSeq: number; currentProjectionSeq: number; fresh: boolean; repairPending: boolean } | null;
+  projection: { stateSeq: number; currentProjectionSeq: number; fresh: boolean } | null;
   userAnswerReceived: boolean;
   artifactRefs: GoalArtifactRef[];
   history: { source: "session-events"; preservedContext?: NonNullable<ReturnType<typeof goalPreservedContext>> };
@@ -74,7 +76,7 @@ export interface GoalActionWorkingState {
   requiresUserDecision?: boolean;
   continuationHeld: boolean;
   userAnswerReceived: boolean;
-  projection?: { stateSeq: number; currentProjectionSeq: number; fresh: boolean; repairPending: boolean };
+  projection?: { stateSeq: number; currentProjectionSeq: number; fresh: boolean };
 }
 
 export interface GoalToolResponse {
@@ -314,6 +316,7 @@ export function goalWorkingState(
     progressStatus: progress?.status ?? null,
     nextStep: work ? selectNextGoalWork(work)?.title ?? null : progress?.nextStep ?? null,
     latestUsefulVerification,
+    lastChatReport: reportState?.lastChatReport ? { ...reportState.lastChatReport } : null,
     blocker: work?.items.find((item) => item.status === "blocked")?.result || work?.items.find((item) => item.status === "blocked")?.title || ((progress?.status === "blocked" || progress?.status === "awaiting_user") ? progress.problemOrDecision ?? null : null),
     needUser: progress?.needUser ?? null,
     awaitingUser: reportState?.awaitingUser ?? progress?.status === "awaiting_user",
@@ -324,7 +327,6 @@ export function goalWorkingState(
       stateSeq: projection.stateSeq,
       currentProjectionSeq: projection.currentProjectionSeq,
       fresh: projection.currentProjectionSeq === projection.stateSeq,
-      repairPending: projection.languageRepair !== null,
     } : null,
     userAnswerReceived: reportState?.hasUserDecisionSinceAwaiting ?? false,
     artifactRefs: artifactRefs.map((ref) => ({ ...ref })),
@@ -347,7 +349,7 @@ export function goalActionWorkingState(workingState: GoalWorkingState): GoalActi
     requiresUserDecision: workingState.requiresUserDecision ?? workingState.awaitingUser,
     continuationHeld: workingState.continuationHeld,
     userAnswerReceived: workingState.userAnswerReceived,
-    ...(projection && (!projection.fresh || projection.repairPending) ? { projection: { ...projection } } : {}),
+    ...(projection && !projection.fresh ? { projection: { ...projection } } : {}),
   };
 }
 

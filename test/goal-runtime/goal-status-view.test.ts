@@ -58,7 +58,7 @@ test("get_goal defaults to the unchanged full view; status is explicit and read-
   assert.equal(harness.sentMessages.length + harness.sentUserMessages.length, 0);
 });
 
-test("status preserves an absent goal and all lifecycle, stale-plan and repair metadata", async () => {
+test("status preserves an absent goal and all lifecycle, stale-plan and projection metadata", async () => {
   const harness = createRuntimeHarness();
   const absent = (await read(harness)).state;
   assertStatus(absent, goalStatusWorkingState(absent));
@@ -66,8 +66,8 @@ test("status preserves an absent goal and all lifecycle, stale-plan and repair m
   await harness.runTool("create_goal", { objective: "Проверить состояния цели и сохранность блокировок." });
   const base = (await read(harness)).state;
   for (const lifecycle of ["active", "paused", "budgetLimited", "complete"] satisfies GoalStatus[]) {
-    for (const repairPending of [false, true]) {
-      const state: GoalWorkingState = { ...base, lifecycle, goal: { ...base.goal!, status: lifecycle }, workStateStale: true, awaitingUser: true, continuationHeld: true, userAnswerReceived: false, needUser: "Выбрать дальнейший путь.", blocker: "Нужно решение владельца.", projection: { stateSeq: 4, currentProjectionSeq: repairPending ? 3 : 4, fresh: !repairPending, repairPending } };
+    for (const fresh of [true, false]) {
+      const state: GoalWorkingState = { ...base, lifecycle, goal: { ...base.goal!, status: lifecycle }, workStateStale: true, awaitingUser: true, continuationHeld: true, userAnswerReceived: false, needUser: "Выбрать дальнейший путь.", blocker: "Нужно решение владельца.", projection: { stateSeq: 4, currentProjectionSeq: fresh ? 4 : 3, fresh } };
       const original = structuredClone(state);
       assertStatus(state, goalStatusWorkingState(state));
       assert.deepEqual(state, original);

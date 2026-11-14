@@ -89,27 +89,6 @@ export function renderCurrentProjection(state: GoalProjectionState): string {
   return renderCurrent(state.goal, state.latestProgress);
 }
 
-function renderProgressEvent(entry: GoalProgressEventRecord, index: number): string[] {
-  const report = entry.report;
-  const lines = [`## #${index + 1} · ${goalProgressEventLabel(entry.eventKind)} · ${statusLabel(report.status)}`, "", `${say("Фаза", "Phase")}: ${sanitizeTitle(report.phase)}`, "", `${say("Время", "Time")}: ${new Date(entry.createdAt).toISOString()}`, ""];
-  lines.push(...(report.summary?.trim() ? [sanitizeMarkdownBlock(report.summary), ""] : []));
-  lines.push(...listSection(say("Изменения", "Changes"), report.changed));
-  lines.push(...listSection(say("Готово", "Done"), report.completed));
-  lines.push(...section(say("Решение или проблема", "Decision or problem"), report.problemOrDecision));
-  lines.push(...section(say("Риск и сложность", "Risk and complexity"), report.riskAndComplexity));
-  lines.push(...section(say("Проверка", "Verification"), report.verification));
-  lines.push(...section(say("Следующий шаг", "Next step"), report.nextStep));
-  lines.push(...section(say("Нужен пользователь", "User needed"), report.needUser));
-  return lines;
-}
-
-export function renderTimeline(entries: readonly GoalProgressEventRecord[]): string {
-  const lines = [say("# История прогресса", "# Progress history"), ""];
-  if (entries.length === 0) return `${lines.join("\n")}${say("Пока нет событий прогресса.", "No progress events yet.")}\n`;
-  entries.forEach((entry, index) => lines.push(...renderProgressEvent(entry, index)));
-  return `${lines.join("\n").trimEnd()}\n`;
-}
-
 function renderEntryText(value: string): string {
   return value.trim();
 }

@@ -175,7 +175,6 @@ export interface ToolHost {
   recordGoalPaperCut(input: { title: string; impact: string; severity: "low" | "medium" | "high"; revisit?: string }, ctx: ExtensionContext, callId: string): Promise<unknown>;
   updateGoalPaperCut?(input: GoalPaperCutUpdate, ctx: ExtensionContext, callId: string): Promise<unknown>;
   repairGoalNote?(kind: "decision" | "paper_cut", noteId: string, ctx: ExtensionContext): Promise<unknown>;
-  loadGoalLanguageGuide(): unknown;
 }
 
 function textResult(
@@ -194,20 +193,10 @@ function throwToolError(message: string, details?: Record<string, unknown>): nev
   throw new Error(JSON.stringify({ ...details, message }));
 }
 
-function isProjectionRepairResult(value: unknown): value is {
-  language: { verdict: "repair_required"; errors?: readonly { message?: string }[] };
-  state?: { languageRepair?: { diagnostics?: readonly unknown[] } | null };
-} {
-  if (!value || typeof value !== "object") return false;
-  const language = (value as { language?: unknown }).language;
-  return Boolean(language && typeof language === "object" && (language as { verdict?: unknown }).verdict === "repair_required");
-}
-
-function projectionRepairMessage(value: { language: { errors?: readonly { message?: string }[] }; state?: { languageRepair?: { diagnostics?: readonly unknown[] } | null } }): string {
-  const findings = value.language.errors?.map((item) => item.message).filter((item): item is string => Boolean(item)) ?? [];
-  const diagnostics = value.state?.languageRepair?.diagnostics;
-  const suffix = diagnostics?.length ? ` diagnostics=${JSON.stringify(diagnostics)}` : "";
-  return `${say("Текст документа цели нужно исправить", "Goal projection language repair required")}${findings.length ? `: ${findings.join("; ")}` : "."}${suffix}`;
+/** Языковые замечания к принятой записи (решение 0014): не больше пяти, без цитат из текста. */
+function languageNotes(value: unknown): unknown[] {
+  const diagnostics = (value as { language?: { diagnostics?: unknown } } | null | undefined)?.language?.diagnostics;
+  return Array.isArray(diagnostics) ? diagnostics.slice(0, 5) : [];
 }
 
 function projectionArtifactRefs(value: unknown): GoalArtifactRef[] {
@@ -275,7 +264,7 @@ function requiredReport(params: {
  * Инструменты, которые объявлены модели только при цели в работе или на паузе (решение 0013).
  * Без цели модель видит один `create_goal`.
  */
-export const OPEN_GOAL_TOOLS = ["resume_goal", "get_goal", "update_goal_work", "amend_goal", "load_goal_language_guide", "record_goal_note", "report_goal_progress", "update_goal"] as const;
+export const OPEN_GOAL_TOOLS = ["resume_goal", "get_goal", "update_goal_work", "amend_goal", "record_goal_note", "report_goal_progress", "update_goal"] as const;
 
 /**
  * Набор активных инструментов для этого состояния цели; чужие инструменты не трогаются.
@@ -379,20 +368,6 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
   });
 
   pi.registerTool({
-    name: "load_goal_language_guide",
-    defaultActive: false,
-    label: say("Языковая справка цели", "Load Goal Language Guide"),
-    description: say("Загружает структурированную языковую диагностику и краткие указания по исправлению после отклонения проекции цели. Диагностика содержит artifact, code, field, length, limit и repair без исходных чувствительных выдержек.", "Load the structured language-repair diagnostics and concise repair guidance after a goal projection is rejected. Diagnostics contain artifact, code, field, length, limit, and repair without raw sensitive excerpts."),
-    promptSnippet: say("После отклонённого текста цели прочитай диагностику и безопасно исправь затронутые данные.", "After rejected Goal text, read diagnostics and repair the affected data safely."),
-    promptGuidelines: goalToolGuidelines("load_goal_language_guide"),
-    parameters: emptyParams(),
-    async execute() {
-      const result = host.loadGoalLanguageGuide();
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { result, error: null } };
-    },
-  });
-
-  pi.registerTool({
     name: "record_goal_note",
     defaultActive: false,
     label: say("Записать заметку цели", "Record Goal Note"),
@@ -450,11 +425,6 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
         }
       }
       const noteId = result && typeof result === "object" && "entryId" in result && typeof result.entryId === "string" ? result.entryId : null;
-      if (isProjectionRepairResult(result)) throwToolError(projectionRepairMessage(result), {
-        operation: "record_goal_note", action, kind: params.kind, noteId: noteId ?? params.note_id ?? null,
-        applied: noteId !== null, stage: noteId ? "projection" : "canonical", retryable: true,
-        remediation: noteId ? say("Прочитай get_goal и load_goal_language_guide; исправь существующие данные, затем вызови action=repair с note_id. Новую запись не создавай.", "Read get_goal and load_goal_language_guide; repair existing data, then use action=repair with note_id. Do not record another note.") : say("Исправь отклонённые поля по load_goal_language_guide и повтори этот непримененный запрос.", "Fix rejected fields using load_goal_language_guide, then retry this unapplied request."),
-      });
       const fullState = host.getGoalWorkingState(ctx);
       const note = fullState.paperCuts?.find((entry) => entry.id === noteId);
       const artifactRefs = projectionArtifactRefs(result);
@@ -483,7 +453,8 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       const result = await host.reportGoal(params.action, report, ctx, toolCallId);
       const workingState = goalActionWorkingState(host.getGoalWorkingState(ctx));
       const artifactRefs = report?.eventKind === "artifact_updated" ? projectionArtifactRefs(result.projection) : [];
-      const response = { operation: "report_goal_progress", action: params.action, applied: true, reportId: result.reportId, state: compactReportState(result.state), workingState, ...(artifactRefs.length > 0 ? { artifactRefs } : {}) };
+      const notes = languageNotes(result.projection);
+      const response = { operation: "report_goal_progress", action: params.action, applied: true, reportId: result.reportId, state: compactReportState(result.state), workingState, ...(artifactRefs.length > 0 ? { artifactRefs } : {}), ...(notes.length > 0 ? { languageNotes: notes } : {}) };
       return {
         content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
         details: { ...response, error: null },
