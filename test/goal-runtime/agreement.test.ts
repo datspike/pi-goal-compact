@@ -145,6 +145,18 @@ test("правка плана или нового пункта после пер
   assert.equal((await read(harness)).goal!.status, "complete");
 });
 
+test("длинный текст проверки не отклоняется: запись обрезает его сама", async () => {
+  const harness = await setup();
+  const before = harness.entries.length;
+  await assert.rejects(harness.runTool("update_goal", { status: "complete", verification: "Итоги совпали с выгрузкой. ".repeat(100) }, undefined, { agreementCheck: "raw" }), /agreement_check/);
+  const stored = harness.entries.slice(before).flatMap((entry) => entry.type === "custom" ? [entry.data as { kind?: string; report?: { verification: string } }] : [])
+    .find((data) => data.kind === "progress_reported")?.report?.verification ?? "";
+  assert.equal([...stored].length, 2000);
+  assert.ok(stored.endsWith("…"));
+  await complete(harness);
+  assert.equal((await read(harness)).goal!.status, "complete");
+});
+
 test("закрытие укладывается в два вызова: текст проверки в первой попытке, закрытие во второй", async () => {
   const harness = await setup();
   const before = harness.entries.length;

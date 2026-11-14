@@ -87,7 +87,8 @@ const updateGoalParams = () => Type.Object({
   status: stringEnum(["complete"] as const, {
     description: say("Принимается только complete. Не вызывай, пока остаётся обязательная работа.", "Only complete is accepted. Do not call this until no required work remains."),
   }),
-  verification: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_VERIFICATION_CHARS, description: say("Чем сделанное отвечает каждому пункту «Готово, когда»; засчитывается как отчёт verifying для текущих договорённости и плана.", "How the work meets each \"Done when\" item; recorded as the verifying report for the current agreement and plan.") })),
+  // Длина не ограничена схемой: отказ за лишние знаки стоил бы отдельного вызова, запись обрезает текст сама.
+  verification: Type.Optional(Type.String({ minLength: 1, description: say("Чем сделанное отвечает каждому пункту «Готово, когда», кратко; засчитывается как отчёт verifying для текущих договорённости и плана. После возврата договорённости повторять не нужно.", "Briefly, how the work meets each \"Done when\" item; recorded as the verifying report for the current agreement and plan. No need to repeat it after the agreement is returned.") })),
 });
 
 const recordGoalNoteParams = () => Type.Object({

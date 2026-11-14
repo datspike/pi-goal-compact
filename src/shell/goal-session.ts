@@ -16,7 +16,7 @@ import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
 import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
 import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
-import { MAX_REPORT_SUMMARY_CHARS, type GoalProgressReport } from "../goal/report-schema.js";
+import { MAX_REPORT_SUMMARY_CHARS, MAX_REPORT_VERIFICATION_CHARS, type GoalProgressReport } from "../goal/report-schema.js";
 import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
 import { CUSTOM_ENTRY_TYPE, type GoalEntrySource, type GoalResult, type ThreadGoal } from "../goal/types.js";
 import { createGoalContext } from "./goal-context.js";
@@ -429,7 +429,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       status: "verifying", eventKind: "verification",
       phase: say("Сверяю результат с договорённостью", "Checking the result against the agreement"),
       summary: chars.length <= MAX_REPORT_SUMMARY_CHARS ? chars.join("") : `${chars.slice(0, MAX_REPORT_SUMMARY_CHARS - 1).join("")}…`,
-      verification: chars.join(""), nextStep: say("Закрыть цель.", "Close the goal."),
+      verification: chars.length <= MAX_REPORT_VERIFICATION_CHARS ? chars.join("") : `${chars.slice(0, MAX_REPORT_VERIFICATION_CHARS - 1).join("")}…`, nextStep: say("Закрыть цель.", "Close the goal."),
     };
     try {
       await reportGoal("publish", report, ctx, `update_goal:${fingerprint}`);
