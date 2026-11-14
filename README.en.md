@@ -20,13 +20,15 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 **"Decided by me" as a separate list.** Assumptions and choices the agent made without the owner do not dissolve into the goal text. Only the owner can confirm or reject an item.
 
-**Closing with a question.** The first attempt to close a goal returns the agreement to the agent. It has to answer in its own words how the work meets each of the owner's requirements. Counters and green checks confirm bookkeeping, not the result.
+**Closing with a question.** The first attempt to close a goal returns the agreement to the agent. It has to answer in its own words how the work meets each of the owner's requirements. Counters and green checks confirm bookkeeping, not the result. The agent passes its verification text straight to `update_goal`, so closing usually takes two calls.
 
 **A summary that keeps the intent.** The compaction summary keeps the owner's words about the goal verbatim, the status of each decision (accepted, open, rejected), every related object (merge requests, branches, environments), the source of each step and exact paths. The goal's own control instructions stay out of the summary.
 
-**Work without extra nudging.** While a goal is active and the agent is idle, the extension continues the work with a hidden message. It accounts time and tokens, pauses the goal on Esc, and survives provider errors, context overflow, restarts and `/reload`. When the agent is waiting for the owner's answer, there are no continuations.
+**Work without extra nudging.** While a goal is active and the agent is idle, the extension continues the work with a hidden message. When the agent tries to end its turn with the goal still open, the message asks it to check the work against "Done when": continue with an unmet item, or close the goal with a verification. It accounts time and tokens, pauses the goal on Esc, and survives provider errors, context overflow, restarts and `/reload`. When the agent is waiting for the owner's answer, there are no continuations.
 
 In a native subagent fork, the parent's Goal remains history: it neither starts a turn nor controls the child's completion. The child can create its own Goal, which survives restarts and `/reload`. Interactive forks keep their previous continuation behavior.
+
+**Lean protocol.** Without a goal the model sees a single goal tool, `create_goal`. The others appear once a goal is set and leave at the next window boundary after it closes: removing them at once would reset the cache. Smooth work needs no service calls on the way: coherent chat text counts as a report, the plan and the report for the same milestone go into one `update_goal_work`, and every goal tool response carries the fresh plan revision. Language remarks about a report arrive in the response as `languageNotes` and block nothing.
 
 **A controlled window.** Context window modes: an economy mode by default, an enlarged window for one compaction or for the whole conversation. The footer shows how full the window is, the compaction threshold and the goal state.
 
@@ -47,7 +49,7 @@ If `pi-codex-goal` and `context-compaction` are installed, remove them from Pi's
 
 Tell the agent you want to set a goal and describe the result. Before calling `create_goal`, the agent asks in one batch about everything that changes scope, design or acceptance and is not settled yet. If you asked it to work without questions, it does not ask and records its assumptions under "decided by me" instead.
 
-From there the agent works on its own. It publishes short progress reports, records decisions and deferred issues, and closes the goal only after checking against the agreement. The goal document lives in `.pi/goal-compact/<goalId>/GOAL.md` inside the project. It is regenerated from the goal data and is read-only.
+From there the agent works on its own. It reports progress briefly in chat; a separate `report_goal_progress` call is needed when it waits for an answer, hits a blocker or verifies the result. It also records decisions and deferred issues, and closes the goal only after checking against the agreement. The goal document lives in `.pi/goal-compact/<goalId>/GOAL.md` inside the project. It is regenerated from the goal data and is read-only.
 
 ### Commands
 
@@ -62,17 +64,18 @@ From there the agent works on its own. It publishes short progress reports, reco
 
 ### Model tools
 
+Without a goal the model is offered only `create_goal` and `checkpoint_compact_continue`.
+
 | Tool | Purpose |
 |---|---|
 | `create_goal` | Set a goal with an agreement and a "decided by me" list |
 | `get_goal` | Read the goal: in full, as a status, or its history |
-| `update_goal_work` | Update the work plan |
-| `report_goal_progress` | Publish a progress report for the owner |
+| `update_goal_work` | Update the work plan and, if needed, publish the report for the same milestone |
+| `report_goal_progress` | Publish a report: waiting for an answer, blocker, verification |
 | `record_goal_note` | Record a decision, a "decided by me" item or a deferred issue |
 | `amend_goal` | Extend the agreement after an owner message |
 | `resume_goal` | Resume a paused goal on the owner's word |
-| `update_goal` | Close the goal |
-| `load_goal_language_guide` | Explain how to fix a rejected report text |
+| `update_goal` | Close the goal with a verification text |
 | `checkpoint_compact_continue` | Save a checkpoint, compact context and continue the same task |
 
 ### Switch models after compaction
@@ -160,7 +163,7 @@ The switches in `features` restore the behavior of the earlier pair of extension
 
 ## How it is verified
 
-- `npm run verify` in one command: types, layers and dead code, 849 tests, a check that the tree contains no private paths, and the TLA+ models.
+- `npm run verify` in one command: types, layers and dead code, 891 tests, a check that the tree contains no private paths, and the TLA+ models.
 - Two TLA+ models in `formal/`: continuation with holds, and the agreement with closing. Each property has a deliberate defect that makes the check fail. The approach is described in [decision 0008](docs/adr/0008-formalnaya-proverka.md) (in Russian).
 - Smoke runs on real Pi without network: an answer to a question survives compaction and restart, a session of the earlier pair continues under the new version, a goal change without an owner message is rejected.
 - Model scenarios that used to catch failures: verification loops instead of closing, four merge requests lost after compaction, a decision accepted without consent, closing on counters instead of the result. The new version passes them no worse than the earlier pair.
