@@ -121,5 +121,5 @@ test("amendment recovery guidance matches the registered root object schema", ()
   assert.equal(schema.additionalProperties, false);
   assert.ok(schema.properties.amendment);
   assert.ok(schema.properties.amendment_id);
-  assert.match(metadata.promptSnippet!, /amendment_id/);
+  assert.match(metadata.description, /amendment_id/);
 });

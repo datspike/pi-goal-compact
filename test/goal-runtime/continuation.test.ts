@@ -1113,7 +1113,7 @@ test("a repeated start event does not extend the wait for a lost completion", as
 test("create_goal exposes the done criterion where the objective is authored", () => {
   const metadata = createRuntimeHarness().getToolMetadata("create_goal");
   assert.ok(metadata);
-  assert.match(metadata.promptSnippet ?? "", /критерий готовности/);
+  assert.match(metadata.promptSnippet ?? "", /Создать долгую цель/);
   const schema = metadata.parameters as { properties: { objective: { description: string } } };
   const guidance = schema.properties.objective.description;
   assert.match(guidance, /критерий готовности/);

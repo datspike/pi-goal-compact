@@ -17,9 +17,9 @@ import {
 import { createGoal } from "../../src/goal/state.js";
 
 test("tool prompt guidelines resolve exposed names without repeating alias footnotes", () => inLanguage("en", () => {
-  assert.match(goalToolNameGuidance(), /available tool list/);
-  assert.match(goalToolNameGuidance(), /namespace.*pi__get_goal/);
-  assert.match(goalToolNameGuidance(), /Never treat display, history or transcript names as callable aliases/);
+  assert.match(goalToolNameGuidance(), /exact available tool names/);
+  assert.match(goalToolNameGuidance(), /including namespace/);
+  assert.match(goalToolNameGuidance(), /not display\/history\/transcript aliases/);
   assert.equal(goalToolReference("update_goal"), "update_goal");
   const combined = toolPromptGuidelines().join("\n");
   for (const name of ["get_goal", "update_goal"]) assert.ok(combined.includes(name));
@@ -74,8 +74,8 @@ test("continuation and budget-limit prompts reference exposed goal-completion to
 
   for (const prompt of [continuation, budget]) {
     assert.match(prompt, /update_goal/);
-    assert.match(prompt, /available tool list.*namespace/);
-    assert.match(prompt, /Never treat display, history or transcript names as callable aliases/);
+    assert.match(prompt, /available tool names.*namespace/);
+    assert.match(prompt, /not display\/history\/transcript aliases/);
   }
 }));
 
@@ -107,7 +107,7 @@ test("русский вариант правил несёт те же обяза
   const compact = compactContinuationPrompt(created);
   const budget = budgetLimitPrompt(created);
   const guidelines = toolPromptGuidelines().join("\n");
-  assert.match(goalToolNameGuidance(), /по точным именам из списка доступных инструментов[\s\S]*pi__get_goal/);
+  assert.match(goalToolNameGuidance(), /точные доступные имена инструментов.*namespace/);
   assert.match(guidelines, /по-русски абзацами не длиннее 700 знаков/);
   for (const guideline of completionAuditToolGuidelines()) assert.ok(toolPromptGuidelines().includes(guideline));
   assert.match(continuation, /Прежде чем решить, что цель достигнута, проверь завершение/);

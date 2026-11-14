@@ -428,7 +428,7 @@ test("decision confirmation is explicit, schema-backed and cannot use a camel-ca
   assert.ok("additionalProperties" in schema && schema.additionalProperties === false);
   const properties = schema.properties;
   assert.ok(properties && typeof properties === "object" && "user_decision_confirmed" in properties);
-  assert.match(metadata.promptSnippet ?? "", /user_decision_confirmed/);
+  assert.match(metadata.promptSnippet ?? "", /Возобновить цель/);
   assert.match((properties as { user_decision_confirmed: { description: string } }).user_decision_confirmed.description, /requiresUserDecision.*настоящий ответ/);
   await h.runTool("report_goal_progress", awaiting);
   await h.runCommand("pause");

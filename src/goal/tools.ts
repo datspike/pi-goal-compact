@@ -115,11 +115,11 @@ export const progressReportParams = () => Type.Object({
   status: Type.Optional(stringEnum(["working", "verifying", "blocked", "awaiting_user"] as const, { description: say("Обязательно для publish. working требует содержательного изменения и продолжает независимую работу, даже если один пункт заблокирован. verifying требует verification. blocked требует problemOrDecision и означает, что у всей цели нет безопасного следующего действия; awaiting_user требует needUser для настоящего решения. Оба удерживают продолжение до ответа пользователя и отчёта working.", "Required for publish. working needs a meaningful delta and continues independent work despite one blocked item. verifying needs verification. blocked needs problemOrDecision and means the whole goal has no safe next action; awaiting_user needs needUser for a real decision. Both hold continuation until a user answer and working report.") })),
   phase: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_PHASE_CHARS, description: say("Обязательно для publish; короткое текущее содержательное действие в настоящем времени.", "Required for publish; short current meaningful action in present tense.") })),
   summary: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_SUMMARY_CHARS, description: say("Обязательно для publish; 1–3 связных предложения: что изменилось, что это значит и что дальше.", "Required for publish; 1-3 connected sentences describing change, meaning and next step.") })),
-  changed: Type.Optional(Type.String({ maxLength: MAX_REPORT_CHANGED_CHARS, description: say("Вариант changed для goal_started или artifact_updated; обязательно для phase_changed. working требует любого содержательного изменения.", "Use as the changed alternative for goal_started or artifact_updated; required for phase_changed. working needs any meaningful delta.") })),
-  completed: Type.Optional(Type.String({ maxLength: MAX_REPORT_COMPLETED_CHARS, description: say("Вариант completed для goal_started, blocker_resolved, artifact_updated или goal_completed.", "Use as the completed alternative for goal_started, blocker_resolved, artifact_updated or goal_completed.") })),
-  problemOrDecision: Type.Optional(Type.String({ maxLength: MAX_REPORT_PROBLEM_CHARS, description: say("Обязательно для blocker_opened, decision_recorded или статуса blocked; blocker_resolved принимает это поле или completed.", "Required for blocker_opened, decision_recorded, or blocked status; blocker_resolved accepts this or completed.") })),
+  changed: Type.Optional(Type.String({ maxLength: MAX_REPORT_CHANGED_CHARS, description: say("Что изменилось; обязательность — в eventKind и status.", "What changed; requirements are in eventKind and status.") })),
+  completed: Type.Optional(Type.String({ maxLength: MAX_REPORT_COMPLETED_CHARS, description: say("Что завершено; обязательность — в eventKind.", "What completed; requirements are in eventKind.") })),
+  problemOrDecision: Type.Optional(Type.String({ maxLength: MAX_REPORT_PROBLEM_CHARS, description: say("Проблема или решение; обязательность — в eventKind и status.", "Problem or decision; requirements are in eventKind and status.") })),
   riskAndComplexity: Type.Optional(Type.String({ maxLength: MAX_REPORT_RISK_CHARS })),
-  verification: Type.Optional(Type.String({ maxLength: MAX_REPORT_VERIFICATION_CHARS, description: say("Обязательно для verification; один из вариантов для goal_completed; также обязательно для статуса verifying.", "Required for verification; one alternative for goal_completed; also required for verifying status.") })),
+  verification: Type.Optional(Type.String({ maxLength: MAX_REPORT_VERIFICATION_CHARS, description: say("Доказательства проверки; обязательность — в eventKind и status.", "Verification evidence; requirements are in eventKind and status.") })),
   nextStep: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEXT_STEP_CHARS })),
   needUser: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_REPORT_NEED_USER_CHARS, description: say("Обязательно для статуса awaiting_user; конкретное решение, нужное от пользователя.", "Required for awaiting_user status; concrete decision needed from the user.") })),
 }, { additionalProperties: false });
@@ -287,7 +287,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     defaultActive: false,
     label: say("Возобновить цель", "Resume Goal"),
     description: say("Возобновляет цель на паузе только по явному указанию пользователя; вопрос о статусе или фоновое событие — не разрешение. Договор не меняет и ход модели не начинает; ожидающие решения, бюджет, конечные состояния и восстановление по-прежнему проверяются. Если возобновлению мешает удержание или восстановление, изучи get_goal, а не делай поправку.", "Resume a paused Goal only on an explicit user instruction; a status question or background event is not permission. It does not change the contract or start a model turn; pending decisions, budget, terminal-state and repair gates remain enforced. If a hold or repair blocks resumption, inspect get_goal instead of amending."),
-    promptSnippet: say("Возобновляй по явному указанию; user_decision_confirmed подтверждает настоящий ответ на ожидающий вопрос, а не вопрос о статусе.", "Resume on explicit instruction; user_decision_confirmed confirms the actual pending answer, not a status inquiry."),
+    promptSnippet: say("Возобновить цель на паузе.", "Resume a paused Goal."),
     promptGuidelines: goalToolGuidelines("resume_goal"),
     parameters: resumeGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -307,7 +307,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     defaultActive: false,
     label: say("Прочитать цель", "Get Goal"),
     description: say("Читает цель на текущей ветке сессии. Сохранённый договор — не дословная копия разговора: противоречия разрешай по фактическому запросу пользователя и одобренным уточнениям. Для сверки перед закрытием одного status мало.", "Read the Goal on the current session branch. The stored contract is not a verbatim copy of the conversation: resolve conflicts against the actual user request and approved clarifications. A status-only read is not enough for a completion audit."),
-    promptSnippet: say("Читай полный вид цели по умолчанию, текущие сведения через view=status или нужные исходные записи через view=history.", "Read the default full view of the Goal, live metadata with view=status, or addressed originals with view=history."),
+    promptSnippet: say("Прочитать цель или её историю.", "Read the Goal or its history."),
     promptGuidelines: goalToolGuidelines("get_goal"),
     parameters: getGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -324,7 +324,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     defaultActive: false,
     label: say("Обновить план цели", "Update Goal Work"),
     description: say("После существенного изменения заменяет весь план. goal_id и workRevision бери из ответа последнего вызова цели. Сохраняй устойчивые ID, незавершённую работу пользователя, ограничения, доказательства и причины решений; отмена пункта требует одобрения пользователя. Необязательный report публикует отчёт о том же рубеже. applied=true с projectionFresh=false: план сохранён, а документ нет — перечитай состояние и повтори тот же сверенный план с текущей ревизией, новой ревизии это не создаст. Это не поправка, не возобновление и не закрытие цели.", "After a material change, replace the whole plan. Take goal_id and workRevision from the latest Goal tool response. Preserve stable IDs, unfinished user work, constraints, evidence and decision reasons; cancelling an item needs user approval. The optional report publishes progress for the same milestone. applied=true with projectionFresh=false: the plan persisted but its document did not — re-read state and resubmit the same reconciled plan with the current revision; that adds no new revision. This does not amend, resume or complete the Goal."),
-    promptSnippet: say("Заменяй план всей задачи после существенного изменения; сохраняй незавершённые обязательства.", "Replace the whole-task plan after a material change; preserve unfinished obligations."),
+    promptSnippet: say("Заменить полный план задачи.", "Replace the whole-task plan."),
     promptGuidelines: goalToolGuidelines("update_goal_work"),
     parameters: goalWorkParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
@@ -363,8 +363,8 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     name: "amend_goal",
     defaultActive: false,
     label: say("Дополнить цель", "Amend Goal"),
-    description: say("Дописывает одобренную пользователем поправку или восстанавливает уже применённую по amendment_id; передай ровно одно из двух. Если applied=true, а проекция не обновилась, восстанавливай по amendment_id: сохранённый текст не отправляй повторно и не правь. Цель на паузе возобновляется только после восстановления, без нового хода модели.", "Append a user-approved amendment, or recover an applied one by amendment_id; supply exactly one. After applied=true with a projection failure, recover by amendment_id: never resend or edit the saved text. A paused goal resumes only after recovery, without another model turn."),
-    promptSnippet: say("Добавляй одобренное изменение или восстанавливай уже применённую запись по amendment_id.", "Append an approved change, or repair its already applied write by amendment_id."),
+    description: say("Дописывает одобренную поправку только в ходе после настоящей реплики владельца или восстанавливает уже применённую по amendment_id; передай ровно одно из двух. Если applied=true, а проекция не обновилась, восстанавливай по amendment_id: сохранённый текст не отправляй повторно и не правь. Цель на паузе возобновляется только после восстановления, без нового хода модели.", "Append a user-approved amendment only in a turn after a real owner reply, or recover an applied one by amendment_id; supply exactly one. After applied=true with a projection failure, recover by amendment_id: never resend or edit the saved text. A paused goal resumes only after recovery, without another model turn."),
+    promptSnippet: say("Дополнить договор или восстановить поправку.", "Amend the contract or recover an amendment."),
     promptGuidelines: goalToolGuidelines("amend_goal"),
     parameters: amendGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -398,7 +398,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     defaultActive: false,
     label: say("Записать заметку цели", "Record Goal Note"),
     description: say("Записывает устойчивое решение или отложенный риск, а не одобрение охвата. action=record требует title и поля своего вида; update закрывает paper_cut по note_id с expected_revision, status и resolution; repair пересобирает документ сохранённой заметки по kind и note_id без новой записи. ID и ревизии заметок — в get_goal.paperCuts.", "Record a durable decision or deferred risk, not scope approval. action=record needs title and kind-specific fields; update closes a paper_cut by note_id with expected_revision, status and resolution; repair rebuilds a saved note's document by kind and note_id without a new note. Note IDs and revisions are in get_goal.paperCuts."),
-    promptSnippet: say("Записывай решение или риск, закрывай мелкий недочёт или восстанавливай уже сохранённую заметку по ID.", "Record a decision or risk, close a paper cut, or repair an already saved note by ID."),
+    promptSnippet: say("Записать, обновить или восстановить заметку.", "Record, update or repair a note."),
     promptGuidelines: goalToolGuidelines("record_goal_note"),
     parameters: recordGoalNoteParams(),
     async execute(toolCallId, params, _signal, _onUpdate, ctx) {
@@ -493,7 +493,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     defaultActive: false,
     label: say("Закрыть цель", "Update Goal"),
     description: say("Закрывает цель, когда согласованный результат и обязательные доказательства готовы. Передай verification — это отчёт verifying. Первая попытка при этих договорённости и плане возвращает договорённость для сверки, вторая без правок закрывает цель. Если запись не удалась, перед повтором изучи сохранённое состояние; ни затраченные усилия, ни пометка риска не заменяют обязательное доказательство.", "Complete the Goal once the agreed outcome and required evidence are satisfied. Pass verification; it is the verifying report. The first attempt for this agreement and plan returns the agreement for a check; a second one without edits closes the Goal. If a write fails, inspect persisted state before retrying; neither elapsed effort nor a risk label replaces required proof."),
-    promptSnippet: say("Закрывай цель только после выполнения согласованного результата и обязательных доказательств.", "Complete the Goal only after the agreed result and required evidence are satisfied."),
+    promptSnippet: say("Закрыть проверенную цель.", "Complete a verified Goal."),
     promptGuidelines: goalToolGuidelines("update_goal"),
     parameters: updateGoalParams(),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -537,7 +537,7 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
     name: "create_goal",
     label: say("Создать цель", "Create Goal"),
     description: `${say("Создаёт долгую цель только после явной просьбы. Сохрани замысел пользователя и согласованные границы; не придумывай более строгих условий приёмки. Разговор автоматически не копируется.", "Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. This does not copy the conversation automatically.")}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
-    promptSnippet: say("Создавай долгую цель только по явной просьбе; сохраняй согласованный результат, доказательства и критерий готовности.", "Create a durable Goal only on explicit request; preserve the agreed outcome, evidence and done criterion."),
+    promptSnippet: say("Создать долгую цель.", "Create a durable Goal."),
     promptGuidelines: goalToolGuidelines("create_goal"),
     parameters: createGoalParams(),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
