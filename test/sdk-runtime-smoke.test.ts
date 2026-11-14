@@ -116,9 +116,8 @@ test("настоящий SDK Pi сохраняет ревизию создани
     assert.ok(declaredReportTool, "The progress tool must be declared once the goal exists.");
     assert.deepEqual(OPEN_GOAL_TOOLS.filter((name) => !declared().includes(name)), []);
     assert.equal(declaredReportTool.description, reportGoalProgress.description);
-    assert.match(declaredReportTool.description, /Пиши прозу по-русски/);
-    assert.match(declaredReportTool.description, /не длиннее 700 знаков/);
-    assert.match(declaredReportTool.description, /без изменений во встроенном или блочном коде/);
+    assert.match(session.systemPrompt, /Тексты отчётов, плана и заметок пиши по-русски абзацами не длиннее 700 знаков/);
+    assert.match(session.systemPrompt, /без изменений во встроенном или блочном коде/);
     assert.match(declaredReportTool.description, /Независимые факты разделяй пустыми строками/);
     const declaredUpdateTool = session.agent.state.tools.find((tool) => tool.name === "update_goal");
     assert.ok(declaredUpdateTool, "The update tool must be declared once the goal exists.");

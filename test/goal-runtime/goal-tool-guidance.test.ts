@@ -30,7 +30,8 @@ test("read-only Goal context excludes mutation workflows in the actual SDK assem
     toolGuidelines: Object.fromEntries(tools.map(item => [item.name, item.promptGuidelines])),
   });
   assert.doesNotMatch(sections.rules, /goal_started|replace_existing|amendment_id|eventKind deltas/);
-  assert.match(sections.rules, /history/);
+  const getGoal = tools.find(item => item.name === "get_goal")!;
+  assert.match((getGoal.parameters as { properties: { view: { description: string } } }).properties.view.description, /history/);
   assert.ok(sections.rules.length < 2000, `read-only rules: ${sections.rules.length}`);
 });
 
@@ -47,7 +48,7 @@ test("the status choice carries the local-blocker rule and the paragraph limit i
   const status = (tool.parameters as { properties: { status: { description: string } } }).properties.status.description;
   assert.match(status, /у всей цели нет безопасного следующего действия/);
   assert.match(status, /независимую работу, даже если один пункт заблокирован/);
-  assert.match(tool.description, /700/);
+  assert.match((tool.promptGuidelines ?? []).join("\n"), /700/);
 });
 
 test("a selected item outside the excerpt remains actionable and truncation is explicit", () => {

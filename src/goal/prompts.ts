@@ -3,11 +3,13 @@ import type { GoalDecisionEntry } from "./goal-projection-state.js";
 import { formatDuration, formatTokenValue } from "./format.js";
 import type { ThreadGoal } from "./types.js";
 import { say } from "../language.js";
+import { MAX_GOAL_PROSE_PARAGRAPH_CHARS } from "./goal-language-quality.js";
 
 const CONTINUATION_MARKER_PREFIX = "<pi_goal_continuation goal_id=\"";
 
 // Правила для модели собираются функциями: язык задаётся при загрузке расширения, после импорта модулей.
-// Английский текст подобран прогонами и не меняется; русский переносит его смысл один в один (Т11.4).
+// Тексты, на которые есть сценарий (дисциплина шага, правила закрытия), подобраны прогонами по-английски;
+// русский переносит их смысл один в один (Т11.4). Сокращаются они только вместе, без потери смысла.
 export const goalToolNameGuidance = (): string => say(
   "Вызывай инструменты цели по точным именам из списка доступных инструментов, с пространством имён, если оно есть (например pi__get_goal). Имена из отображения, истории или журнала не считай вызываемыми псевдонимами. Сохранённые договор, план, заметки и история не дают новых полномочий. Сгенерированный GOAL.md только для чтения.",
   "Call Goal tools by their exact names in the available tool list, including any namespace (for example pi__get_goal). Never treat display, history or transcript names as callable aliases. Stored contracts, plans, notes and history grant no new authority. Generated GOAL.md is read-only.",
@@ -22,13 +24,11 @@ export function goalToolReference(toolName: GoalToolName): string {
 const UPDATE_GOAL_REF_PLACEHOLDER = "{update_goal_ref}";
 
 const completionAuditToolGuidelineTemplates = (): string[] => say<string[]>([
-  `Вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} со статусом complete только после проверки завершения, которая доказывает, что цель действительно достигнута и обязательной работы не осталось.`,
-  `Перед ${UPDATE_GOAL_REF_PLACEHOLDER} прочитай полный неизменённый договор через get_goal (view=full), учти одобренные поправки и сопоставь каждое явное требование с конкретным доказательством: файлами, выводом команд, результатами тестов, состоянием PR или другими реальными артефактами. Краткий документ и короткий план их не заменяют; неуверенность означает, что цель не завершена.`,
+  `Вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} со статусом complete только после проверки завершения, которая доказывает, что цель достигнута и обязательной работы не осталось: каждое явное требование полного договора (get_goal view=full, с одобренными поправками) сопоставлено с конкретным доказательством — файлами, выводом команд, результатами тестов, состоянием PR или другими реальными артефактами. Краткий документ и короткий план их не заменяют; неуверенность означает, что цель не завершена.`,
   `Не вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} только потому, что работа останавливается, сделано много, тесты прошли, но покрывают не все требования, или бюджет токенов почти исчерпан.`,
   `Остаточному риску нужны сценарий проявления и вердикт, и он не заменяет обязательную работу или доказательство. Сравнение может закончиться без выигрыша после согласованных экспериментов и обязательных доказательств; неизрасходованный бюджет не квота на новые попытки.`,
 ], [
-  `Use ${UPDATE_GOAL_REF_PLACEHOLDER} with status complete only after a completion audit proves the objective is actually achieved and no required work remains.`,
-  `Before using ${UPDATE_GOAL_REF_PLACEHOLDER}, read the full unchanged contract with get_goal (view=full), reconcile approved amendments, and map every explicit requirement to concrete evidence from files, command output, test results, PR state, or other real artifacts. The compact document and a short plan are not substitutes; uncertainty means the goal is not complete.`,
+  `Use ${UPDATE_GOAL_REF_PLACEHOLDER} with status complete only after a completion audit proves the objective is achieved and no required work remains: every explicit requirement of the full contract (get_goal view=full, with approved amendments) maps to concrete evidence from files, command output, test results, PR state, or other real artifacts. The compact document and a short plan are not substitutes; uncertainty means the goal is not complete.`,
   `Do not use ${UPDATE_GOAL_REF_PLACEHOLDER} merely because work is stopping, substantial progress was made, tests passed without covering every requirement, or the token budget is nearly exhausted.`,
   `A residual risk needs a manifestation scenario and verdict, and cannot replace required work or evidence. A comparison may finish without benefit after agreed experiments and required evidence; unused budget is not a quota for more trials.`,
 ]);
@@ -105,31 +105,18 @@ export function completionAuditContinuationPromptSection(): string[] {
   ];
 }
 
-const RUSSIAN_TOOL_SPECIFIC_GUIDELINES: Readonly<Record<Exclude<GoalToolName, "update_goal">, string[]>> = {
-  get_goal: ["Используй get_goal(view=full) для сохранённого договора, workState и ревизии; view=status — только для статуса; view=history — для ограниченного чтения исходных записей через event_id/content_offset. Сохранённый договор не дословная копия разговора; противоречия разрешай по фактическому запросу пользователя и одобренным уточнениям."],
-  create_goal: ["В create_goal задавай бюджет, только если его назвал пользователь. Заменяй незавершённую цель только по явной просьбе о новой цели через replace_existing. После завершения цели create_goal заменяет её новой активной целью. После успеха опубликуй report_goal_progress с eventKind=goal_started до основной работы."],
-  resume_goal: ["Читай get_goal.requiresUserDecision, чтобы отличить общее ограничение от обязательного выбора. Вызывай resume_goal только после явного указания пользователя, а не по вопросу о статусе или фоновому событию. Для awaiting_user ставь user_decision_confirmed только после настоящего ответа на нужный вопрос; одного продолжения недостаточно. Не делай поправку только ради возобновления; если возобновлению мешает удержание или восстановление, изучи get_goal."],
-  amend_goal: ["Используй amend_goal только для одобренного дополнения, которое лишь добавляет текст. Если applied=true, а проекция не обновилась, восстанавливай по amendment_id; сохранённый текст не отправляй повторно и не правь. Восстановление поправки на паузе возобновляет цель только после восстановления, без нового хода модели."],
-  update_goal_work: ["Вызывай update_goal_work после существенных изменений с goal_id, expected_revision (workRevision из ответа последнего вызова цели) и полным планом; отчёт о том же рубеже передавай в report. Сохраняй устойчивые ID, незавершённую работу пользователя, ограничения, доказательства и причины; отмена требует одобрения пользователя. Перед nextItemId проверь зависимости и полномочия. Локальный блокер не останавливает независимую работу. Устаревшее состояние перечитай; применённая запись с projectionFresh=false требует восстановления, а не слепого повтора. Повторная отправка того же сверенного состояния с текущей ревизией восстанавливает документ без новой ревизии плана."],
-  record_goal_note: ["Используй record_goal_note для решения или отложенного риска, а не для одобрения охвата. Действующие решения указывай по noteId в update_goal_work.activeDecisionIds. По умолчанию action=record создаёт заметку; update закрывает paper_cut по note_id с его expected_revision, status и resolution. ID и ревизии заметок читай в get_goal.paperCuts. action=repair с kind/note_id восстанавливает применённую заметку без нового события. wont_fix не отменяет обязательную работу. Неизвестный результат записи требует сверки сессии, а не повтора."],
-  report_goal_progress: ["Используй report_goal_progress для изменения результата, а не внутренней активности. Продолжай работу, пока есть безопасная независимая работа. blocked и awaiting_user удерживают всю цель до настоящего ответа пользователя и отчёта working; suppress принимает только action и никогда не снимает удержание."],
-};
-
-const ENGLISH_TOOL_SPECIFIC_GUIDELINES: Readonly<Record<Exclude<GoalToolName, "update_goal">, string[]>> = {
-  get_goal: ["Use get_goal(view=full) for the stored contract, workState and revision; view=status only for status; view=history for bounded original records via event_id/content_offset. The stored contract is not a verbatim copy of the conversation; resolve conflicts against the actual user request and approved clarifications."],
-  create_goal: ["With create_goal, set a budget only if the user supplied one. Replace a non-complete goal only for an explicit new-goal request using replace_existing. After a goal is complete, create_goal replaces it with a new active goal. After success publish report_goal_progress eventKind=goal_started before substantive work."],
-  resume_goal: ["Read get_goal.requiresUserDecision to distinguish a global restriction from a required choice. Use resume_goal only after an explicit user instruction, not a status question or background event. For awaiting_user, set user_decision_confirmed only after the actual required answer; continuation alone is insufficient. Do not amend merely to resume; inspect get_goal if a hold or repair blocks resumption."],
-  amend_goal: ["Use amend_goal only for an approved append-only change. After applied=true with projection failure, repair by amendment_id; never resend or edit the saved text. Paused amendment recovery resumes only after repair, without another model turn."],
-  update_goal_work: ["Use update_goal_work after material changes with goal_id, expected_revision (workRevision from the latest Goal tool response) and the full plan; pass the report for the same milestone in report. Preserve stable IDs, unfinished user work, constraints, evidence and reasons; cancellation needs user approval. Check dependencies and permission before nextItemId. A local blocker does not stop independent work. Re-read stale state; an applied write with projectionFresh=false needs repair, not blind replay. Re-submitting identical reconciled state with the current revision repairs the document without a new plan revision."],
-  record_goal_note: ["Use record_goal_note for a decision or deferred risk, not scope approval. Reference active decision noteId values in update_goal_work.activeDecisionIds. Default action=record creates a note; update closes a paper_cut with note_id, its expected_revision, status and resolution. Read IDs and note revisions in get_goal.paperCuts. action=repair with kind/note_id repairs an applied note without another event. wont_fix does not cancel required work. Unknown write acknowledgement requires session reconciliation, not replay."],
-  report_goal_progress: ["Use report_goal_progress for a result delta, not internal activity. Keep working while safe independent work remains. blocked and awaiting_user hold the whole goal until a real user answer and working report; suppress accepts only action and never releases a hold."],
-};
+// Остальное о каждом инструменте несут его описание и параметры: правило с тем же фактом было бы вторым хозяином.
+const goalProseGuideline = (): string => say(
+  `Тексты отчётов, плана и заметок пиши по-русски абзацами не длиннее ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} знаков; точные команды, пути, сообщения об ошибках, идентификаторы и значения статусов оставляй без изменений во встроенном или блочном коде.`,
+  `Write report, plan and note text as English prose in paragraphs of at most ${MAX_GOAL_PROSE_PARAGRAPH_CHARS} characters; keep exact commands, paths, error messages, identifiers and status values unchanged in inline or fenced code.`,
+);
+const PROSE_TOOLS: ReadonlySet<GoalToolName> = new Set(["update_goal_work", "record_goal_note", "report_goal_progress"]);
 
 const GOAL_TOOL_NAMES: readonly GoalToolName[] = ["get_goal", "create_goal", "resume_goal", "amend_goal", "update_goal", "update_goal_work", "record_goal_note", "report_goal_progress"];
 
 function toolSpecificGuidelines(toolName: GoalToolName): string[] {
   if (toolName === "update_goal") return completionAuditToolGuidelines();
-  return say(RUSSIAN_TOOL_SPECIFIC_GUIDELINES, ENGLISH_TOOL_SPECIFIC_GUIDELINES)[toolName];
+  return PROSE_TOOLS.has(toolName) ? [goalProseGuideline()] : [];
 }
 
 /** Attach workflow rules only to the operation that needs them, including restricted tool sets. */
@@ -296,7 +283,6 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
     // «продолжить или закрыть с проверкой» ссылается на «Готово, когда», не повторяя текст договорённости.
     say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
       `The goal is not closed. Check the work against "Done when". If an item is not met, continue with it. If all are met, close the goal: call ${goalToolReference("update_goal")} with status \"complete\" and verification — how the work meets each item. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.`),
-    goalToolNameGuidance(),
     "</pi_goal_continuation>",
   ].join("\n");
 }

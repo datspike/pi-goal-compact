@@ -19,6 +19,7 @@ import {
   updateGoalStatus,
 } from "../../src/goal/state.js";
 import { CUSTOM_ENTRY_TYPE } from "../../src/goal/types.js";
+import { createRuntimeHarness, useHarnessLanguage } from "../support/runtime-harness.js";
 
 test("createGoal validates objective and positive token budgets", () => {
   assert.equal(createGoal(null, "   ").ok, false);
@@ -398,18 +399,28 @@ test("createGoal replaces completed goals and rejects non-complete duplicates", 
   assert.match(createGoal(limited, "next").message ?? "", /non-complete goal/);
 }));
 
-test("model-facing create_goal guidance matches create-after-complete semantics", () => inLanguage("en", () => {
-  const guidance = toolPromptGuidelines().join("\n");
+/** Описание флага замены у create_goal на выбранном языке. */
+function replaceExistingDescription(): string {
+  const metadata = createRuntimeHarness().getToolMetadata("create_goal");
+  return (metadata?.parameters as { properties: { replace_existing: { description: string } } }).properties.replace_existing.description;
+}
 
-  assert.match(guidance, /non-complete goal/);
-  assert.match(guidance, /After a goal is complete,.*replaces it with a new active goal/);
-  assert.doesNotMatch(guidance, /do not create a second goal while one already exists/);
-}));
+test("model-facing create_goal guidance matches create-after-complete semantics", () => {
+  useHarnessLanguage("en");
+  try {
+    const guidance = replaceExistingDescription();
+    assert.match(guidance, /non-complete goal — only on an explicit new-goal request/);
+    assert.match(guidance, /Not needed once the goal is complete/);
+    assert.doesNotMatch(toolPromptGuidelines().join("\n"), /do not create a second goal while one already exists/);
+  } finally {
+    useHarnessLanguage("ru");
+  }
+});
 
 test("русские указания create_goal повторяют замену цели после завершения", () => {
-  const guidance = toolPromptGuidelines().join("\n");
-  assert.match(guidance, /незавершённую цель только по явной просьбе/);
-  assert.match(guidance, /После завершения цели create_goal заменяет её новой активной целью/);
+  const guidance = replaceExistingDescription();
+  assert.match(guidance, /незавершённую цель — только по явной просьбе/);
+  assert.match(guidance, /После закрытия цели не нужен/);
 });
 
 test("goalsEquivalent compares full goal snapshots", () => {

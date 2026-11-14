@@ -159,7 +159,6 @@ test("long plans are bounded excerpts, with omitted stages retained in the compl
   assert.match(prompt, /Этап 0/);
   assert.ok(prompt.length < 10_000);
   assert.equal(work.items.length, 20);
-  assert.match(toolPromptGuidelines().join("\n"), /update_goal_work/);
   assert.doesNotMatch(toolPromptGuidelines().join("\n"), /keep CURRENT|TIMELINE as/);
 });
 
@@ -170,7 +169,7 @@ test("registered work guidance uses the public schema and a camel-case revision 
   const schema = metadata.parameters as { properties: Record<string, unknown>; required: string[] };
   assert.deepEqual(Object.keys(schema.properties).sort(), ["expected_revision", "goal_id", "report", "state"]);
   assert.deepEqual([...schema.required].sort(), ["expected_revision", "goal_id", "state"]);
-  assert.match((metadata.promptGuidelines ?? []).join("\n"), /goal_id, expected_revision \(workRevision из ответа последнего вызова цели\) и полным планом/);
+  assert.match(metadata.description, /goal_id и workRevision бери из ответа последнего вызова цели/);
   await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expectedRevision: 1, state: plan() }), /malformed goal projection event/);
   assert.equal((await current(harness)).workRevision, 1);
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), summary: "Проверены имена публичных полей" } });

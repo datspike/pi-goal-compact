@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  goalToolGuidelines,
   goalToolNameGuidance,
   toolPromptGuidelines,
   budgetLimitPrompt,
@@ -21,9 +22,11 @@ test("tool prompt guidelines resolve exposed names without repeating alias footn
   assert.match(goalToolNameGuidance(), /Never treat display, history or transcript names as callable aliases/);
   assert.equal(goalToolReference("update_goal"), "update_goal");
   const combined = toolPromptGuidelines().join("\n");
-  for (const name of ["get_goal", "create_goal", "update_goal", "amend_goal"]) assert.ok(combined.includes(name));
-  assert.match(combined, /awaiting_user/);
-  assert.match(combined, /goal_started before substantive work/);
+  for (const name of ["get_goal", "update_goal"]) assert.ok(combined.includes(name));
+  // Остальное об инструментах несут их описания: у правила с тем же фактом был бы второй хозяин.
+  for (const name of ["get_goal", "create_goal", "resume_goal", "amend_goal"] as const) assert.deepEqual(goalToolGuidelines(name), [goalToolNameGuidance()]);
+  assert.match(combined, /English prose in paragraphs of at most 700 characters/);
+  assert.doesNotMatch(combined, /goal_started/);
   for (const guideline of completionAuditToolGuidelines()) assert.ok(toolPromptGuidelines().includes(guideline));
 }));
 
@@ -105,8 +108,7 @@ test("русский вариант правил несёт те же обяза
   const budget = budgetLimitPrompt(created);
   const guidelines = toolPromptGuidelines().join("\n");
   assert.match(goalToolNameGuidance(), /по точным именам из списка доступных инструментов[\s\S]*pi__get_goal/);
-  assert.match(guidelines, /goal_started до основной работы/);
-  assert.match(guidelines, /awaiting_user/);
+  assert.match(guidelines, /по-русски абзацами не длиннее 700 знаков/);
   for (const guideline of completionAuditToolGuidelines()) assert.ok(toolPromptGuidelines().includes(guideline));
   assert.match(continuation, /Прежде чем решить, что цель достигнута, проверь завершение/);
   assert.match(continuation, /список «требование → артефакт»/);
