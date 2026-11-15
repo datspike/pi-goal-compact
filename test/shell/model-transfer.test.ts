@@ -156,3 +156,25 @@ for (const initial of ["model-next", "model-next-now"]) {
   });
  }
 }
+test("после сбоя сжатия каждый оборванный ход объясняет причину и выход", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await command(runtime, "model-next", "test/small");
+ await runtime.event("session_compact_failed", { reason: "manual", willRetry: false, aborted: false, errorMessage: "Compaction failed: network" });
+ const stopped = runtime.notices.at(-1);
+ assert.equal(stopped?.level, "error");
+ assert.match(stopped?.text ?? "", /test\/small/);
+ assert.match(stopped?.text ?? "", /network/);
+ assert.match(stopped?.text ?? "", /\/model-next cancel/);
+ for (let turn = 0; turn < 2; turn++) {
+  const before = runtime.aborts;
+  await runtime.event("context", { messages: [] });
+  assert.equal(runtime.aborts, before + 1);
+  assert.match(runtime.notices.at(-1)?.text ?? "", /Ход не отправлен.*test\/small.*\/model-next cancel/s);
+ }
+ await command(runtime, "model-next", "cancel");
+ const notices = runtime.notices.length;
+ const aborts = runtime.aborts;
+ await runtime.event("context", { messages: [] });
+ assert.equal(runtime.aborts, aborts);
+ assert.equal(runtime.notices.length, notices);
+});

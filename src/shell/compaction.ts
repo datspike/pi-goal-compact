@@ -71,6 +71,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const transfer = registerModelTransfer(pi, driver, gate);
 	const stage = createRequestStage();
 	let summarySequence = 0;
+	// Причина последней отменённой сводки: Pi сообщает о сбое без неё, а владельцу нужна конкретика.
+	let lastFailure: string | undefined;
 	let pendingCard: PendingCard | undefined;
 	let manualCorrelation: string | undefined;
 	let route = "";
@@ -92,6 +94,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 
 	const summarize = async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
 		const generation = ++summarySequence;
+		lastFailure = undefined;
 		const started = Date.now();
 		stage.beginCompaction(ctx, workingStandard());
 		try {
@@ -101,6 +104,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 				capability: window.capability(ctx),
 				isCurrent: () => generation === summarySequence,
 				onFailure: (reason) => {
+					lastFailure = reason;
 					pi.appendEntry(RECORD.standard, { version: 1, reason });
 					if (reason !== "aborted") notice(ctx, `Compact: ${reason}`, "warning");
 				},
@@ -276,7 +280,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	});
 	pi.on("context", (event, ctx) => {
 		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
-		if (transfer.failed()) ctx.abort();
+		transfer.blocked(ctx);
 		return messages ? { messages } : undefined;
 	});
 	pi.on("session_before_tree", async (event, ctx) => {
@@ -310,7 +314,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_compact_failed", (event, ctx) => {
 		stage.observe("session_compact_failed", event, ctx);
 		pendingCard = undefined;
-		transfer.compactFailed(ctx);
+		transfer.compactFailed(ctx, lastFailure ?? event.errorMessage);
+		lastFailure = undefined;
 		const reason = event.reason as CompactionReason;
 		driver.dispatch({ type: "compaction_finished", reason, willRetry: event.willRetry, ok: false }, ctx);
 		if (reason !== "manual" || !manualCorrelation) external(ctx, "error", reason, event.willRetry);

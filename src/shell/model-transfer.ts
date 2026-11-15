@@ -46,13 +46,20 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   driver.dispatch({ type: "transfer_cancelled" }, ctx);
   if (persist) save(ctx); else footer(ctx);
  };
+ // Блокировка ходов после сбоя задумана, но без выхода владелец видит только «Operation aborted».
+ const way = () => say("/model-next cancel — продолжить на текущей модели, /model-next <модель> — повторить передачу", "/model-next cancel continues on the current model, /model-next <model> retries the transfer");
  const fail = (ctx: ExtensionContext, message: string) => {
   if (!pending) return;
   pending = { ...pending, phase: "failed" };
   driver.dispatch({ type: "transfer_applied", ok: false }, ctx);
   save(ctx);
   ctx.abort();
-  notice(ctx, `${say("Передача модели остановлена", "Model transfer stopped")}: ${message}`, "error");
+  notice(ctx, `${say("Передача модели остановлена", "Model transfer stopped")} (${pending.provider}/${pending.model}): ${message}. ${say("Ходы не отправляются, пока передача не снята", "Turns are held until the transfer is resolved")}: ${way()}`, "error");
+ };
+ const blocked = (ctx: ExtensionContext) => {
+  if (!pending || pending.phase !== "failed") return;
+  ctx.abort();
+  notice(ctx, `${say("Ход не отправлен: передача на", "Turn not sent: transfer to")} ${pending.provider}/${pending.model} ${say("не удалась", "failed")}. ${way()}`, "error");
  };
  const afterSaved = async (ctx: ExtensionContext, compactId: string): Promise<void> => {
   if (!pending || pending.phase !== "queued") return;
@@ -140,7 +147,8 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   ownsModelChange: (ctx: ExtensionContext) => applying && ctx.model?.provider === pending?.provider && ctx.model?.id === pending?.model,
   cancel: clear,
   failed: () => pending?.phase === "failed",
-  compactFailed: (ctx: ExtensionContext) => fail(ctx, say("Не удалось сжать контекст", "Compaction failed")),
+  blocked,
+  compactFailed: (ctx: ExtensionContext, detail?: string) => fail(ctx, `${say("Не удалось сжать контекст", "Compaction failed")}${detail ? ` (${detail})` : ""}`),
   restore(ctx: ExtensionContext) {
    ++generation;
    lastContext = ctx;
