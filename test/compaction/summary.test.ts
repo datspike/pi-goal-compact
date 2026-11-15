@@ -243,7 +243,8 @@ test("standard compact rejects session, tree, model and route changes after awai
 		fixture.ctx.modelRegistry.complete = async (...args) => {
 			fixture.calls.push(args);
 			if (change === "session") fixture.setSession("session-b");
-			if (change === "tree") fixture.branch.push({ id: "child", parentId: "root", type: "message" });
+			// Другая ветка: суммируемое начало истории больше не то, что видит модель.
+			if (change === "tree") fixture.branch.splice(0, fixture.branch.length, { id: "other", parentId: null, type: "message" }, { id: "child", parentId: "other", type: "message" });
 			if (change === "model") fixture.ctx.model = { ...fixture.activeModel, id: "changed" };
 			if (change === "route") fixture.setRoute({});
 			return fixture.response;
@@ -266,6 +267,33 @@ test("standard compact ignores session records that never reach the model", asyn
 	const reasons: string[] = [];
 	expect(await compactWith(fixture.event, fixture.ctx, { onFailure: (reason) => reasons.push(reason) })).toHaveProperty("compaction");
 	expect(reasons).toEqual([]);
+});
+
+test("standard compact keeps messages appended to the branch end during the summary request", async () => {
+	const fixture = guardedFixture();
+	fixture.ctx.modelRegistry.complete = async (...args) => {
+		fixture.calls.push(args);
+		// Уведомление сабагента приходит, пока пишется сводка: Pi оставит его в окне после сводки.
+		fixture.branch.push({ id: "notify", parentId: "root", type: "custom_message" }, { id: "reply", parentId: "notify", type: "message" });
+		return fixture.response;
+	};
+	const reasons: string[] = [];
+	const result = await compactWith(fixture.event, fixture.ctx, { onFailure: (reason) => reasons.push(reason) });
+	expect(result).toHaveProperty("compaction");
+	expect(reasons).toEqual([]);
+});
+
+test("standard compact rejects a changed entry inside the summarized history even when the branch grows", async () => {
+	const fixture = guardedFixture();
+	fixture.branch.push({ id: "middle", parentId: "root", type: "message" });
+	fixture.ctx.modelRegistry.complete = async (...args) => {
+		fixture.calls.push(args);
+		fixture.branch.splice(1, 1, { id: "edited", parentId: "root", type: "message" }, { id: "tail", parentId: "edited", type: "custom_message" });
+		return fixture.response;
+	};
+	const reasons: string[] = [];
+	expect(await compactWith(fixture.event, fixture.ctx, { onFailure: (reason) => reasons.push(reason) })).toEqual({ cancel: true });
+	expect(reasons).toEqual(["context-changed"]);
 });
 
 test("standard compact treats abort and owner loss as explicit cancellation", async () => {

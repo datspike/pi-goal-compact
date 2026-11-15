@@ -54,3 +54,48 @@ test("настоящий SDK при overflow сжимает старой мод�
   assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 1);
  } finally { session.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });
+test("настоящий SDK: сообщение во время сводки не отменяет сжатие и стоит в окне после сводки", { timeout: 20000 }, async () => {
+ const cwd = await mkdtemp(join(tmpdir(), "model-transfer-tail-"));
+ const trace: string[] = [];
+ const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
+ const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
+ const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
+  extension({ ...pi, registerCommand(name, options) { commands.set(name, options); pi.registerCommand(name, options); } });
+  pi.registerProvider("transfer-probe", { api: "transfer-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: ["old", "small"].map(id => ({ id, name: id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: id === "old" ? 272000 : 64000, maxTokens: 1024 })),
+   streamSimple(model, context) {
+    const base = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage };
+    const isSummary = JSON.stringify(context).includes("context summarization assistant");
+    trace.push(`${model.id}:${isSummary ? "summary" : "work"}`);
+    // Сабагент заканчивает работу, пока пишется сводка: уведомление ложится в ветку без запуска хода.
+    if (isSummary) void pi.sendMessage({ customType: "probe-notify", content: "Сабагент закончил", display: true });
+    return response({ ...base, stopReason: "stop", content: [{ type: "text", text: isSummary ? "## Цель\nПродолжить проверку.\n\n## Исходный запрос\nСохранить решение и закончить проверку." : "DONE" }] });
+   },
+  });
+  pi.on("session_start", async (_event, ctx) => { await commands.get("model-next")?.handler("transfer-probe/small", ctx as ExtensionCommandContext); });
+ }] });
+ await loader.reload();
+ const manager = SessionManager.create(cwd, join(cwd, "sessions"));
+ for (let i = 0; i < 3; i++) {
+  manager.appendMessage({ role: "user", content: `Шаг ${i}: ${"Offline fixture ".repeat(500)}`, timestamp: Date.now() });
+  manager.appendMessage({ role: "assistant", api: "transfer-probe", provider: "transfer-probe", model: "old", stopReason: "stop", usage, content: [{ type: "text", text: `Готово ${i}` }], timestamp: Date.now() });
+ }
+ const oldModel = { provider: "transfer-probe", id: "old", name: "Old", api: "transfer-probe", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text" as const], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 };
+ const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: oldModel, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 100 } }) });
+ try {
+  await session.bindExtensions({});
+  await session.compact();
+  const branch = manager.getBranch();
+  const notify = branch.findIndex(entry => entry.type === "custom_message" && entry.customType === "probe-notify");
+  const compaction = branch.findIndex(entry => entry.type === "compaction");
+  assert.ok(notify >= 0 && compaction > notify, "уведомление пришло до записи сжатия");
+  assert.equal(session.model?.id, "small");
+  const window = manager.buildSessionProjection().messages;
+  assert.equal(window[0]?.role, "compactionSummary");
+  const last = window.at(-1);
+  assert.equal(last?.role === "custom" ? last.customType : last?.role, "probe-notify");
+  await session.prompt("Продолжай.");
+  assert.equal(trace.at(-1), "small:work");
+  // Отложенное пробуждение цели срабатывает через тик; закрытие сессии раньше него оставило бы устаревший ctx.
+  await new Promise(resolve => setTimeout(resolve, 10));
+ } finally { session.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});

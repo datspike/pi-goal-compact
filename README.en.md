@@ -22,7 +22,7 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 **Closing with a question.** The first attempt to close a goal returns the agreement to the agent. It has to answer in its own words how the work meets each of the owner's requirements. Counters and green checks confirm bookkeeping, not the result. The agent passes its verification text straight to `update_goal`, so closing usually takes two calls.
 
-**A summary that keeps the intent.** The compaction summary keeps the owner's words about the goal verbatim, the status of each decision (accepted, open, rejected), every related object (merge requests, branches, environments), the source of each step and exact paths. The goal's own control instructions stay out of the summary.
+**A summary that keeps the intent.** The compaction summary keeps the owner's words about the goal verbatim, the status of each decision (accepted, open, rejected), every related object (merge requests, branches, environments), the source of each step and exact paths. The goal's own control instructions stay out of the summary. Messages that arrive during compaction, such as subagent notifications, do not cancel it: they stay in the window right after the summary.
 
 **Work without extra nudging.** While a goal is active and the agent is idle, the extension continues the work with a hidden message. When the agent tries to end its turn with the goal still open, the message asks it to check the work against "Done when": continue with an unmet item, or close the goal with a verification. It accounts time and tokens, pauses the goal on Esc, and survives provider errors, context overflow, restarts and `/reload`. When the agent is waiting for the owner's answer, there are no continuations.
 

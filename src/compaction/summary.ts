@@ -323,7 +323,7 @@ type RouteIdentity = {
 type SessionIdentity = {
     sessionId: unknown;
     sessionFile: unknown;
-    tree: string | undefined;
+    tree: readonly string[] | undefined;
 };
 
 type OperationSnapshot = {
@@ -374,19 +374,15 @@ export function isContextEntry(entry: { type?: unknown } | null | undefined): bo
 
 type SessionReader = Partial<ExtensionContext["sessionManager"]> | undefined;
 
-function branchIdentity(ctx: ExtensionContext): string | undefined {
+function branchIdentity(ctx: ExtensionContext): readonly string[] | undefined {
     const manager: SessionReader = ctx.sessionManager;
     if (!manager || typeof manager.getBranch !== "function")
         return undefined;
     const branch = manager.getBranch();
     if (!Array.isArray(branch))
         return undefined;
-    // The leaf moves with every appended record; the ordered model-visible entries identify the summarized context.
-    const entries = branch.filter(isContextEntry).map((entry) => ({
-        id: entry?.id ?? null,
-        type: entry?.type ?? null,
-    }));
-    return JSON.stringify(entries);
+    // Лист сдвигается с каждой записью; суммируемый контекст определяет упорядоченный список видимых модели записей.
+    return branch.filter(isContextEntry).map((entry) => JSON.stringify([entry?.id ?? null, entry?.type ?? null]));
 }
 
 function sessionIdentity(ctx: ExtensionContext): SessionIdentity {
@@ -398,8 +394,19 @@ function sessionIdentity(ctx: ExtensionContext): SessionIdentity {
     };
 }
 
-function sameSession(left: SessionIdentity, right: SessionIdentity): boolean {
-    return left.sessionId === right.sessionId && left.sessionFile === right.sessionFile && left.tree === right.tree;
+/**
+ * Записи, дописанные в конец ветки во время сводки (уведомления сабагентов и подобное), сжатие не отменяют:
+ * Pi ставит запись сжатия после них, а окно собирает от `firstKeptEntryId`, так что они идут сразу после сводки.
+ * Изменённая или другая ветка меняет суммируемое начало и по-прежнему отменяет сжатие.
+ */
+function sameSession(before: SessionIdentity, now: SessionIdentity): boolean {
+    if (before.sessionId !== now.sessionId || before.sessionFile !== now.sessionFile)
+        return false;
+    const earlier = before.tree;
+    const current = now.tree;
+    if (!earlier || !current)
+        return earlier === current;
+    return current.length >= earlier.length && earlier.every((entry, index) => entry === current[index]);
 }
 
 function operationSnapshot(ctx: ExtensionContext, signal: AbortSignal, activeModel: Model<Api> | undefined, serviceModel: Model<Api>): OperationSnapshot {
