@@ -296,6 +296,19 @@ test("standard compact rejects a changed entry inside the summarized history eve
 	expect(reasons).toEqual(["context-changed"]);
 });
 
+test("standard compact rejects an appended context_edit of summarized history", async () => {
+	const fixture = guardedFixture();
+	fixture.ctx.modelRegistry.complete = async (...args) => {
+		fixture.calls.push(args);
+		// Pi правит старую запись новой записью в конце ветки; префикс списка при этом не меняется.
+		fixture.branch.push({ id: "edit", parentId: "root", type: "context_edit" });
+		return fixture.response;
+	};
+	const reasons: string[] = [];
+	expect(await compactWith(fixture.event, fixture.ctx, { onFailure: (reason) => reasons.push(reason) })).toEqual({ cancel: true });
+	expect(reasons).toEqual(["context-changed"]);
+});
+
 test("standard compact treats abort and owner loss as explicit cancellation", async () => {
 	const aborted = guardedFixture();
 	aborted.ctx.modelRegistry.complete = async (...args) => { aborted.calls.push(args); aborted.controller.abort(); return aborted.response; };

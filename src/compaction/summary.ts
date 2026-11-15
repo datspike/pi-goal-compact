@@ -397,7 +397,7 @@ function sessionIdentity(ctx: ExtensionContext): SessionIdentity {
 /**
  * Записи, дописанные в конец ветки во время сводки (уведомления сабагентов и подобное), сжатие не отменяют:
  * Pi ставит запись сжатия после них, а окно собирает от `firstKeptEntryId`, так что они идут сразу после сводки.
- * Изменённая или другая ветка меняет суммируемое начало и по-прежнему отменяет сжатие.
+ * Изменённая или другая ветка меняет суммируемое начало и по-прежнему отменяет сжатие, как и дописанная правка `context_edit`.
  */
 function sameSession(before: SessionIdentity, now: SessionIdentity): boolean {
     if (before.sessionId !== now.sessionId || before.sessionFile !== now.sessionFile)
@@ -406,7 +406,10 @@ function sameSession(before: SessionIdentity, now: SessionIdentity): boolean {
     const current = now.tree;
     if (!earlier || !current)
         return earlier === current;
-    return current.length >= earlier.length && earlier.every((entry, index) => entry === current[index]);
+    if (current.length < earlier.length || !earlier.every((entry, index) => entry === current[index]))
+        return false;
+    // `context_edit` дописывается в конец, но меняет или удаляет запись из суммируемой части.
+    return current.slice(earlier.length).every((entry) => !entry.endsWith(',"context_edit"]'));
 }
 
 function operationSnapshot(ctx: ExtensionContext, signal: AbortSignal, activeModel: Model<Api> | undefined, serviceModel: Model<Api>): OperationSnapshot {
