@@ -147,6 +147,7 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   ownsModelChange: (ctx: ExtensionContext) => applying && ctx.model?.provider === pending?.provider && ctx.model?.id === pending?.model,
   cancel: clear,
   failed: () => pending?.phase === "failed",
+  queued: () => pending?.phase === "queued",
   blocked,
   /**
    * Сбой или отмена сжатия передачу не ломают: сжатия ещё нет, работа идёт на прежней модели, как до команды.

@@ -130,7 +130,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 					lastFailure = words ? `${reason}: ${words}` : reason;
 					lastFailureAborted = reason === "aborted";
 					pi.appendEntry(RECORD.standard, { version: 1, reason, ...(words ? { detail: words } : {}) });
-					if (reason !== "aborted") notice(ctx, `Compact: ${lastFailure}`, "warning");
+					// При ожидающей передаче причину назовёт её уведомление: два предупреждения об одном сбое не нужны.
+					if (reason !== "aborted" && !transfer.queued()) notice(ctx, `Compact: ${lastFailure}`, "warning");
 				},
 			});
 			if ("compaction" in compact) {
