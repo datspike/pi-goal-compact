@@ -26,6 +26,10 @@ import { notice } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
 
 const workingStandard = (): string => say("Compact: стандартная сводка", "Compact: standard summary");
+/** Паузы перед повторами запроса сводки: разовый сбой сети или провайдера не должен срывать сжатие. */
+const SUMMARY_RETRY_DELAYS_MS: readonly number[] = [1000, 4000];
+/** Сколько слов провайдера о сбое сохранять в журнале и уведомлении. */
+const FAILURE_DETAIL_LIMIT = 300;
 const MODES: readonly ContextMode[] = ["economy", "long-once", "long-chat", "off"];
 
 type ContextCompletion = { value: string; label: string; description: string };
@@ -73,6 +77,19 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	let summarySequence = 0;
 	// Причина последней отменённой сводки: Pi сообщает о сбое без неё, а владельцу нужна конкретика.
 	let lastFailure: string | undefined;
+	let lastFailureAborted = false;
+	/**
+	 * Идущее ручное сжатие. Pi запускает ход от сообщения расширения с triggerTurn, не дожидаясь его конца:
+	 * запрос ушёл бы прежней модели с несжатым окном. Такой ход ждёт здесь и стартует уже после сжатия.
+	 */
+	let manualCompaction: { done: Promise<boolean>; finish: (aborted: boolean) => void } | undefined;
+	// Владелец отменил сжатие, пока ход ждал его: ход тоже не должен уйти модели.
+	let cancelWaitingRun = false;
+	const finishManualCompaction = (aborted: boolean): void => {
+		const current = manualCompaction;
+		manualCompaction = undefined;
+		current?.finish(aborted);
+	};
 	let pendingCard: PendingCard | undefined;
 	let manualCorrelation: string | undefined;
 	let route = "";
@@ -95,6 +112,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const summarize = async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
 		const generation = ++summarySequence;
 		lastFailure = undefined;
+		lastFailureAborted = false;
 		const started = Date.now();
 		stage.beginCompaction(ctx, workingStandard());
 		try {
@@ -103,10 +121,16 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 				...(model ? { model } : {}),
 				capability: window.capability(ctx),
 				isCurrent: () => generation === summarySequence,
-				onFailure: (reason) => {
-					lastFailure = reason;
-					pi.appendEntry(RECORD.standard, { version: 1, reason });
-					if (reason !== "aborted") notice(ctx, `Compact: ${reason}`, "warning");
+				retryDelaysMs: SUMMARY_RETRY_DELAYS_MS,
+				onRetry: (attempt, attempts, detail) => {
+					notice(ctx, `Compact: ${say("запрос сводки не прошёл", "summary request failed")}${detail ? ` (${detail.slice(0, FAILURE_DETAIL_LIMIT)})` : ""}; ${say("повтор", "retry")} ${attempt}/${attempts}`, "warning");
+				},
+				onFailure: (reason, detail) => {
+					const words = detail?.slice(0, FAILURE_DETAIL_LIMIT);
+					lastFailure = words ? `${reason}: ${words}` : reason;
+					lastFailureAborted = reason === "aborted";
+					pi.appendEntry(RECORD.standard, { version: 1, reason, ...(words ? { detail: words } : {}) });
+					if (reason !== "aborted") notice(ctx, `Compact: ${lastFailure}`, "warning");
 				},
 			});
 			if ("compaction" in compact) {
@@ -223,7 +247,11 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		if (event.source !== "extension") driver.dispatch({ type: "owner_input" }, ctx);
 		return undefined;
 	});
-	pi.on("before_agent_start", (event, ctx) => { stage.observe("before_agent_start", event, ctx); });
+	pi.on("before_agent_start", async (event, ctx) => {
+		stage.observe("before_agent_start", event, ctx);
+		// Pi дожидается этого обработчика до первого запроса хода и берёт модель и окно уже после него.
+		if (manualCompaction && await manualCompaction.done) cancelWaitingRun = true;
+	});
 	pi.on("agent_start", (event, ctx) => {
 		stage.observe("agent_start", event, ctx);
 		driver.dispatch({ type: "run_started" }, ctx);
@@ -241,6 +269,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		++summarySequence;
 		pendingCard = undefined;
 		manualCorrelation = undefined;
+		cancelWaitingRun = false;
+		finishManualCompaction(false);
 		route = routeOf(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
 		await window.restore(ctx);
@@ -275,11 +305,17 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		const preparation = event.preparation;
 		if (Array.isArray(preparation.messagesToSummarize)) preparation.messagesToSummarize = withoutLegacyServiceTurns(preparation.messagesToSummarize, branch) ?? preparation.messagesToSummarize;
 		if (Array.isArray(preparation.turnPrefixMessages)) preparation.turnPrefixMessages = withoutLegacyServiceTurns(preparation.turnPrefixMessages, branch) ?? preparation.turnPrefixMessages;
+		if (reason === "manual" && !manualCompaction) {
+			let finish: (aborted: boolean) => void = () => {};
+			const done = new Promise<boolean>((resolve) => { finish = resolve; });
+			manualCompaction = { done, finish };
+		}
 		// Сводку на обоих языках пишет расширение (Т11.3): иначе договорённость некуда вставить.
 		return summarize(event, ctx);
 	});
 	pi.on("context", (event, ctx) => {
 		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
+		if (cancelWaitingRun) { cancelWaitingRun = false; ctx.abort(); }
 		transfer.blocked(ctx);
 		return messages ? { messages } : undefined;
 	});
@@ -307,6 +343,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		const manualRun = reason === "manual" && manualCorrelation !== undefined;
 		await transfer.afterSaved(ctx, entry.id);
 		driver.dispatch({ type: "compaction_finished", reason, willRetry: event.willRetry, ok: true }, ctx);
+		// Ждущий ход отпускается после смены модели: его первый запрос уходит уже новой модели.
+		finishManualCompaction(false);
 		if (manualRun) { manual(ctx, "success"); window.updateFooter(ctx); return; }
 		await window.afterCompaction(ctx);
 		external(ctx, "success", reason, event.willRetry, entry.tokensBefore);
@@ -314,8 +352,12 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_compact_failed", (event, ctx) => {
 		stage.observe("session_compact_failed", event, ctx);
 		pendingCard = undefined;
-		transfer.compactFailed(ctx, lastFailure ?? event.errorMessage);
+		// Pi помечает aborted и отказ самого расширения; отмену владельцем отличает причина сводки или отсутствие ошибки.
+		const cancelled = lastFailure === undefined ? event.aborted === true && !event.errorMessage : lastFailureAborted;
+		transfer.compactFailed(ctx, lastFailure ?? event.errorMessage, cancelled);
 		lastFailure = undefined;
+		lastFailureAborted = false;
+		finishManualCompaction(cancelled);
 		const reason = event.reason as CompactionReason;
 		driver.dispatch({ type: "compaction_finished", reason, willRetry: event.willRetry, ok: false }, ctx);
 		if (reason !== "manual" || !manualCorrelation) external(ctx, "error", reason, event.willRetry);
@@ -324,6 +366,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_shutdown", (event, ctx) => {
 		stage.observe("session_shutdown", event, ctx);
 		++summarySequence;
+		finishManualCompaction(false);
 	});
 
 	return execute;

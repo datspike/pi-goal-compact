@@ -21,7 +21,11 @@ Switch == /\ phase = "saved" \/ (Bug = "beforeSaved" /\ phase = "queued")
           /\ UNCHANGED <<saved, switched, held, retry, resumes>>
 Applied == /\ phase = "applying" /\ phase' = "ready" /\ switched' = TRUE
            /\ UNCHANGED <<saved, held, retry, resumes, bad>>
-Failed == /\ phase \in {"queued", "saved", "applying"}
+(* Сбой или отмена сжатия: сжатия нет, передача ждёт следующего. *)
+CompactFailed == /\ phase = "queued"
+                 /\ phase' = IF Bug = "failOnCompact" THEN "failed" ELSE "queued"
+                 /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
+Failed == /\ phase \in {"saved", "applying"}
           /\ phase' = "failed"
           /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
 Resume == /\ phase = "ready" \/ (Bug = "earlyRequest" /\ phase = "applying")
@@ -33,7 +37,7 @@ Resume == /\ phase = "ready" \/ (Bug = "earlyRequest" /\ phase = "applying")
 Cancel == /\ phase \in {"queued", "saved", "applying", "ready"}
           /\ phase' = "cancelled"
           /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
-Next == Request \/ Hold \/ Compact \/ Switch \/ Applied \/ Failed \/ Resume \/ Cancel
+Next == Request \/ Hold \/ Compact \/ CompactFailed \/ Switch \/ Applied \/ Failed \/ Resume \/ Cancel
 Spec == Init /\ [][Next]_vars
 TypeOK == /\ phase \in {"none", "queued", "saved", "applying", "ready", "failed", "done", "cancelled"}
           /\ saved \in BOOLEAN /\ switched \in BOOLEAN /\ held \in BOOLEAN
@@ -42,4 +46,5 @@ P10_SavedBeforeSwitch == bad # "unsaved"
 P11_SwitchedBeforeRequest == bad # "oldModel"
 P12_OneTransferContinuation == resumes <= 1
 P13_TransferRespectsHold == bad # "hold"
+P16_FailureOnlyAfterSaved == phase = "failed" => saved
 =============================================================================

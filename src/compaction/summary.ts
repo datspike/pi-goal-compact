@@ -291,7 +291,10 @@ export type CompactionSummaryOptions = {
     capability?: CompactCapability;
     model?: Model<Api>;
     isCurrent?: () => boolean;
-    onFailure?: (reason: string) => void;
+    /** Паузы перед повторами запроса сводки после сбоя запроса; без них повторов нет. */
+    retryDelaysMs?: readonly number[];
+    onRetry?: (attempt: number, attempts: number, detail?: string) => void;
+    onFailure?: (reason: string, detail?: string) => void;
 };
 
 export type CompactionSummaryResult = {
@@ -301,7 +304,8 @@ export type CompactionSummaryResult = {
 };
 
 class SummaryFailure extends Error {
-    constructor(readonly reason: CompactionFailureReason) {
+    /** detail — слова провайдера или сети: без них сбой запроса нельзя разобрать по журналу. */
+    constructor(readonly reason: CompactionFailureReason, readonly detail?: string) {
         super(reason);
         this.name = "SummaryFailure";
     }
@@ -341,6 +345,8 @@ type CompactionRequestGuard = {
     model: Model<Api>;
     signal: AbortSignal;
     validate: () => void;
+    retryDelaysMs?: readonly number[];
+    onRetry?: (attempt: number, attempts: number, detail?: string) => void;
 };
 
 function modelIdentity(model: Model<Api> | undefined): ModelIdentity | undefined {
@@ -454,13 +460,18 @@ function assertCurrent(ctx: ExtensionContext, snapshot: OperationSnapshot, owner
     }
 }
 
-function guardFor(ctx: ExtensionContext, snapshot: OperationSnapshot, owner?: () => boolean, capability?: CompactCapability): CompactionRequestGuard {
-    return { ...(capability ? { capability } : {}), model: snapshot.serviceModelRef, signal: snapshot.signal, validate: () => assertCurrent(ctx, snapshot, owner) };
+function guardFor(ctx: ExtensionContext, snapshot: OperationSnapshot, options?: CompactionSummaryOptions): CompactionRequestGuard {
+    return {
+        ...(options?.capability ? { capability: options.capability } : {}),
+        ...(options?.retryDelaysMs ? { retryDelaysMs: options.retryDelaysMs } : {}),
+        ...(options?.onRetry ? { onRetry: options.onRetry } : {}),
+        model: snapshot.serviceModelRef, signal: snapshot.signal, validate: () => assertCurrent(ctx, snapshot, options?.isCurrent),
+    };
 }
 
-function reportFailure(options: CompactionSummaryOptions | undefined, reason: CompactionFailureReason): CompactionSummaryResult {
+function reportFailure(options: CompactionSummaryOptions | undefined, reason: CompactionFailureReason, detail?: string): CompactionSummaryResult {
     try {
-        options?.onFailure?.(reason);
+        options?.onFailure?.(reason, detail);
     }
     catch { /* diagnostics must not alter the explicit outcome */ }
     return { cancel: true };
@@ -512,7 +523,37 @@ export function combineUsage(first: Usage | undefined, second: Usage | undefined
     return combined;
 }
 
+/** Ждёт паузу перед повтором; отмена сжатия будит сразу, а отказ оформит следующая проверка актуальности. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+        if (signal.aborted || ms <= 0) { resolve(); return; }
+        const done = (): void => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+        const timer = setTimeout(done, ms);
+        signal.addEventListener("abort", done, { once: true });
+    });
+}
+
+/**
+ * Запрос сводки с повтором после сбоя запроса: один сетевой сбой не должен стоить владельцу всего сжатия.
+ * Повторяется только `request-failed`; перед каждым повтором сжатие заново проверяется на актуальность.
+ */
 async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens: number, signal: AbortSignal, guard?: CompactionRequestGuard): Promise<SummaryResponse> {
+    const delays = guard?.retryDelaysMs ?? [];
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await requestSummary(ctx, prompt, maxTokens, signal, guard);
+        }
+        catch (error) {
+            const delay = delays[attempt];
+            if (!guard || delay === undefined || !(error instanceof SummaryFailure) || error.reason !== "request-failed") throw error;
+            guard.onRetry?.(attempt + 1, delays.length, error.detail);
+            await pause(delay, signal);
+            guard.validate();
+        }
+    }
+}
+
+async function requestSummary(ctx: ExtensionContext, prompt: string, maxTokens: number, signal: AbortSignal, guard?: CompactionRequestGuard): Promise<SummaryResponse> {
     const model = guard?.model ?? ctx.model;
     if (!model)
         throw new Error("No model selected");
@@ -567,7 +608,7 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
         if (signalAborted(ctx, signal) || abortError(error))
             throw new SummaryFailure("aborted");
         guard.validate();
-        throw new SummaryFailure("request-failed");
+        throw new SummaryFailure("request-failed", error instanceof Error ? error.message : String(error));
     }
     if (payloadFailure) throw payloadFailure;
     if (guard)
@@ -579,7 +620,7 @@ async function completeSummary(ctx: ExtensionContext, prompt: string, maxTokens:
     }
     if (response?.stopReason === "error") {
         if (guard)
-            throw new SummaryFailure("request-failed");
+            throw new SummaryFailure("request-failed", response.errorMessage);
         throw new Error(response.errorMessage ?? "Summary generation failed");
     }
     if (response?.stopReason === "length" || !Array.isArray(response?.content)) {
@@ -626,7 +667,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
     let guard: CompactionRequestGuard | undefined;
     try {
         const snapshot = operationSnapshot(ctx, event.signal, ctx.model, serviceModel);
-        guard = guardFor(ctx, snapshot, options?.isCurrent, options?.capability);
+        guard = guardFor(ctx, snapshot, options);
         guard.validate();
         const preparation = event.preparation;
         const sources = event.branchEntries.flatMap((entry) => entry.type === "compaction" || entry.type === "branch_summary" ? [entry.details] : []);
@@ -685,7 +726,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
     }
     catch (error) {
         const reason = reasonForFailure(error, ctx, guard);
-        return reportFailure(options, reason);
+        return reportFailure(options, reason, error instanceof SummaryFailure && error.reason === reason ? error.detail : undefined);
     }
 }
 

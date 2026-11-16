@@ -50,6 +50,7 @@ export const RUNS: readonly Run[] = [
   { model: "ModelTransfer", bug: "earlyRequest", expect: "P11_SwitchedBeforeRequest", meaning: "продолжение до применения модели" },
   { model: "ModelTransfer", bug: "doubleResume", expect: "P12_OneTransferContinuation", meaning: "повтор Pi и своё продолжение одновременно" },
   { model: "ModelTransfer", bug: "noHold", expect: "P13_TransferRespectsHold", meaning: "передача обходит удержание цели" },
+  { model: "ModelTransfer", bug: "failOnCompact", expect: "P16_FailureOnlyAfterSaved", meaning: "сбой сжатия ломает ожидающую передачу" },
 ];
 
 function sha256(path: string): string {

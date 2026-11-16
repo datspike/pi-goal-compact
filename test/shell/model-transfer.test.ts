@@ -156,14 +156,74 @@ for (const initial of ["model-next", "model-next-now"]) {
   });
  }
 }
-test("после сбоя сжатия каждый оборванный ход объясняет причину и выход", async () => {
+test("сбой сжатия оставляет передачу в очереди и не обрывает ходы", async () => {
  const runtime = fakePi({ models: [target], emitModelSelect: true });
  await command(runtime, "model-next", "test/small");
  await runtime.event("session_compact_failed", { reason: "manual", willRetry: false, aborted: false, errorMessage: "Compaction failed: network" });
  const stopped = runtime.notices.at(-1);
+ assert.equal(stopped?.level, "warning");
+ assert.match(stopped?.text ?? "", /network/);
+ assert.match(stopped?.text ?? "", /test\/small.*\/compact.*\/model-next cancel/s);
+ assert.ok(!runtime.entries.some(entry => entry.type === RECORD.transfer && JSON.stringify(entry.data).includes('"phase":"failed"')));
+ const aborts = runtime.aborts;
+ await runtime.event("context", { messages: [] });
+ assert.equal(runtime.aborts, aborts, "ход после сбоя сжатия идёт на прежней модели");
+ await command(runtime, "model-next", "status");
+ assert.match(runtime.notices.at(-1)?.text ?? "", /ожидает сжатия/);
+ // Повторное сжатие доводит ту же передачу без нового выбора модели.
+ await saved(runtime);
+ assert.equal(runtime.ctx.model.id, "small");
+});
+test("отмена сжатия владельцем тоже оставляет передачу в очереди", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await command(runtime, "model-next", "test/small");
+ await runtime.event("session_compact_failed", { reason: "manual", willRetry: false, aborted: true });
+ assert.match(runtime.notices.at(-1)?.text ?? "", /Сжатие отменено.*test\/small/s);
+ await saved(runtime);
+ assert.equal(runtime.ctx.model.id, "small");
+});
+test("ход, начатый во время ручного сжатия, ждёт его конца и новой модели", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await command(runtime, "model-next", "test/small");
+ await runtime.event("session_before_compact", { reason: "manual", willRetry: false, preparation: { tokensBefore: 1000 } });
+ let modelAtStart: string | undefined;
+ const run = runtime.event("before_agent_start", { type: "before_agent_start", prompt: "уведомление", systemPrompt: "" }).then(() => { modelAtStart = runtime.ctx.model.id; });
+ await runtime.flush();
+ assert.equal(modelAtStart, undefined, "ход не стартует, пока идёт сжатие");
+ await saved(runtime);
+ await run;
+ assert.equal(modelAtStart, "small");
+ const aborts = runtime.aborts;
+ await runtime.event("context", { messages: [] });
+ assert.equal(runtime.aborts, aborts);
+ // Вне сжатия ход не ждёт.
+ await runtime.event("before_agent_start", { type: "before_agent_start", prompt: "уведомление", systemPrompt: "" });
+});
+test("ход, ждавший сжатия, после его сбоя идёт дальше, а после отмены владельцем не уходит модели", async () => {
+ for (const cancelled of [false, true]) {
+  const runtime = fakePi({ models: [target], emitModelSelect: true });
+  // Отмену владельцем Pi передаёт сигналом сжатия; сводка сама называет её причиной отказа.
+  await runtime.event("session_before_compact", { reason: "manual", willRetry: false, preparation: { tokensBefore: 1000 }, ...(cancelled ? { signal: AbortSignal.abort() } : {}) });
+  let started = false;
+  const run = runtime.event("before_agent_start", { type: "before_agent_start", prompt: "уведомление", systemPrompt: "" }).then(() => { started = true; });
+  await runtime.flush();
+  assert.equal(started, false);
+  await runtime.event("session_compact_failed", cancelled ? { reason: "manual", willRetry: false, aborted: true } : { reason: "manual", willRetry: false, aborted: false, errorMessage: "Compaction failed: network" });
+  await run;
+  const aborts = runtime.aborts;
+  await runtime.event("context", { messages: [] });
+  assert.equal(runtime.aborts, aborts + (cancelled ? 1 : 0));
+  await runtime.event("context", { messages: [] });
+  assert.equal(runtime.aborts, aborts + (cancelled ? 1 : 0), "отмена относится только к ждавшему ходу");
+ }
+});
+test("после сбоя применения модели каждый оборванный ход объясняет причину и выход", async () => {
+ const runtime = fakePi({ models: [target], setModelResult: false });
+ await command(runtime, "model-next", "test/small");
+ await saved(runtime);
+ const stopped = runtime.notices.at(-1);
  assert.equal(stopped?.level, "error");
  assert.match(stopped?.text ?? "", /test\/small/);
- assert.match(stopped?.text ?? "", /network/);
  assert.match(stopped?.text ?? "", /\/model-next cancel/);
  for (let turn = 0; turn < 2; turn++) {
   const before = runtime.aborts;

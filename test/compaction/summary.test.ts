@@ -356,3 +356,44 @@ for (const kind of ["small", "oversized", "swallowed-error", "late-route"] as co
 	if (kind === "small") { expect(result).toHaveProperty("compaction"); expect(sent).toBe(1); }
 	else { expect(result).toEqual({ cancel: true }); expect(sent).toBe(0); expect(reasons).toEqual([kind === "late-route" ? "context-changed" : "request-too-large"]); }
 });
+
+test("сбой запроса сводки повторяется, а его причина доходит до владельца", async () => {
+	const recovered = guardedFixture();
+	const ok = recovered.response;
+	let attempt = 0;
+	recovered.ctx.modelRegistry.complete = async (...args) => {
+		recovered.calls.push(args);
+		if (++attempt === 1) throw new Error("socket hang up");
+		return attempt === 2 ? { stopReason: "error", errorMessage: "503 upstream", content: [] } : ok;
+	};
+	const retries: string[] = [];
+	const reasons: string[] = [];
+	const result = await compactWith(recovered.event, recovered.ctx, { retryDelaysMs: [0, 0], onRetry: (n, of, detail) => retries.push(`${n}/${of}:${detail}`), onFailure: (reason) => reasons.push(reason) });
+	expect(result).toHaveProperty("compaction");
+	expect(retries).toEqual(["1/2:socket hang up", "2/2:503 upstream"]);
+	expect(reasons).toEqual([]);
+
+	const exhausted = guardedFixture();
+	exhausted.response = { stopReason: "error", errorMessage: "503 upstream", content: [] };
+	const failures: string[] = [];
+	expect(await compactWith(exhausted.event, exhausted.ctx, { retryDelaysMs: [0], onFailure: (reason, detail) => failures.push(`${reason}:${detail}`) })).toEqual({ cancel: true });
+	expect(exhausted.calls).toHaveLength(2);
+	expect(failures).toEqual(["request-failed:503 upstream"]);
+});
+
+test("негодный ответ и отмена во время паузы не повторяются", async () => {
+	const invalid = guardedFixture();
+	invalid.response = { stopReason: "stop", content: [{ type: "text", text: "не структурировано" }] };
+	expect(await compactWith(invalid.event, invalid.ctx, { retryDelaysMs: [0, 0] })).toEqual({ cancel: true });
+	expect(invalid.calls).toHaveLength(1);
+
+	const cancelled = guardedFixture();
+	cancelled.response = { stopReason: "error", errorMessage: "503 upstream", content: [] };
+	const reasons: string[] = [];
+	const started = Date.now();
+	const result = await compactWith(cancelled.event, cancelled.ctx, { retryDelaysMs: [60_000], onRetry: () => cancelled.controller.abort(), onFailure: (reason) => reasons.push(reason) });
+	expect(result).toEqual({ cancel: true });
+	expect(cancelled.calls).toHaveLength(1);
+	expect(reasons).toEqual(["aborted"]);
+	expect(Date.now() - started).toBeLessThan(5_000);
+});

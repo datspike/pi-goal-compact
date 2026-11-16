@@ -46,7 +46,7 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   driver.dispatch({ type: "transfer_cancelled" }, ctx);
   if (persist) save(ctx); else footer(ctx);
  };
- // Блокировка ходов после сбоя задумана, но без выхода владелец видит только «Operation aborted».
+ // Блокировка ходов после сбоя применения задумана, но без выхода владелец видит только «Operation aborted».
  const way = () => say("/model-next cancel — продолжить на текущей модели, /model-next <модель> — повторить передачу", "/model-next cancel continues on the current model, /model-next <model> retries the transfer");
  const fail = (ctx: ExtensionContext, message: string) => {
   if (!pending) return;
@@ -148,7 +148,16 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   cancel: clear,
   failed: () => pending?.phase === "failed",
   blocked,
-  compactFailed: (ctx: ExtensionContext, detail?: string) => fail(ctx, `${say("Не удалось сжать контекст", "Compaction failed")}${detail ? ` (${detail})` : ""}`),
+  /**
+   * Сбой или отмена сжатия передачу не ломают: сжатия ещё нет, работа идёт на прежней модели, как до команды.
+   * Передача остаётся в очереди и сработает на следующем удачном сжатии; ходы не блокируются, потому что
+   * блокировка через ctx.abort() отменяла бы и повторное сжатие.
+   */
+  compactFailed: (ctx: ExtensionContext, detail?: string, cancelled = false) => {
+   if (!pending || pending.phase !== "queued") return;
+   const what = cancelled ? say("Сжатие отменено", "Compaction cancelled") : `${say("Не удалось сжать контекст", "Compaction failed")}${detail ? ` (${detail})` : ""}`;
+   notice(ctx, `${what}. ${say("Передача на", "Transfer to")} ${pending.provider}/${pending.model} ${say("ждёт следующего сжатия: повторите /compact; /model-next cancel — снять передачу", "waits for the next compaction: run /compact again; /model-next cancel drops the transfer")}`, "warning");
+  },
   restore(ctx: ExtensionContext) {
    ++generation;
    lastContext = ctx;

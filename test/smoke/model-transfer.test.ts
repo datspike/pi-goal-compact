@@ -8,15 +8,54 @@ import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager
 import extension from "../../src/index.js";
 
 const usage = { input: 100, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 101, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-function response(message: AssistantMessage) {
+function response(message: AssistantMessage, delayMs?: number) {
  const stream = createAssistantMessageEventStream();
- queueMicrotask(() => {
+ const emit = () => {
   stream.push({ type: "start", partial: message });
   if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
   else stream.push({ type: "done", reason: "stop", message });
   stream.end();
- });
+ };
+ if (delayMs === undefined) queueMicrotask(emit); else setTimeout(emit, delayMs);
  return stream;
+}
+const SUMMARY = "## Цель\nПродолжить проверку.\n\n## Исходный запрос\nСохранить решение и закончить проверку.";
+type SummaryStep = "ok" | "invalid" | "error";
+/** Сессия с историей и отложенной передачей old → small; ответы сводки задаются по шагам. */
+async function transferSession(prefix: string, summarySteps: SummaryStep[], notifyDuringSummary: boolean) {
+ const cwd = await mkdtemp(join(tmpdir(), prefix));
+ const trace: string[] = [];
+ let summaries = 0;
+ const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
+ const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
+ const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
+  extension({ ...pi, registerCommand(name, options) { commands.set(name, options); pi.registerCommand(name, options); } });
+  pi.registerProvider("transfer-probe", { api: "transfer-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: ["old", "small"].map(id => ({ id, name: id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: id === "old" ? 272000 : 64000, maxTokens: 1024 })),
+   streamSimple(model, context) {
+    const base = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage };
+    const isSummary = JSON.stringify(context).includes("context summarization assistant");
+    trace.push(`${model.id}:${isSummary ? "summary" : `work:${context.messages.length}`}`);
+    if (!isSummary) return response({ ...base, stopReason: "stop", content: [{ type: "text", text: "DONE" }] });
+    const step = summarySteps[summaries++] ?? "ok";
+    if (step === "error") return response({ ...base, stopReason: "error", errorMessage: "503 upstream", content: [] });
+    if (step === "invalid") return response({ ...base, stopReason: "stop", content: [{ type: "text", text: "просто текст без разделов" }] });
+    // Сабагент заканчивает, пока пишется сводка: его уведомление запускает ход, как в pi-subagents.
+    if (notifyDuringSummary) setTimeout(() => { void pi.sendMessage({ customType: "probe-notify", content: "Сабагент закончил", display: true }, { triggerTurn: true }); }, 5);
+    return response({ ...base, stopReason: "stop", content: [{ type: "text", text: SUMMARY }] }, 60);
+   },
+  });
+  pi.on("session_start", async (_event, ctx) => { await commands.get("model-next")?.handler("transfer-probe/small", ctx as ExtensionCommandContext); });
+ }] });
+ await loader.reload();
+ const manager = SessionManager.create(cwd, join(cwd, "sessions"));
+ for (let i = 0; i < 3; i++) {
+  manager.appendMessage({ role: "user", content: `Шаг ${i}: ${"Offline fixture ".repeat(500)}`, timestamp: Date.now() });
+  manager.appendMessage({ role: "assistant", api: "transfer-probe", provider: "transfer-probe", model: "old", stopReason: "stop", usage, content: [{ type: "text", text: `Готово ${i}` }], timestamp: Date.now() });
+ }
+ const oldModel = { provider: "transfer-probe", id: "old", name: "Old", api: "transfer-probe", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text" as const], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 };
+ const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: oldModel, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 100 } }) });
+ await session.bindExtensions({});
+ return { session, manager, trace, async close() { await new Promise(resolve => setTimeout(resolve, 10)); session.dispose(); await rm(cwd, { recursive: true, force: true }); } };
 }
 test("настоящий SDK при overflow сжимает старой моделью и повторяет запрос только новой", { timeout: 20000 }, async () => {
  const cwd = await mkdtemp(join(tmpdir(), "model-transfer-sdk-"));
@@ -98,4 +137,35 @@ test("настоящий SDK: сообщение во время сводки н
   // Отложенное пробуждение цели срабатывает через тик; закрытие сессии раньше него оставило бы устаревший ctx.
   await new Promise(resolve => setTimeout(resolve, 10));
  } finally { session.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+test("настоящий SDK: после сбоя сжатия повторное сжатие с уведомлением сабагента доводит передачу", { timeout: 20000 }, async () => {
+ const fixture = await transferSession("model-transfer-retry-", ["invalid", "ok"], true);
+ const { session, manager, trace } = fixture;
+ try {
+  await assert.rejects(session.compact());
+  assert.equal(session.model?.id, "old");
+  assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 0);
+  // Второе сжатие идёт, когда уведомление запускает ход: прежде блокировка обрывала и ход, и сжатие.
+  await session.compact();
+  await session.waitForIdle();
+  assert.equal(session.model?.id, "small");
+  const branch = manager.getBranch();
+  assert.equal(branch.filter(entry => entry.type === "compaction").length, 1);
+  // Ход уведомления ушёл новой модели со сжатым окном: сводка, сохранённый хвост и уведомление вместо всей истории.
+  assert.deepEqual(trace.map(item => item.split(":").slice(0, 2).join(":")), ["old:summary", "old:summary", "small:work"]);
+  assert.ok(Number(trace.at(-1)?.split(":")[2]) < 8, `окно не сжато: ${trace.at(-1)}`);
+  const last = branch.at(-1);
+  assert.ok(last?.type === "message" && last.message.role === "assistant" && last.message.model === "small" && last.message.stopReason === "stop");
+  assert.ok(!branch.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "aborted"));
+ } finally { await fixture.close(); }
+});
+test("настоящий SDK: разовый сбой запроса сводки проходит повтором и не срывает передачу", { timeout: 20000 }, async () => {
+ const fixture = await transferSession("model-transfer-flaky-", ["error", "ok"], false);
+ const { session, manager, trace } = fixture;
+ try {
+  await session.compact();
+  assert.deepEqual(trace, ["old:summary", "old:summary"]);
+  assert.equal(session.model?.id, "small");
+  assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 1);
+ } finally { await fixture.close(); }
 });

@@ -84,7 +84,11 @@ Without a goal the model is offered only `create_goal`; `checkpoint_compact_cont
 
 `/model-next status` shows a pending transfer; `/model-next cancel` cancels it. Once model application is in progress, wait for its result before cancelling. Pending transfers survive `/reload` and restarts; navigating to another branch or session, or manually choosing a model, cancels them.
 
-The previous model writes the summary. The new model is applied only after compaction is saved; goal pauses and owner-decision holds remain in force. An idle session without an active task does not start new work. A failure stops the transfer and reports why: cancel it or select the model again. Until the transfer is resolved, turns are not sent, and every stopped turn names the reason and both commands. Smaller-window capacity is checked using an estimate of the summary, recent tail, system instructions and tools, not the provider's exact tokenizer. System instructions and the recent tail remain in the new model's input; cache transfer is not promised.
+The previous model writes the summary. The new model is applied only after compaction is saved; goal pauses and owner-decision holds remain in force. An idle session without an active task does not start new work.
+
+If compaction fails or you cancel it, the transfer stays queued and is applied by the next successful compaction: running `/compact` again is enough. Until then work continues on the previous model. A failed summary request is retried twice automatically; each retry and the failure reason are reported as a warning. A turn that starts during a manual compaction, for example from a subagent notification, waits for it to finish and goes to the new model with the compacted window.
+
+If compaction is saved but the new model cannot be applied or the compacted context does not fit it, the transfer stops and reports why: cancel it or select the model again. Until it is resolved, turns are not sent, and every stopped turn names the reason and both commands. Smaller-window capacity is checked using an estimate of the summary, recent tail, system instructions and tools, not the provider's exact tokenizer. System instructions and the recent tail remain in the new model's input; cache transfer is not promised.
 
 ### Window modes
 
