@@ -39,6 +39,9 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let seenAbort = false;
   let unsafeToolResult = false;
   let requestAdmitted: Chain | undefined;
+  type Model = NonNullable<ExtensionContext["model"]>;
+  let selection: { from: string; to: string; observed: boolean; manualChoice?: { model: Model; thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> } } | undefined;
+  let modelChangeCancelled = false;
   let response: { status: number; notBefore: number } | undefined;
   let unbind: (() => void) | undefined;
 
@@ -101,6 +104,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     manual = seenAbort = unsafeToolResult = false;
     requestAdmitted = undefined;
     response = undefined;
+    modelChangeCancelled = false;
   });
   pi.on("input", (event, ctx) => {
     if (event.source === "extension" || !chain) return;
@@ -109,6 +113,31 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     setActivity(ctx, null);
   });
   pi.on("turn_start", () => { response = undefined; });
+  pi.on("model_select", (event, ctx) => {
+    if (selection && !selection.observed && event.source === "set" &&
+        modelRef(event.previousModel) === selection.from && modelRef(event.model) === selection.to) {
+      selection.observed = true;
+      return;
+    }
+    if (selection && !modelChangeCancelled) selection.manualChoice = { model: event.model, thinking: pi.getThinkingLevel() };
+    if (!chain && !requestAdmitted) return;
+    diagnostic(ctx, "cancelled", chain ?? requestAdmitted, "model-selection");
+    modelChangeCancelled = true;
+    clear();
+    requestAdmitted = undefined;
+    setActivity(ctx, null);
+    session.pauseForRecovery(ctx, say("Модель изменена вручную. Старый повтор отменён.", "Model changed manually. The pending retry was cancelled."));
+    if (!ctx.isIdle()) ctx.abort();
+  });
+
+  async function select(ctx: ExtensionContext, target: Model) {
+    const attempt: NonNullable<typeof selection> = { from: modelRef(ctx.model), to: modelRef(target), observed: false };
+    selection = attempt;
+    let ok = false;
+    try { ok = await pi.setModel(target); }
+    finally { if (selection === attempt) selection = undefined; }
+    return { ok, manualChoice: attempt.manualChoice };
+  }
   pi.on("after_provider_response", (event, ctx) => {
     if (!canRecover(ctx) || modelRef(ctx.model) !== ASTRA) return;
     const raw = event.headers["retry-after"];
@@ -193,20 +222,21 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       const overhead = Math.ceil((ctx.getSystemPrompt().length + JSON.stringify(tools).length) / 4);
       if (history + overhead + Math.max(target.maxTokens, 16384) > target.contextWindow) { stop(ctx, "sol-window"); return; }
       setActivity(ctx, say("Astra недоступна · переключение на Sol", "Astra unavailable · switching to Sol"));
-      let selected = false;
-      try { selected = await pi.setModel(target); } catch { /* Ошибка модели уйдёт в нормализованный статус. */ }
+      let selected: Awaited<ReturnType<typeof select>> | undefined;
+      try { selected = await select(ctx, target); } catch { /* Ошибка модели уйдёт в нормализованный статус. */ }
       // Служебные записи меняют leaf, но не последний ответ этой ветки.
       if (!valid()) {
         if (sameBranch() && modelRef(ctx.model) === decision.model) {
           try {
-            if (!await pi.setModel(original)) throw new Error("model rollback failed");
-            pi.setThinkingLevel(originalThinking);
+            const restore = selected?.manualChoice ?? { model: original, thinking: originalThinking };
+            if (modelRef(restore.model) !== modelRef(ctx.model) && !(await select(ctx, restore.model)).ok) throw new Error("model rollback failed");
+            pi.setThinkingLevel(restore.thinking);
           } catch { diagnostic(ctx, "stopped", current, "model-rollback-failed"); }
         }
         setActivity(ctx, null);
         return;
       }
-      if (!selected || modelRef(ctx.model) !== decision.model) { stop(ctx, "sol-selection-failed"); return; }
+      if (!selected?.ok || modelRef(ctx.model) !== decision.model) { stop(ctx, "sol-selection-failed"); return; }
       current.switched = true;
       current.model = decision.model;
       diagnostic(ctx, "switched", current);
@@ -219,13 +249,18 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   }
 
   pi.on("before_provider_request", (_event, ctx) => {
-    if (!requestAdmitted || chain !== requestAdmitted) return;
-    diagnostic(ctx, "request-prepared", requestAdmitted);
+    const admitted = requestAdmitted;
+    if (!admitted) return;
     requestAdmitted = undefined;
+    if (chain !== admitted || !canRecover(ctx) || modelRef(ctx.model) !== admitted.model || ctx.sessionManager.getSessionId() !== admitted.sessionId) {
+      ctx.abort();
+      return;
+    }
+    diagnostic(ctx, "request-prepared", admitted);
   });
   pi.on("agent_settled", (event, ctx) => {
     if (!enabled()) return;
-    if ((event.aborted || seenAbort) && !ownAbort() && currentGoal() && !session.runIsForeign()) {
+    if ((event.aborted || seenAbort) && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {
       diagnostic(ctx, "cancelled", chain, manual ? "escape" : "unknown");
       if (manual) session.pauseManually(ctx);
       else session.pauseForRecovery(ctx, say("Прогон прерван, источник отмены неизвестен. Перед продолжением проверь последнее действие.", "Run aborted; cancellation source unknown. Check the last action before resuming."));
