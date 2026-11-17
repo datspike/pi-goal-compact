@@ -14,7 +14,7 @@ const objective = "Проверить восстановление запрос�
 const makeGoal = { objective, agreement: { owner_wants: objective, done_when: "Проверка прошла." }, self_decided: [] };
 const hold = { action: "publish", status: "awaiting_user", phase: "Готово", summary: "Проверка пройдена.", nextStep: "Дождаться решения.", needUser: "Продолжить работу?" };
 
-type Variant = "switch" | "disabled" | "escape" | "escape-during-selection";
+type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after";
 
 async function run(variant: Variant) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
@@ -24,6 +24,7 @@ async function run(variant: Variant) {
   const escape = () => { for (const listener of terminals) listener("\u001b"); };
   const failures: string[] = [];
   let standardRetries = 0;
+  let goal: ReturnType<typeof compose>["goal"] | undefined;
   const manager = SessionManager.inMemory(cwd);
   const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
   const models = [astra, sol].map(id => ({ id, name: id, reasoning: false, input: ["text" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
@@ -31,16 +32,21 @@ async function run(variant: Variant) {
     pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context) {
       const n = requests.length;
       requests.push({ model: model.id, context: JSON.stringify(context) });
+      const unknownAbort = variant === "unknown-abort" && n === 1;
+      const plain = variant === "plain-chat";
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage,
-        stopReason: n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
-        content: n === 0 ? [{ type: "toolCall", id: "fixture-goal", name: "create_goal", arguments: makeGoal }]
+        stopReason: unknownAbort ? "aborted" : plain ? (n === 0 ? "error" : "stop") : n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
+        content: plain ? (n === 0 ? [] : [{ type: "text", text: "Обычный ответ после повтора." }])
+          : n === 0 ? [{ type: "toolCall", id: "fixture-goal", name: "create_goal", arguments: makeGoal }]
           : n === 3 ? [{ type: "toolCall", id: "fixture-hold", name: "report_goal_progress", arguments: hold }]
           : n < 3 ? [] : [{ type: "text", text: "Готов полезный результат." }],
-        ...(n === 1 || n === 2 ? { errorMessage: '503 {"error":{"code":"server_is_overloaded"}}' } : {}) };
+        ...(unknownAbort ? { errorMessage: "Operation aborted" } : (plain ? n === 0 : n === 1 || n === 2) ? {
+          errorMessage: `${variant === "retry-after" ? "Server requested 60s retry delay (max: 15s). " : ""}503 {"error":{"code":"server_is_overloaded"}}`,
+        } : {}) };
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({ type: "start", partial: message });
-        if (message.stopReason === "error") stream.push({ type: "error", reason: "error", error: message });
+        if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
         else stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
         stream.end();
       });
@@ -51,7 +57,8 @@ async function run(variant: Variant) {
       if (model.id === sol) escape();
       return ok;
     } } : pi;
-    compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" });
+    if (variant === "legacy-owner") pi.registerCommand("retry", { description: "Занятая старым расширением команда", handler: async () => {} });
+    ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" }));
   }] });
   await loader.reload();
   const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: { ...models[0]!, provider: "openai", api: "retry-probe", baseUrl: "http://127.0.0.1:1" }, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }) });
@@ -69,10 +76,15 @@ async function run(variant: Variant) {
     await session.bindExtensions({ uiContext: ui, mode: "tui", abortHandler: () => { void session.abort(); }, onError(error) { failures.push(error.error); } });
     await session.prompt("Проверь восстановление.");
     assert.deepEqual(failures, []);
-    return { requests, statuses, rows: manager.getBranch(), model: session.model?.id, standardRetries };
+    return { requests, statuses, rows: manager.getBranch(), model: session.model?.id, standardRetries, pause: goal?.getGoal()?.pause };
   } finally {
-    try { await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
-    finally { session.dispose(); await rm(cwd, { recursive: true, force: true }); }
+    try {
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      await goal?.waitForGoalProjection();
+    } finally {
+      session.dispose();
+      await rm(cwd, { recursive: true, force: true, maxRetries: 4 });
+    }
   }
 }
 
@@ -95,3 +107,34 @@ for (const variant of ["disabled", "escape", "escape-during-selection"] as const
     if (variant === "escape") assert.ok(statuses.some(status => status.includes("Esc")));
   });
 }
+
+test("SDK: отмена без Esc не повторяется и не записывается как ручная", { timeout: 8_000 }, async () => {
+  const { requests, pause, standardRetries } = await run("unknown-abort");
+  assert.equal(standardRetries, 0);
+  assert.equal(requests.length, 2);
+  assert.equal(pause?.kind, "recovery");
+  assert.match(pause?.reason ?? "", /источник отмены неизвестен|cancellation source unknown/);
+});
+
+test("SDK: обычный чат делает только штатный повтор", { timeout: 8_000 }, async () => {
+  const { requests, standardRetries, rows } = await run("plain-chat");
+  assert.equal(standardRetries, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]?.context, requests[1]?.context);
+  assert.ok(!rows.some(entry => entry.type === "custom" && entry.customType === "pi-goal-provider-retry"));
+});
+
+test("SDK: при наличии старого владельца новая смена модели не запускается", { timeout: 8_000 }, async () => {
+  const { requests, model } = await run("legacy-owner");
+  assert.equal(requests.length, 3);
+  assert.equal(model, astra);
+});
+
+test("SDK: Retry-After за пределом окна не допускает даже штатный ранний повтор", { timeout: 8_000 }, async () => {
+  const { requests, model, pause, standardRetries } = await run("retry-after");
+  assert.equal(standardRetries, 0);
+  assert.deepEqual(requests.map(request => request.model), [astra, astra]);
+  assert.equal(model, astra);
+  assert.equal(pause?.kind, "recovery");
+  assert.match(pause?.reason ?? "", /Провайдер просит ждать|Provider asks to wait/);
+});

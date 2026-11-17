@@ -134,20 +134,26 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     }
     if (errorClass === "not-admitted") { clear(); return; }
     const at = performance.now();
-    const failure = { entryId: event.messageEntryId, at, notBefore: Math.max(at, response?.notBefore ?? at), errorClass };
+    // Responses передаёт число секунд в ошибке, если задержка превышает лимит транспорта.
+    const refusedDelay = /\bServer requested (\d+)s retry delay \(max: \d+s\)/i.exec(message.errorMessage ?? "");
+    const notBefore = Math.max(at, response?.notBefore ?? at, at + Number(refusedDelay?.[1] ?? 0) * 1000);
+    const failure = { entryId: event.messageEntryId, at, notBefore, errorClass };
     const sessionId = ctx.sessionManager.getSessionId();
     if (chain?.goalId !== goal.goalId || chain.sessionId !== sessionId) {
       clear();
       chain = { startedAtMs: at, attemptsIssued: 0, switched: false, model: ASTRA, goalId: goal.goalId, sessionId, failure, abort: new AbortController() };
     } else chain.failure = failure;
     // Нельзя дать короткому retry Pi отправить запрос раньше сообщённого сервером срока.
-    if (failure.notBefore > at && failure.notBefore > chain.startedAtMs + config.windowMs) {
+    const signal = ctx.signal;
+    if (failure.notBefore > at && (failure.notBefore > chain.startedAtMs + config.windowMs || !signal)) {
       stop(ctx, "retry-after-outside-window");
       ctx.abort();
-    } else if (failure.notBefore > at && ctx.signal) {
-      const signal = AbortSignal.any([chain.abort.signal, ctx.signal]);
-      await delayUntil(failure.notBefore, signal);
-      if (signal.aborted && !ctx.signal?.aborted && !ctx.hasPendingMessages()) ctx.abort();
+    } else if (failure.notBefore > at && signal) {
+      setActivity(ctx, say(`Astra недоступна · провайдер просит ждать ${Math.ceil((failure.notBefore - at) / 1000)} с · Esc — остановить`, `Astra unavailable · provider asks to wait ${Math.ceil((failure.notBefore - at) / 1000)} s · Esc to stop`));
+      const waitSignal = AbortSignal.any([chain.abort.signal, signal]);
+      await delayUntil(failure.notBefore, waitSignal);
+      if (waitSignal.aborted && !signal.aborted && !ctx.hasPendingMessages()) ctx.abort();
+      setActivity(ctx, null);
     }
   });
 
