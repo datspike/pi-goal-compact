@@ -287,10 +287,19 @@ type SummaryResponse = {
 
 export type CompactionFailureReason = "aborted" | "context-changed" | "invalid-response" | "request-failed" | "insufficient-window" | "unsupported" | "request-too-large";
 
+/** Отдельный способ отправки сводки; проверки ответа и принадлежности операции остаются общими. */
+export type SummaryTransport = {
+    prompt: (messages: AgentMessage[], instructions: string, previousSummary: string | undefined, sources: readonly unknown[]) => string;
+    inputTokens: (prompt: string) => number;
+    outputTokens?: (prompt: string, requested: number) => number;
+    request: (model: Model<Api>, prompt: string, options: ModelsApiStreamOptions<Api>) => Promise<AssistantMessage>;
+};
+
 export type CompactionSummaryOptions = {
     capability?: CompactCapability;
     model?: Model<Api>;
     isCurrent?: () => boolean;
+    transport?: SummaryTransport;
     /** Паузы перед повторами запроса сводки после сбоя запроса; без них повторов нет. */
     retryDelaysMs?: readonly number[];
     onRetry?: (attempt: number, attempts: number, detail?: string) => void;
@@ -345,6 +354,7 @@ type CompactionRequestGuard = {
     model: Model<Api>;
     signal: AbortSignal;
     validate: () => void;
+    transport?: SummaryTransport;
     retryDelaysMs?: readonly number[];
     onRetry?: (attempt: number, attempts: number, detail?: string) => void;
 };
@@ -465,6 +475,7 @@ function guardFor(ctx: ExtensionContext, snapshot: OperationSnapshot, options?: 
         ...(options?.capability ? { capability: options.capability } : {}),
         ...(options?.retryDelaysMs ? { retryDelaysMs: options.retryDelaysMs } : {}),
         ...(options?.onRetry ? { onRetry: options.onRetry } : {}),
+        ...(options?.transport ? { transport: options.transport } : {}),
         model: snapshot.serviceModelRef, signal: snapshot.signal, validate: () => assertCurrent(ctx, snapshot, options?.isCurrent),
     };
 }
@@ -560,8 +571,9 @@ async function requestSummary(ctx: ExtensionContext, prompt: string, maxTokens: 
     if (guard)
         guard.validate();
     let inputTokens = 0;
+    maxTokens = Math.min(maxTokens, guard?.transport?.outputTokens?.(prompt, maxTokens) ?? maxTokens);
     if (guard?.capability) {
-        inputTokens = estimateTokens({ role: "user", content: `<instructions>\n${SUMMARIZATION_SYSTEM_PROMPT}\n</instructions>\n\n${prompt}`, timestamp: 0 });
+        inputTokens = guard.transport ? guard.transport.inputTokens(prompt) : estimateTokens({ role: "user", content: `<instructions>\n${SUMMARIZATION_SYSTEM_PROMPT}\n</instructions>\n\n${prompt}`, timestamp: 0 });
         const budget = calculateCompactBudget({ capability: guard.capability, inputTokens, taskTokens: 0, requestedOutputTokens: maxTokens, modelMaxTokens: model.maxTokens });
         if (!budget.allowed)
             throw new SummaryFailure(budget.reason!);
@@ -593,7 +605,7 @@ async function requestSummary(ctx: ExtensionContext, prompt: string, maxTokens: 
     }
     let response: AssistantMessage | undefined;
     try {
-        response = await ctx.modelRegistry.complete(model, {
+        response = guard?.transport ? await guard.transport.request(model, prompt, options) : await ctx.modelRegistry.complete(model, {
             messages: [{
                     role: "user",
                     content: [{ type: "text", text: `<instructions>\n${SUMMARIZATION_SYSTEM_PROMPT}\n</instructions>\n\n${prompt}` }],
@@ -650,7 +662,8 @@ function conversationPrompt(messages: AgentMessage[], instructions: string, prev
 }
 
 async function summarizeMessages(ctx: ExtensionContext, messages: AgentMessage[], instructions: string, previousSummary: string | undefined, maxTokens: number, signal: AbortSignal, sources: readonly unknown[], guard?: CompactionRequestGuard): Promise<SummaryResponse> {
-    return completeSummary(ctx, conversationPrompt(messages, instructions, previousSummary, sources), maxTokens, signal, guard);
+    const prompt = guard?.transport ? guard.transport.prompt(messages, instructions, previousSummary, sources) : conversationPrompt(messages, instructions, previousSummary, sources);
+    return completeSummary(ctx, prompt, maxTokens, signal, guard);
 }
 
 async function summarizeTurnPrefix(ctx: ExtensionContext, messages: AgentMessage[], signal: AbortSignal, maxTokens: number, sources: readonly unknown[], customInstructions: string | undefined, guard?: CompactionRequestGuard): Promise<SummaryResponse> {

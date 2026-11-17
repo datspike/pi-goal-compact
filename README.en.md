@@ -114,7 +114,7 @@ Language and the compaction window are set in Pi's `settings.json`:
 
 - `language` — `ru` (the default) or `en`: the language of goal prompts, summaries and notifications. The older `summaryLanguage` key is also read.
 - `compactCapabilities` — verified windows of the summary request for exact provider routes. Use it when a route actually accepts more than the registry declares.
-- `appendCompaction` is read for compatibility but has no effect yet.
+- `appendCompaction` has no effect without an additional flag. In this experimental branch only, `appendCompaction: true` together with `PI_APPEND_PILOT=1` enables continuing the last working request to generate a summary. Technical failures fall back to standard compaction; cancellation or a context change does not continue. This mode has not been deployed to the working installation.
 
 Goal behavior is configured in `goal-reports.json`: globally in Pi's agent directory and per project in `.pi/goal-reports.json`. The project file overrides only the fields it names; feature switches are merged one by one.
 

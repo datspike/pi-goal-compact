@@ -1,3 +1,4 @@
+import { AppendRoute } from "./append-route.js";
 import { goalFeatures, loadGoalReportPolicySync } from "../goal/goal-report-config.js";
 import { registerModelTransfer } from "./model-transfer.js";
 import type { GoalGate } from "../core/model.js";
@@ -15,7 +16,8 @@ import {
 } from "../compaction/checkpoint.js";
 import type { SummarySettings } from "../compaction/language.js";
 import type { ContextMode } from "../compaction/policy.js";
-import { summarizeCompaction, summarizeTree } from "../compaction/summary.js";
+import type { Usage } from "@earendil-works/pi-ai";
+import { combineUsage, summarizeCompaction, summarizeTree } from "../compaction/summary.js";
 import type { CoreEffect, CompactionReason } from "../core/model.js";
 import { createRequestStage, REQUEST_STAGE_EVENTS, type RequestStageEvent } from "../request-stage/index.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
@@ -62,7 +64,7 @@ function routeOf(ctx: ExtensionContext): string {
 	return JSON.stringify(model ? [model.provider, model.id, model.api, model.baseUrl ?? ""] : null);
 }
 
-type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "repairAttempts"> & { sessionId: string };
+type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "appendDurationMs" | "repairAttempts"> & { sessionId: string };
 
 /**
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
@@ -74,6 +76,11 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
 	const transfer = registerModelTransfer(pi, driver, gate);
 	const stage = createRequestStage();
+	let appendUsage: Usage | undefined;
+	const append = process.env.PI_APPEND_PILOT === "1" && settings.appendCompaction ? new AppendRoute(value => {
+		if (value.usage) appendUsage = combineUsage(appendUsage, value.usage);
+		pi.appendEntry("append-pilot-attempt", value);
+	}) : undefined;
 	let summarySequence = 0;
 	// Причина последней отменённой сводки: Pi сообщает о сбое без неё, а владельцу нужна конкретика.
 	let lastFailure: string | undefined;
@@ -114,11 +121,18 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		lastFailure = undefined;
 		lastFailureAborted = false;
 		const started = Date.now();
+		appendUsage = undefined;
 		stage.beginCompaction(ctx, workingStandard());
 		try {
 			const model = ctx.model ? { ...ctx.model, contextWindow: window.capability(ctx).window } : undefined;
-			const compact = await summarizeCompaction(event, ctx, {
+			let transport: import("../compaction/summary.js").SummaryTransport | undefined;
+			if (append) {
+				try { transport = append.prepare(ctx, event, language); }
+				catch (error) { pi.appendEntry("append-pilot-attempt", { phase: "preflight-refusal", reason: error instanceof Error ? error.message : String(error) }); }
+			}
+			const run = (useAppend: boolean) => summarizeCompaction(event, ctx, {
 				...(model ? { model } : {}),
+				...(useAppend && transport ? { transport } : {}),
 				capability: window.capability(ctx),
 				isCurrent: () => generation === summarySequence,
 				retryDelaysMs: SUMMARY_RETRY_DELAYS_MS,
@@ -130,13 +144,27 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 					lastFailure = words ? `${reason}: ${words}` : reason;
 					lastFailureAborted = reason === "aborted";
 					pi.appendEntry(RECORD.standard, { version: 1, reason, ...(words ? { detail: words } : {}) });
-					// При ожидающей передаче причину назовёт её уведомление: два предупреждения об одном сбое не нужны.
 					if (reason !== "aborted" && !transfer.queued()) notice(ctx, `Compact: ${lastFailure}`, "warning");
 				},
 			});
+			let usedAppend = Boolean(transport);
+			let compact = await run(usedAppend);
+			const appendDurationMs = transport ? Date.now() - started : undefined;
+			let standardStarted = started;
+			if (transport && "cancel" in compact && !event.signal.aborted && !lastFailureAborted && lastFailure !== "context-changed") {
+				pi.appendEntry("append-pilot-attempt", { phase: "fallback", reason: lastFailure });
+				usedAppend = false;
+				standardStarted = Date.now();
+				compact = await run(false);
+			}
 			if ("compaction" in compact) {
+				// В сводке учитываются и отвергнутые ответы: они тоже расходуют модельный бюджет.
+				const usage = usedAppend ? appendUsage : combineUsage(compact.compaction.usage, appendUsage);
+				if (usage) compact.compaction.usage = usage;
 				pendingCard = {
-					kind: "standard", durationMs: Date.now() - started, sessionId: ctx.sessionManager.getSessionId(),
+					kind: usedAppend ? "append" : "standard", sessionId: ctx.sessionManager.getSessionId(),
+					...(!usedAppend ? { durationMs: Date.now() - standardStarted } : {}),
+					...(appendDurationMs !== undefined ? { appendDurationMs } : {}),
 					...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : {}),
 				};
 			}
@@ -276,8 +304,10 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		driver.dispatch({ type: "context_switched" }, ctx);
 		await window.restore(ctx);
 		transfer.restore(ctx);
+		append?.reset();
 	});
 	const switched = (ctx: ExtensionContext): void => {
+		append?.reset();
 		++summarySequence;
 		transfer.cancel(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
@@ -291,6 +321,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		// Своя смена окна меняет только contextWindow; другая модель, API или адрес — смена контекста даже во время неё.
 		const next = routeOf(ctx);
 		if (next !== route) {
+			append?.reset();
 			route = next;
 			if (!transfer.ownsModelChange(ctx)) { transfer.cancel(ctx); driver.dispatch({ type: "context_switched" }, ctx); }
 		}
@@ -315,6 +346,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		return summarize(event, ctx);
 	});
 	pi.on("context", (event, ctx) => {
+		append?.install(ctx);
 		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
 		if (cancelWaitingRun) { cancelWaitingRun = false; ctx.abort(); }
 		transfer.blocked(ctx);
@@ -325,6 +357,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		return summarizeTree(event, ctx);
 	});
 	pi.on("session_compact", async (event, ctx) => {
+		append?.reset();
 		stage.observe("session_compact", event, ctx);
 		const pending = pendingCard?.sessionId === ctx.sessionManager.getSessionId() ? pendingCard : undefined;
 		pendingCard = undefined;
@@ -367,6 +400,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_shutdown", (event, ctx) => {
 		stage.observe("session_shutdown", event, ctx);
 		++summarySequence;
+		append?.dispose();
 		finishManualCompaction(false);
 	});
 

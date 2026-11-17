@@ -25,6 +25,8 @@ export type ProbeScript = {
   lastStep: number;
   /** Промежуточные ходы, где прогон тоже заканчивается текстом `PROBE_DONE`, — точки остановки процесса. */
   stopSteps?: number[];
+  /** Офлайн-подстановка Responses: вызывает окончательный payload hook для проверки append. */
+  append?: boolean;
 };
 
 export type Row = {
@@ -63,13 +65,14 @@ export default function(pi) {
   pi.registerTool({ name: "ask_user", label: "Fixture question", description: "Return a deterministic UI answer", parameters: Type.Object({}),
     async execute() { return { content: [{ type: "text", text: "User answered: A" }], details: { mode: "single", cancelled: false, response: { kind: "selection", selections: ["A"] } } }; }
   });
-  pi.registerProvider("probe", { api: "probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: [{ id: "offline", name: "Offline", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 }],
-    streamSimple(model, context) {
+  pi.registerProvider("probe", { api: script.append ? "openai-responses" : "probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: [{ id: "offline", name: "Offline", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 }],
+    streamSimple(model, context, options) {
+      const respond = () => {
       const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
       const window = JSON.stringify(context.messages);
-      const log = (kind) => appendFileSync(process.env.PROBE_LOG, JSON.stringify({ kind, step, window }) + "\\n");
+      const log = (kind) => appendFileSync(process.env.PROBE_LOG, JSON.stringify({ kind, step, window, firstRole: context.messages[0]?.role }) + "\\n");
       // Ход может быть разрезан сжатием, поэтому сводка годится и для истории («Цель»), и для начала хода («Исходный запрос»).
-      if (window.includes("context summarization assistant")) {
+      if (window.includes("context summarization assistant") || window.includes("Это служебная задача сжатия") || window.includes("This is a summarization task")) {
         log("summary");
         return reply({ ...base, stopReason: "stop", content: [{ type: "text", text: "## Цель\\nДовести проверку до закрытия цели.\\n\\n## Исходный запрос\\nПродолжить проверку." }], usage: usage(100) });
       }
@@ -81,6 +84,18 @@ export default function(pi) {
       const input = script.heavySteps.includes(step) ? 256500 : 100;
       const content = call ? [{ type: "toolCall", id: "probe-" + step, name: call[0], arguments: call[1] }] : [{ type: "text", text: step === script.lastStep || (script.stopSteps ?? []).includes(step) ? "${PROBE_DONE}" : "Шаг выполнен." }];
       return reply({ ...base, stopReason: call ? "toolUse" : "stop", content, usage: usage(input) });
+      };
+      if (!script.append) return respond();
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(async () => {
+        try {
+          await options?.onPayload?.({ model: model.id, max_output_tokens: options?.maxTokens, input: context.messages, tools: context.messages.filter(m => m.role === "system").flatMap(m => m.toolsAdded ?? []) }, model);
+          for await (const event of respond()) stream.push(event);
+        } catch (error) {
+          stream.push({ type: "error", reason: "error", error: { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), content: [], stopReason: "error", errorMessage: String(error), usage: usage(0) } });
+        } finally { stream.end(); }
+      });
+      return stream;
     }
   });
 }
@@ -89,7 +104,7 @@ export default function(pi) {
 
 /** Каталог прогона. `SMOKE_KEEP=1` оставляет профили и журналы в `.runtime/` для разбора. */
 /** Запрос к провайдеру: ход стенда или сводка при сжатии, с сообщениями окна в JSON. */
-export type ProbeRequest = { kind: "turn" | "summary"; step: number; window: string };
+export type ProbeRequest = { kind: "turn" | "summary"; step: number; window: string; firstRole?: string };
 
 /** Как запустить Pi: с засеянным журналом и с перезагрузкой расширения вместо первой реплики. */
 type StartOptions = {
