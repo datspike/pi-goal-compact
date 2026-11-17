@@ -116,8 +116,10 @@ export function appendGoalSnapshot(
   ctx: ExtensionCommandContext,
   state: GoalWorkingState,
   mode: SnapshotMode,
+  providerRetryStatus?: string,
 ): void {
   const lines = formatGoalSnapshot(state, mode);
+  if (providerRetryStatus && state.goal?.status === "active") lines.unshift(providerRetryStatus);
   const goalId = state.goal?.goalId;
   const key = snapshotKey(goalId, mode, lines);
   if (hasSnapshot(ctx.sessionManager.getBranch(), key)) return;

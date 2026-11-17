@@ -5,6 +5,7 @@ import type { CoreEffect, GoalGate } from "../core/model.js";
 import { createExternalRetryRecovery } from "../goal/external-retry-recovery.js";
 import { compactContinuationPrompt, continuationGoalIdFromPrompt } from "../goal/prompts.js";
 import { createProviderLimitAutoResumeScheduler } from "../goal/provider-limit-auto-resume.js";
+import type { ProviderRetryConfig } from "../goal/provider-retry-config.js";
 import { recoveryPhaseBlocksContinuation, setRecoveryPendingAttention } from "../goal/recovery-machine.js";
 import { createGoalRecoveryRuntime } from "../goal/recovery-runtime.js";
 import {
@@ -20,6 +21,7 @@ import { createSubagentWatch } from "../goal/subagent-watch.js";
 import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "../goal/types.js";
 import type { CoreDriver } from "./driver.js";
 import type { GoalRunHooks, GoalSession } from "./goal-session.js";
+import { registerProviderRetry } from "./provider-retry.js";
 import type { Tickets } from "./tickets.js";
 
 /** Скрытые сообщения PiRetry: допускаются только как повтор этой сессии и цели (Ц37). */
@@ -38,7 +40,8 @@ const asGate = (reason: HoldReason): GoalGate => reason === "subagents" ? "held"
  * провайдера, удачный повтор PiRetry, запуск сессии, смена ветки, сжатие. Решает, продолжать ли,
  * ядро; здесь — разрешение цели, тексты и связь с Pi.
  */
-export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession, driver: CoreDriver, tickets: Tickets) {
+export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession, driver: CoreDriver, tickets: Tickets, retryConfig: ProviderRetryConfig = { enabled: false, windowMs: 900_000, allowSwitch: true }) {
+  const providerRetry = retryConfig.enabled ? registerProviderRetry(pi, session, retryConfig, () => driver.state.selfAbort) : undefined;
   // Контекст для будильников из таймеров и событий шины: у них своего контекста нет.
   let wakeContext: ExtensionContext | null = null;
   // Скрытые продолжения подряд без реплики владельца (Ц27).
@@ -274,7 +277,8 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
       const lastError = messages.filter(isErrorAssistantMessage).at(-1);
       if (lastError) {
         recordOverflow(lastError, ctx);
-        if (!isContextOverflowError(lastError.errorMessage)) recoveryRuntime.handlePersistentAssistantError(lastError, ctx);
+        const failureId = providerRetry?.active() ? ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id : undefined;
+        if (!isContextOverflowError(lastError.errorMessage) && !providerRetry?.owns(failureId)) recoveryRuntime.handlePersistentAssistantError(lastError, ctx);
       } else if (!lastAssistant || !recordOverflow(lastAssistant, ctx)) {
         session.resetRecovery();
       }
@@ -282,9 +286,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     externalRetry.finish(ctx, lastAssistant as Parameters<typeof externalRetry.finish>[1]);
   });
 
-  pi.on("agent_before_settle", (event, ctx) => {
+  pi.on("agent_before_settle", async (event, ctx) => {
     wakeContext = ctx;
     if (session.runIsForeign()) return undefined;
+    if (providerRetry?.active() && event.outcome === "error") return providerRetry.boundary(event, ctx);
     noticeIfLimitHeld();
     const reason = holdReason();
     const effects = driver.dispatch({ type: "before_settle", gate: asGate(reason), outcome: event.outcome, pendingMessages: event.context.pendingMessages.length > 0 }, ctx);
@@ -309,9 +314,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   });
 
   const hooks: GoalRunHooks = {
-    externalRetryActive: () => externalRetry.active(),
-    clearContinuation: () => subagents.cancelWait(),
-    invalidateExternalRetry: () => externalRetry.invalidate(),
+    externalRetryActive: () => externalRetry.active() || Boolean(providerRetry?.active()),
+    clearContinuation: () => { subagents.cancelWait(); providerRetry?.clear(); },
+    invalidateExternalRetry: () => { externalRetry.invalidate(); providerRetry?.clear(); },
+    ownsAbortHandling: () => Boolean(providerRetry?.enabled()) && !driver.state.selfAbort,
     cancelProviderLimitAutoResume: () => providerLimit.clear(),
     isProviderLimitAutoResumeScheduled: (goalId) => providerLimit.isScheduledFor(goalId),
     ownAbort: () => driver.state.selfAbort,

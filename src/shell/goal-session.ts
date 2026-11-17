@@ -47,6 +47,8 @@ export interface GoalRunHooks {
   isProviderLimitAutoResumeScheduled(goalId: string): boolean;
   /** Прогон прерван самим расширением (отказ устаревшему билету), а не владельцем. */
   ownAbort(): boolean;
+  /** Новый обработчик отличает подтверждённую ручную отмену от технического обрыва. */
+  ownsAbortHandling?(): boolean;
   /** Скрытые продолжения дошли до предела и ждут слова владельца. */
   isLimitHeld(): boolean;
 }
@@ -118,6 +120,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     isProviderLimitAutoResumeScheduled: (goalId) => hooks.isProviderLimitAutoResumeScheduled(goalId),
     getReportState: reports.getState,
     getAgentRunSequence: () => agentRunSequence,
+    getActivity: () => activity,
     getArtifactRefs: (goal, ctx) => {
       if (!ctx.cwd || !ctx.sessionManager) return [];
       const projected = projections.current();
@@ -743,6 +746,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     flush: (source: GoalEntrySource) => persistence.flushGoalPersistence(source),
     maybeFlushRuntime: (source: GoalEntrySource) => persistence.maybeFlushRuntimePersistence(source),
     pauseForAbort(ctx: ExtensionContext): void {
+      if (hooks.ownsAbortHandling?.()) return;
       // Свой отказ устаревшему билету — не обрыв владельцем (решение 0002).
       if (getGoal()?.status === "active" && !hooks.ownAbort()) applyTransition({ kind: "abort_pause" }, ctx);
     },
@@ -850,7 +854,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       return projections.updateWork(goalId, workState, expectedRevision, goalContext(ctx), callId);
     },
     showGoalSnapshot(ctx: ExtensionContext, mode: "status" | "details"): void {
-      appendGoalSnapshot(pi, ctx as ExtensionCommandContext, getGoalWorkingState(ctx), mode);
+      appendGoalSnapshot(pi, ctx as ExtensionCommandContext, getGoalWorkingState(ctx), mode, activity?.kind === "provider-retry" ? activity.label : undefined);
     },
     setGoal,
     clearGoal,

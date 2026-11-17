@@ -20,7 +20,7 @@ const JAR_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla
 const JAR_SHA256 = "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f";
 
 interface Run {
-  model: "Continuation" | "Agreement" | "ModelTransfer";
+  model: "Continuation" | "Agreement" | "ModelTransfer" | "ProviderRetry";
   bug: string;
   /** Имя нарушенного свойства или null для исправной модели. */
   expect: string | null;
@@ -51,6 +51,11 @@ export const RUNS: readonly Run[] = [
   { model: "ModelTransfer", bug: "doubleResume", expect: "P12_OneTransferContinuation", meaning: "повтор Pi и своё продолжение одновременно" },
   { model: "ModelTransfer", bug: "noHold", expect: "P13_TransferRespectsHold", meaning: "передача обходит удержание цели" },
   { model: "ModelTransfer", bug: "failOnCompact", expect: "P16_FailureOnlyAfterSaved", meaning: "сбой сжатия ломает ожидающую передачу" },
+  { model: "ProviderRetry", bug: "none", expect: null, meaning: "исправная модель повтора запроса" },
+  { model: "ProviderRetry", bug: "raceEsc", expect: "RetryCancellation", meaning: "отмена между выбором модели и отправкой игнорируется" },
+  { model: "ProviderRetry", bug: "doubleOwner", expect: "RetryOneOwner", meaning: "продолжение доступно одновременно со штатным повтором" },
+  { model: "ProviderRetry", bug: "ignoreDeadline", expect: "RetryDeadline", meaning: "просроченная попытка по-прежнему разрешена на Astra" },
+  { model: "ProviderRetry", bug: "doubleSwitch", expect: "RetryOnlyOneSwitch", meaning: "в одной цепочке разрешён второй переход" },
 ];
 
 function sha256(path: string): string {

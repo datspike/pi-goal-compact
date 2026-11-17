@@ -155,6 +155,16 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 `create_goal` always requires an agreement; the switches do not change that.
 
+### Recovering Astra during an interactive goal
+
+When preparing a separate profile without PiRetry, add this to the global `settings.json`:
+
+```json
+{ "piGoalCompact": { "providerRetry": { "enabled": true, "windowMs": 900000, "allowSwitch": true } } }
+```
+
+The new policy stays off outside that profile. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary Astra failure and defaults to 15 minutes. `allowSwitch: false` disables the switch to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch. The extended wait is available for an active goal in the TUI; this setting does not replace `/retry` in ordinary chat or the policy of child profiles.
+
 ## Moving from the earlier extensions
 
 - Goals, reports and records of `pi-codex-goal`, and the window mode and cards of `context-compaction`, are read from session logs under their old names. Logs are not rewritten.
