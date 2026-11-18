@@ -51,6 +51,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let lastAssistantEntryId: string | undefined;
   let loggedCancellation = false;
   const runningTools = new Set<string>();
+  let drainingSessionId: string | undefined;
   let pendingInput: { sessionId: string; messages: Array<Pick<InputEvent, "text" | "images">> } | undefined;
 
   const enabled = () => config.enabled && !pi.getCommands().some(command => command.name === "retry");
@@ -82,6 +83,15 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       stage: runningTools.size ? "tool" : requestStage, toolCallIds: runningTools.size ? [...runningTools] : undefined,
     }); } catch { /* Запись диагностики не владеет прогоном. */ }
   };
+  const retryInProgress = () => chain ?? requestAdmitted ?? request?.retry;
+  const cancelRetry = (ctx: ExtensionContext, current: Chain, reason: "escape" | "input" | "model-selection") => {
+    diagnostic(ctx, "cancelled", current, reason);
+    drainingSessionId = current.sessionId;
+    requestAdmitted = undefined;
+    clear();
+    setActivity(ctx, null);
+    ctx.abort();
+  };
   const stop = (ctx: ExtensionContext, reason: string) => {
     diagnostic(ctx, "stopped", chain, reason);
     clear();
@@ -101,26 +111,26 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     if (enabled() && ctx.mode === "tui") unbind = ctx.ui.onTerminalInput(data => {
       if (!matchesKey(data, "escape") || ctx.isIdle()) return;
       manual = true;
-      if (chain) {
-        diagnostic(ctx, "cancelled", chain, "escape");
-        clear();
-        setActivity(ctx, null);
+      const current = retryInProgress();
+      if (current && drainingSessionId === undefined) {
         session.pauseManually(ctx);
-        ctx.abort();
+        cancelRetry(ctx, current, "escape");
       }
     });
   };
 
   pi.on("session_start", (_event, ctx) => bind(ctx));
   pi.on("session_tree", (_event, ctx) => bind(ctx));
-  const leaveSession = () => { pendingInput = undefined; requestAdmitted = undefined; request = undefined; clear(); };
+  const leaveSession = () => {
+    drainingSessionId = pendingInput = requestAdmitted = request = undefined;
+    clear();
+  };
   pi.on("session_before_switch", leaveSession);
   pi.on("session_before_fork", leaveSession);
   pi.on("session_before_tree", leaveSession);
   pi.on("session_shutdown", (_event, ctx) => {
-    pendingInput = undefined;
     if (chain && currentGoal()) session.pauseForShutdown(ctx, "Provider recovery was interrupted by session shutdown.");
-    clear();
+    leaveSession();
     unbind?.();
     unbind = undefined;
   });
@@ -140,16 +150,13 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("input", (event, ctx) => {
     if (event.source === "extension" || ctx.mode !== "tui") return;
     const sessionId = ctx.sessionManager.getSessionId();
-    const own = chain ?? requestAdmitted ?? request?.retry;
-    if (!own && pendingInput?.sessionId !== sessionId) return;
+    const draining = drainingSessionId === sessionId;
+    const current = retryInProgress();
+    if (!draining && current?.sessionId !== sessionId) return;
     if (pendingInput?.sessionId !== sessionId) pendingInput = { sessionId, messages: [] };
+    // Pi не доставляет штатную очередь после abort: сохраняем явный ввод до остановки старого прогона.
     pendingInput.messages.push({ text: event.text, ...(event.images ? { images: event.images } : {}) });
-    // Очередь штатного run не исполняется после abort. Передаём ровно ту же реплику после его остановки.
-    diagnostic(ctx, "cancelled", own, "input");
-    requestAdmitted = undefined;
-    clear();
-    setActivity(ctx, null);
-    ctx.abort();
+    if (!draining && current) cancelRetry(ctx, current, "input");
     return { action: "handled" };
   });
   pi.on("turn_start", () => { response = undefined; });
@@ -160,14 +167,11 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       return;
     }
     if (selection && !modelChangeCancelled) selection.manualChoice = { model: event.model, thinking: pi.getThinkingLevel() };
-    if (!chain && !requestAdmitted) return;
-    diagnostic(ctx, "cancelled", chain ?? requestAdmitted, "model-selection");
+    const current = retryInProgress();
+    if (!current || ctx.isIdle() || drainingSessionId !== undefined) return;
     modelChangeCancelled = true;
-    clear();
-    requestAdmitted = undefined;
-    setActivity(ctx, null);
     session.pauseForRecovery(ctx, say("Модель изменена вручную. Старый повтор отменён.", "Model changed manually. The pending retry was cancelled."));
-    if (!ctx.isIdle()) ctx.abort();
+    cancelRetry(ctx, current, "model-selection");
   });
 
   async function select(ctx: ExtensionContext, target: Model) {
@@ -312,7 +316,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   });
   pi.on("agent_settled", (event, ctx) => {
     const input = pendingInput;
-    pendingInput = undefined;
+    drainingSessionId = pendingInput = undefined;
     if (!enabled() && !input) return;
     if ((event.aborted || seenAbort) && !input && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {
       diagnostic(ctx, "cancelled", chain, manual ? "escape" : "unknown");
@@ -323,7 +327,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     request = undefined;
     clear();
     setActivity(ctx, null);
-    if (input?.sessionId === ctx.sessionManager.getSessionId() && !manual && !session.runIsForeign()) {
+    if (input?.sessionId === ctx.sessionManager.getSessionId() && !session.runIsForeign()) {
       for (const message of input.messages) {
         const content = message.images?.length ? [{ type: "text" as const, text: message.text }, ...message.images] : message.text;
         pi.sendUserMessage(content, { expandPromptTemplates: true });

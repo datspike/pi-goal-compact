@@ -16,8 +16,10 @@ const makeGoal = { objective, agreement: { owner_wants: objective, done_when: "�
 const hold = { action: "publish", status: "awaiting_user", phase: "Готово", summary: "Проверка пройдена.", nextStep: "Дождаться решения.", needUser: "Продолжить работу?" };
 const newInput = "Новая реплика отменяет прежний запрос.";
 const newAnswer = "Ответ только на новую реплику.";
+const secondInput = "Следующая реплика с вложением.";
+const attachment = { type: "image" as const, mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVQI12NoAAAAggCB3UNq9AAAAABJRU5ErkJggg==" };
 
-type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send";
+type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change";
 
 async function run(variant: Variant) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
@@ -28,10 +30,10 @@ async function run(variant: Variant) {
   const failures: string[] = [];
   let standardRetries = 0;
   let goal: ReturnType<typeof compose>["goal"] | undefined;
-  let submit: (() => Promise<void>) | undefined;
+  let submit: ((second?: boolean) => Promise<void>) | undefined;
   const manager = SessionManager.inMemory(cwd);
   const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
-  const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
+  const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const, "image" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
   const userModel = { ...models[2]!, provider: "openai" as const, api: "retry-probe", baseUrl: "http://127.0.0.1:1" };
   const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
     pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context, options) {
@@ -53,6 +55,11 @@ async function run(variant: Variant) {
       queueMicrotask(async () => {
         await options?.onPayload?.({ model: model.id }, model);
         if (n === 3 && variant === "input-after-send") await submit?.();
+        if (n === 3 && variant === "input-after-escape") {
+          escape();
+          await submit?.();
+          await submit?.(true);
+        }
         if (message.stopReason === "stop" || message.stopReason === "toolUse") await options?.onResponse?.({ status: 200, headers: {} }, model);
         stream.push({ type: "start", partial: message });
         if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
@@ -72,16 +79,18 @@ async function run(variant: Variant) {
     if (variant === "manual-after-admit") pi.on("agent_before_settle", async event => {
       if (event.continue) await pi.setModel(userModel);
     });
-    if (variant === "input-after-admit") pi.on("agent_before_settle", async event => {
-      if (event.continue) await submit?.();
+    if (variant === "input-after-admit" || variant === "input-after-model-change") pi.on("agent_before_settle", async event => {
+      if (!event.continue) return;
+      if (variant === "input-after-model-change") await pi.setModel(userModel);
+      await submit?.();
     });
-    if (variant.startsWith("input-")) pi.on("turn_end", (event, ctx) => {
+    if (variant === "input-after-admit" || variant === "input-after-send") pi.on("turn_end", (event, ctx) => {
       if (event.message.role === "assistant" && event.message.content.some(part => part.type === "text" && part.text === newAnswer)) goal?.pauseManually(ctx);
     });
   }] });
   await loader.reload();
   const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: { ...models[0]!, provider: "openai", api: "retry-probe", baseUrl: "http://127.0.0.1:1" }, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }) });
-  submit = () => session.prompt(newInput, { streamingBehavior: "steer" });
+  submit = (second = false) => session.prompt(second ? secondInput : newInput, { streamingBehavior: "steer", ...(second ? { images: [attachment] } : {}) });
   try {
     session.subscribe(event => { if (event.type === "auto_retry_start") standardRetries++; });
     const methods: Partial<ExtensionUIContext> = {
@@ -197,3 +206,23 @@ for (const variant of ["input-after-admit", "input-after-send"] as const) {
     assert.ok(!rows.some(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "fixture-hold" && !entry.message.isError));
   });
 }
+
+test("SDK: после Esc новый ввод с вложением приходит по порядку, а цель остаётся на ручной паузе", { timeout: 8_000 }, async () => {
+  const { requests, rows, pause } = await run("input-after-escape");
+  assert.equal(pause?.kind, "manual");
+  assert.deepEqual(requests.map(request => request.model), [astra, astra, astra, sol, sol, sol]);
+  assert.ok(requests[4]?.context.includes(newInput) && !requests[4].context.includes(secondInput));
+  assert.ok(requests[5]?.context.includes(secondInput));
+  const users = rows.flatMap(entry => entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : []);
+  assert.deepEqual(users.slice(1), [[{ type: "text", text: newInput }], [{ type: "text", text: secondInput }, attachment]]);
+  assert.equal(rows.filter(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === newAnswer)).length, 2);
+  assert.ok(!rows.some(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "fixture-hold" && !entry.message.isError));
+});
+
+test("SDK: после ручной смены модели новая реплика идёт в выбранную модель, не возобновляя цель", { timeout: 8_000 }, async () => {
+  const { requests, rows, pause } = await run("input-after-model-change");
+  assert.deepEqual(requests.map(request => request.model), [astra, astra, astra, chosen]);
+  assert.equal(pause?.kind, "recovery");
+  assert.equal(requests.filter(request => request.context.includes(newInput)).length, 1);
+  assert.ok(rows.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === newAnswer)));
+});
