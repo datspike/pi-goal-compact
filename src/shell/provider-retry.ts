@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { estimateTokens, type AgentBeforeSettleEvent, type BoundaryResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, type AgentBeforeSettleEvent, type BoundaryResult, type ExtensionAPI, type ExtensionContext, type InputEvent } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { isProviderLimitError, isRetryableTransientError } from "../goal/recovery.js";
 import type { ProviderRetryConfig } from "../goal/provider-retry-config.js";
@@ -51,6 +51,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let lastAssistantEntryId: string | undefined;
   let loggedCancellation = false;
   const runningTools = new Set<string>();
+  let pendingInput: { sessionId: string; messages: Array<Pick<InputEvent, "text" | "images">> } | undefined;
 
   const enabled = () => config.enabled && !pi.getCommands().some(command => command.name === "retry");
   const clear = () => { chain?.abort.abort(); chain = undefined; };
@@ -112,10 +113,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
 
   pi.on("session_start", (_event, ctx) => bind(ctx));
   pi.on("session_tree", (_event, ctx) => bind(ctx));
-  pi.on("session_before_switch", () => clear());
-  pi.on("session_before_fork", () => clear());
-  pi.on("session_before_tree", () => clear());
+  const leaveSession = () => { pendingInput = undefined; requestAdmitted = undefined; request = undefined; clear(); };
+  pi.on("session_before_switch", leaveSession);
+  pi.on("session_before_fork", leaveSession);
+  pi.on("session_before_tree", leaveSession);
   pi.on("session_shutdown", (_event, ctx) => {
+    pendingInput = undefined;
     if (chain && currentGoal()) session.pauseForShutdown(ctx, "Provider recovery was interrupted by session shutdown.");
     clear();
     unbind?.();
@@ -135,10 +138,19 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     runningTools.clear();
   });
   pi.on("input", (event, ctx) => {
-    if (event.source === "extension" || !chain) return;
-    diagnostic(ctx, "cancelled", chain, "input");
+    if (event.source === "extension" || ctx.mode !== "tui") return;
+    const sessionId = ctx.sessionManager.getSessionId();
+    const own = chain ?? requestAdmitted ?? request?.retry;
+    if (!own && pendingInput?.sessionId !== sessionId) return;
+    if (pendingInput?.sessionId !== sessionId) pendingInput = { sessionId, messages: [] };
+    pendingInput.messages.push({ text: event.text, ...(event.images ? { images: event.images } : {}) });
+    // Очередь штатного run не исполняется после abort. Передаём ровно ту же реплику после его остановки.
+    diagnostic(ctx, "cancelled", own, "input");
+    requestAdmitted = undefined;
     clear();
     setActivity(ctx, null);
+    ctx.abort();
+    return { action: "handled" };
   });
   pi.on("turn_start", () => { response = undefined; });
   pi.on("model_select", (event, ctx) => {
@@ -299,15 +311,24 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     diagnostic(ctx, "request-prepared", admitted);
   });
   pi.on("agent_settled", (event, ctx) => {
-    if (!enabled()) return;
-    if ((event.aborted || seenAbort) && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {
+    const input = pendingInput;
+    pendingInput = undefined;
+    if (!enabled() && !input) return;
+    if ((event.aborted || seenAbort) && !input && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {
       diagnostic(ctx, "cancelled", chain, manual ? "escape" : "unknown");
       if (manual) session.pauseManually(ctx);
       else session.pauseForRecovery(ctx, say("Прогон прерван, источник отмены неизвестен. Перед продолжением проверь последнее действие.", "Run aborted; cancellation source unknown. Check the last action before resuming."));
     }
     requestAdmitted = undefined;
+    request = undefined;
     clear();
     setActivity(ctx, null);
+    if (input?.sessionId === ctx.sessionManager.getSessionId() && !manual && !session.runIsForeign()) {
+      for (const message of input.messages) {
+        const content = message.images?.length ? [{ type: "text" as const, text: message.text }, ...message.images] : message.text;
+        pi.sendUserMessage(content, { expandPromptTemplates: true });
+      }
+    }
   });
 
   return { enabled, active: () => chain !== undefined, clear, owns, boundary };

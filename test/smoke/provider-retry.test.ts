@@ -14,8 +14,10 @@ const usage = { input: 12, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 
 const objective = "Проверить восстановление запроса после сохранённого результата.";
 const makeGoal = { objective, agreement: { owner_wants: objective, done_when: "Проверка прошла." }, self_decided: [] };
 const hold = { action: "publish", status: "awaiting_user", phase: "Готово", summary: "Проверка пройдена.", nextStep: "Дождаться решения.", needUser: "Продолжить работу?" };
+const newInput = "Новая реплика отменяет прежний запрос.";
+const newAnswer = "Ответ только на новую реплику.";
 
-type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection";
+type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send";
 
 async function run(variant: Variant) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
@@ -26,6 +28,7 @@ async function run(variant: Variant) {
   const failures: string[] = [];
   let standardRetries = 0;
   let goal: ReturnType<typeof compose>["goal"] | undefined;
+  let submit: (() => Promise<void>) | undefined;
   const manager = SessionManager.inMemory(cwd);
   const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
   const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
@@ -36,9 +39,10 @@ async function run(variant: Variant) {
       requests.push({ model: model.id, context: JSON.stringify(context) });
       const unknownAbort = variant === "unknown-abort" && n === 1;
       const plain = variant === "plain-chat";
+      const newTurn = variant.startsWith("input-") && JSON.stringify(context).includes(newInput);
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage,
-        stopReason: unknownAbort ? "aborted" : plain ? (n === 0 ? "error" : "stop") : n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
-        content: plain ? (n === 0 ? [] : [{ type: "text", text: "Обычный ответ после повтора." }])
+        stopReason: newTurn ? "stop" : unknownAbort ? "aborted" : plain ? (n === 0 ? "error" : "stop") : n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
+        content: newTurn ? [{ type: "text", text: newAnswer }] : plain ? (n === 0 ? [] : [{ type: "text", text: "Обычный ответ после повтора." }])
           : n === 0 ? [{ type: "toolCall", id: "fixture-goal", name: "create_goal", arguments: makeGoal }]
           : n === 3 ? [{ type: "toolCall", id: "fixture-hold", name: "report_goal_progress", arguments: hold }]
           : n < 3 ? [] : [{ type: "text", text: "Готов полезный результат." }],
@@ -48,6 +52,7 @@ async function run(variant: Variant) {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(async () => {
         await options?.onPayload?.({ model: model.id }, model);
+        if (n === 3 && variant === "input-after-send") await submit?.();
         if (message.stopReason === "stop" || message.stopReason === "toolUse") await options?.onResponse?.({ status: 200, headers: {} }, model);
         stream.push({ type: "start", partial: message });
         if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
@@ -67,9 +72,16 @@ async function run(variant: Variant) {
     if (variant === "manual-after-admit") pi.on("agent_before_settle", async event => {
       if (event.continue) await pi.setModel(userModel);
     });
+    if (variant === "input-after-admit") pi.on("agent_before_settle", async event => {
+      if (event.continue) await submit?.();
+    });
+    if (variant.startsWith("input-")) pi.on("turn_end", (event, ctx) => {
+      if (event.message.role === "assistant" && event.message.content.some(part => part.type === "text" && part.text === newAnswer)) goal?.pauseManually(ctx);
+    });
   }] });
   await loader.reload();
   const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: { ...models[0]!, provider: "openai", api: "retry-probe", baseUrl: "http://127.0.0.1:1" }, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }) });
+  submit = () => session.prompt(newInput, { streamingBehavior: "steer" });
   try {
     session.subscribe(event => { if (event.type === "auto_retry_start") standardRetries++; });
     const methods: Partial<ExtensionUIContext> = {
@@ -172,5 +184,16 @@ for (const variant of ["manual-after-admit", "manual-during-selection"] as const
     assert.equal(model, chosen);
     assert.equal(pause?.kind, "recovery");
     assert.match(pause?.reason ?? "", /Модель изменена вручную|Model changed manually/);
+  });
+}
+
+for (const variant of ["input-after-admit", "input-after-send"] as const) {
+  test(`SDK: новая реплика отменяет прежний повтор (${variant})`, { timeout: 8_000 }, async () => {
+    const { requests, rows } = await run(variant);
+    assert.equal(requests.length, variant === "input-after-admit" ? 4 : 5);
+    assert.equal(requests.filter(request => request.context.includes(newInput)).length, 1);
+    assert.equal(rows.filter(entry => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes(newInput)).length, 1);
+    assert.ok(rows.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === newAnswer)));
+    assert.ok(!rows.some(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "fixture-hold" && !entry.message.isError));
   });
 }
