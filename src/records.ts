@@ -19,6 +19,7 @@ export const RECORD = {
   standard: "goal-compact-standard",
   card: "goal-compact-card",
   ticket: "goal-compact-ticket",
+  manualProviderRetry: "pi-goal-provider-retry-request",
   transfer: "goal-compact-model-transfer",
   /** Сообщения начала окна; в журнал не пишутся, собираются заново при каждом запросе (решение 0004). */
   agreement: "goal-compact-agreement",

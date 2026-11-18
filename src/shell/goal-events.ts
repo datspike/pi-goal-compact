@@ -33,7 +33,7 @@ const RETRY_CARRIERS = new Set(["pi-retry:retry", "pi-retry:continue"]);
 function isForeignRun(event: BeforeAgentStartEvent): boolean {
   if (event.messageType === "user" || "prompt" in event) return false;
   const type = event.message.customType;
-  return type !== CUSTOM_ENTRY_TYPE && type !== RECORD.ticket && !RETRY_CARRIERS.has(type);
+  return type !== CUSTOM_ENTRY_TYPE && type !== RECORD.ticket && type !== RECORD.manualProviderRetry && !RETRY_CARRIERS.has(type);
 }
 
 /** Регистрирует для каждой записи ленты рисовальщик под новым и прежним именем. */

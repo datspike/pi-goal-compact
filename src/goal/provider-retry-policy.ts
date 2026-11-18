@@ -29,7 +29,6 @@ export interface ProviderRetryInput {
 export type ProviderRetryStopReason =
   | "error-not-admitted"
   | "already-switched"
-  | "model-not-supported"
   | "retry-after-outside-window"
   | "window-exhausted";
 
@@ -48,7 +47,6 @@ export function decideProviderRetry(input: ProviderRetryInput): ProviderRetryDec
   const { chain, nowMs, failedAtMs, errorClass, notBeforeMs, windowMs, allowSwitch } = input;
   if (errorClass === "not-admitted") return { type: "stop", reason: "error-not-admitted" };
   if (chain.switched) return { type: "stop", reason: "already-switched" };
-  if (chain.model !== ASTRA_MODEL) return { type: "stop", reason: "model-not-supported" };
 
   const deadlineMs = chain.startedAtMs + windowMs;
   if (notBeforeMs > deadlineMs && notBeforeMs > failedAtMs) return { type: "stop", reason: "retry-after-outside-window" };
@@ -60,7 +58,7 @@ export function decideProviderRetry(input: ProviderRetryInput): ProviderRetryDec
   }
 
   // Крайняя отметка принадлежит переходу: ещё один старт на Astra мог бы его отложить.
-  if (allowSwitch && errorClass === "model-temporary") {
+  if (chain.model === ASTRA_MODEL && allowSwitch && errorClass === "model-temporary") {
     return nowMs < deadlineMs ? { type: "wait", untilMs: deadlineMs } : { type: "switch", model: SOL_MODEL };
   }
   return { type: "stop", reason: "window-exhausted" };

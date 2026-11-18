@@ -5,12 +5,14 @@ import { isProviderLimitError, isRetryableTransientError } from "../goal/recover
 import type { ProviderRetryConfig } from "../goal/provider-retry-config.js";
 import { decideProviderRetry, type ProviderRetryChain, type ProviderRetryErrorClass } from "../goal/provider-retry-policy.js";
 import { say } from "../language.js";
+import { RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
 
-const ASTRA = "openai/gpt-6.2-astra";
+const actionId = (details: unknown) => details && typeof details === "object" && "id" in details ? details.id : undefined;
 const modelRef = (model: ExtensionContext["model"]) => model ? `${model.provider}/${model.id}` : "";
 type Failure = { entryId: string; at: number; notBefore: number; errorClass: ProviderRetryErrorClass; requestId: string | undefined; httpStatus: number | undefined };
-type Chain = ProviderRetryChain & { sessionId: string; goalId: string; failure: Failure; abort: AbortController };
+type ManualOffer = { sessionId: string; leafId: string | null; model: string; failure: Failure };
+type Chain = ProviderRetryChain & { sessionId: string; goalId: string | undefined; failure: Failure; abort: AbortController };
 
 function classify(message: string | undefined, status: number | undefined): ProviderRetryErrorClass {
   if (isProviderLimitError(message)) return "not-admitted";
@@ -52,16 +54,23 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let loggedCancellation = false;
   const runningTools = new Set<string>();
   let drainingSessionId: string | undefined;
+  let manualOffer: ManualOffer | undefined;
+  let manualRun: (ManualOffer & { id: string }) | undefined;
   let pendingInput: { sessionId: string; messages: Array<Pick<InputEvent, "text" | "images">> } | undefined;
 
   const enabled = () => config.enabled && !pi.getCommands().some(command => command.name === "retry");
   const clear = () => { chain?.abort.abort(); chain = undefined; };
   const currentGoal = () => session.getGoal()?.status === "active" ? session.getGoal() : null;
-  const canRecover = (ctx: ExtensionContext) => enabled() && ctx.mode === "tui" && !session.runIsForeign() && currentGoal() && session.canRecover() && !session.isContinuationHeld();
+  const canRecover = (ctx: ExtensionContext) => {
+    if (!enabled() || ctx.mode !== "tui" || session.runIsForeign()) return false;
+    const goal = session.getGoal();
+    return !goal || goal.status === "complete" || (goal.status === "active" && session.canRecover() && !session.isContinuationHeld());
+  };
   const owns = (id: string | undefined) => Boolean(chain && id && chain.failure.entryId === id);
   const setActivity = (ctx: ExtensionContext, label: string | null) => {
     session.status.setActivity(label === null ? null : { label, kind: "provider-retry" });
     session.status.refreshUi(ctx);
+    if (ctx.hasUI) ctx.ui.setStatus("provider-retry", currentGoal() ? undefined : label ?? undefined);
   };
   const diagnostic = (ctx: ExtensionContext, kind: string, current?: Chain, reason?: string) => {
     if (kind === "cancelled") {
@@ -94,14 +103,20 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   };
   const stop = (ctx: ExtensionContext, reason: string) => {
     diagnostic(ctx, "stopped", chain, reason);
+    const available = chain && !chain.goalId && (reason === "window-exhausted" || reason === "already-switched" || reason === "manual-failed");
+    if (available && chain) manualOffer = { sessionId: chain.sessionId, leafId: ctx.sessionManager.getLeafId(), model: chain.model, failure: chain.failure };
     clear();
     setActivity(ctx, null);
     const detail = reason === "retry-after-outside-window" ? say("Провайдер просит ждать дольше заданного срока", "Provider asks to wait beyond the allowed window")
       : reason === "sol-unavailable" || reason === "sol-selection-failed" ? say("Не удалось выбрать Sol", "Could not select Sol")
+      : reason === "manual-failed" ? say("Явный повтор не удался", "The explicit retry failed")
+      : reason === "already-switched" ? say("Sol тоже недоступна", "Sol is also unavailable")
       : reason === "sol-window" ? say("Сохранённое окно не помещается в Sol", "Saved context does not fit Sol")
       : reason === "unsafe-tool-result" ? say("Исход инструмента надо проверить вручную", "The tool outcome needs a manual check")
       : say("Срок повторов исчерпан", "Retry window exhausted");
-    session.pauseForRecovery(ctx, `Astra: ${detail}.`);
+    const notice = `${ctx.model?.id ?? say("Восстановление", "Recovery")}: ${detail}.`;
+    if (currentGoal()) session.pauseForRecovery(ctx, notice);
+    else if (ctx.hasUI) ctx.ui.notify(manualOffer ? `${notice} ${say("Явный повтор: /retry-request.", "Explicit retry: /retry-request.")}` : notice, "warning");
   };
   const bind = (ctx: ExtensionContext) => {
     clear();
@@ -113,7 +128,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       manual = true;
       const current = retryInProgress();
       if (current && drainingSessionId === undefined) {
-        session.pauseManually(ctx);
+        if (currentGoal()) session.pauseManually(ctx);
         cancelRetry(ctx, current, "escape");
       }
     });
@@ -122,6 +137,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("session_start", (_event, ctx) => bind(ctx));
   pi.on("session_tree", (_event, ctx) => bind(ctx));
   const leaveSession = () => {
+    manualOffer = manualRun = undefined;
     drainingSessionId = pendingInput = requestAdmitted = request = undefined;
     clear();
   };
@@ -134,7 +150,28 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     unbind?.();
     unbind = undefined;
   });
-  pi.on("before_agent_start", () => {
+  const sameManualTarget = (ctx: ExtensionContext, target: ManualOffer) =>
+    ctx.sessionManager.getSessionId() === target.sessionId && ctx.sessionManager.getLeafId() === target.leafId && modelRef(ctx.model) === target.model;
+  pi.registerCommand("retry-request", {
+    description: say("Повторить последний безопасный запрос обычного чата", "Repeat the last safe chat request"),
+    async handler(_args, ctx) {
+      const offer = manualOffer;
+      if (!offer || !canRecover(ctx) || currentGoal() || !ctx.isIdle() || ctx.hasPendingMessages() ||
+          !sameManualTarget(ctx, offer) || performance.now() < offer.failure.notBefore) {
+        ctx.ui.notify(say("Нет безопасного запроса для повтора.", "No safe request to retry."), "warning");
+        return;
+      }
+      manualOffer = undefined;
+      manualRun = { ...offer, id: randomUUID() };
+      pi.sendMessage({ customType: RECORD.manualProviderRetry, content: say("Повтор запроса по команде.", "Request retried by command."), display: true, details: { id: manualRun.id } }, { triggerTurn: true });
+    },
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    manualOffer = undefined;
+    if (event.messageType === "custom" && event.message.customType === RECORD.manualProviderRetry) {
+      if (!manualRun || actionId(event.message.details) !== manualRun.id || !sameManualTarget(ctx, manualRun) || !canRecover(ctx) || currentGoal()) ctx.abort();
+    } else manualRun = undefined;
     clear();
     manual = seenAbort = unsafeToolResult = false;
     requestAdmitted = undefined;
@@ -149,6 +186,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   });
   pi.on("input", (event, ctx) => {
     if (event.source === "extension" || ctx.mode !== "tui") return;
+    manualOffer = undefined;
     const sessionId = ctx.sessionManager.getSessionId();
     const draining = drainingSessionId === sessionId;
     const current = retryInProgress();
@@ -159,8 +197,27 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     if (!draining && current) cancelRetry(ctx, current, "input");
     return { action: "handled" };
   });
+  pi.on("context_with_system", (event, ctx) => {
+    // Не пересобираем системный префикс и не отправляем текст отметки провайдеру.
+    const target = manualRun && ctx.sessionManager.getEntry(manualRun.failure.entryId);
+    const failure = target?.type === "message" && target.message.role === "assistant" ? target.message : undefined;
+    const failedIndex = failure ? event.messages.findLastIndex(message => message.role === "assistant" && message.stopReason === "error" &&
+      message.timestamp === failure.timestamp && message.model === failure.model && message.provider === failure.provider) : -1;
+    const messages = event.messages.filter((message, index) => index !== failedIndex && !(message.role === "custom" && message.customType === RECORD.manualProviderRetry));
+    return messages.length === event.messages.length ? undefined : { messages };
+  });
+  pi.on("turn_end", (event, ctx) => {
+    if (!manualRun) return;
+    const marker = ctx.sessionManager.getBranch().findLast(entry => entry.type === "custom_message" && entry.customType === RECORD.manualProviderRetry && actionId(entry.details) === manualRun?.id);
+    if (!marker) return;
+    const targets = [marker.id, manualRun.failure.entryId];
+    const entries = targets.filter(id => !ctx.sessionManager.getBranch().some(entry => entry.type === "context_edit" && entry.targetId === id && entry.replacement === null))
+      .map(targetId => ({ type: "context_edit" as const, targetId, replacement: null }));
+    if (entries.length) return { entries: [...event.entries, ...entries] };
+  });
   pi.on("turn_start", () => { response = undefined; });
   pi.on("model_select", (event, ctx) => {
+    manualOffer = undefined;
     if (selection && !selection.observed && event.source === "set" &&
         modelRef(event.previousModel) === selection.from && modelRef(event.model) === selection.to) {
       selection.observed = true;
@@ -170,7 +227,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     const current = retryInProgress();
     if (!current || ctx.isIdle() || drainingSessionId !== undefined) return;
     modelChangeCancelled = true;
-    session.pauseForRecovery(ctx, say("Модель изменена вручную. Старый повтор отменён.", "Model changed manually. The pending retry was cancelled."));
+    if (currentGoal()) session.pauseForRecovery(ctx, say("Модель изменена вручную. Старый повтор отменён.", "Model changed manually. The pending retry was cancelled."));
     cancelRetry(ctx, current, "model-selection");
   });
 
@@ -188,7 +245,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("tool_execution_end", event => { runningTools.delete(event.toolCallId); });
   pi.on("after_provider_response", (event, ctx) => {
     if (request) request.status = event.status;
-    if (!canRecover(ctx) || modelRef(ctx.model) !== ASTRA) return;
+    if (!canRecover(ctx)) return;
     const raw = event.headers["retry-after"];
     const ms = raw?.trim() ? (/^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - Date.now()) : 0;
     response = { status: event.status, notBefore: performance.now() + (Number.isFinite(ms) ? Math.max(ms, 0) : 0) };
@@ -208,7 +265,8 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       return;
     }
     const goal = currentGoal();
-    if (!goal || !canRecover(ctx) || manual || modelRef(ctx.model) !== ASTRA || `${message.provider}/${message.model}` !== ASTRA) return;
+    const model = modelRef(ctx.model);
+    if (!canRecover(ctx) || manual || `${message.provider}/${message.model}` !== model) return;
     const errorClass = classify(message.errorMessage, response?.status);
     if (errorClass !== "not-admitted" && (unsafeToolResult || event.toolResults.length || message.content.some(part => part.type === "toolCall"))) {
       stop(ctx, "unsafe-tool-result");
@@ -222,9 +280,9 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     const notBefore = Math.max(at, response?.notBefore ?? at, at + Number(refusedDelay?.[1] ?? 0) * 1000);
     const failure = { entryId: event.messageEntryId, at, notBefore, errorClass, requestId: request?.id, httpStatus: response?.status };
     const sessionId = ctx.sessionManager.getSessionId();
-    if (chain?.goalId !== goal.goalId || chain.sessionId !== sessionId) {
+    if (!chain || chain.goalId !== goal?.goalId || chain.sessionId !== sessionId || chain.model !== model) {
       clear();
-      chain = { startedAtMs: at, attemptsIssued: 0, switched: false, model: ASTRA, goalId: goal.goalId, sessionId, failure, abort: new AbortController() };
+      chain = { startedAtMs: at, attemptsIssued: 0, switched: false, model, goalId: goal?.goalId, sessionId, failure, abort: new AbortController() };
     } else chain.failure = failure;
     // Нельзя дать короткому retry Pi отправить запрос раньше сообщённого сервером срока.
     const signal = ctx.signal;
@@ -232,7 +290,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       stop(ctx, "retry-after-outside-window");
       ctx.abort();
     } else if (failure.notBefore > at && signal) {
-      setActivity(ctx, say(`Astra недоступна · провайдер просит ждать ${Math.ceil((failure.notBefore - at) / 1000)} с · Esc — остановить`, `Astra unavailable · provider asks to wait ${Math.ceil((failure.notBefore - at) / 1000)} s · Esc to stop`));
+      setActivity(ctx, say(`${message.model} недоступна · провайдер просит ждать ${Math.ceil((failure.notBefore - at) / 1000)} с · Esc — остановить`, `${message.model} unavailable · provider asks to wait ${Math.ceil((failure.notBefore - at) / 1000)} s · Esc to stop`));
       const waitSignal = AbortSignal.any([chain.abort.signal, signal]);
       await delayUntil(failure.notBefore, waitSignal);
       if (waitSignal.aborted && !signal.aborted && !ctx.hasPendingMessages()) ctx.abort();
@@ -247,11 +305,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     const sameBranch = () => ctx.sessionManager.getSessionId() === current.sessionId && ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id === failure.entryId;
     const valid = () => chain === current && !manual && canRecover(ctx) && currentGoal()?.goalId === current.goalId && sameBranch() && !ctx.hasPendingMessages();
     if (!valid() || event.continue || event.context.pendingMessages.length) { clear(); return; }
+    if (manualRun) { stop(ctx, "manual-failed"); return; }
     const decide = () => decideProviderRetry({ chain: current, nowMs: performance.now(), failedAtMs: failure.at, notBeforeMs: failure.notBefore, errorClass: failure.errorClass, windowMs: config.windowMs, allowSwitch: config.allowSwitch });
     let decision = decide();
     if (decision.type === "wait") {
       diagnostic(ctx, "waiting", current);
-      setActivity(ctx, say(`Astra недоступна · следующая попытка через ${Math.ceil((decision.untilMs - performance.now()) / 1000)} с · Esc — остановить`, `Astra unavailable · next attempt in ${Math.ceil((decision.untilMs - performance.now()) / 1000)} s · Esc to stop`));
+      setActivity(ctx, say(`${ctx.model?.id} недоступна · следующая попытка через ${Math.ceil((decision.untilMs - performance.now()) / 1000)} с · Esc — остановить`, `${ctx.model?.id} unavailable · next attempt in ${Math.ceil((decision.untilMs - performance.now()) / 1000)} s · Esc to stop`));
       while (valid() && decision.type === "wait") {
         await delayUntil(decision.untilMs, current.abort.signal);
         if (!valid()) break;
@@ -261,7 +320,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     if (!valid()) { setActivity(ctx, null); if (chain === current) clear(); return; }
     if (decision.type === "stop") { stop(ctx, decision.reason); return; }
     if (decision.type === "wait") return;
-    if (modelRef(ctx.model) !== ASTRA) { clear(); setActivity(ctx, null); return; }
+    if (modelRef(ctx.model) !== current.model) { clear(); setActivity(ctx, null); return; }
     // Убираем только неудавшийся ответ. Сохраняем полную пару предыдущего вызова и результата.
     const entries: BoundaryResult["entries"] = [...event.entries, { type: "context_edit", targetId: failure.entryId, replacement: null }];
     if (decision.type === "switch") {
@@ -316,6 +375,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   });
   pi.on("agent_settled", (event, ctx) => {
     const input = pendingInput;
+    manualRun = undefined;
     drainingSessionId = pendingInput = undefined;
     if (!enabled() && !input) return;
     if ((event.aborted || seenAbort) && !input && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {

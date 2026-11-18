@@ -155,7 +155,7 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 `create_goal` always requires an agreement; the switches do not change that.
 
-### Recovering Astra during an interactive goal
+### Request recovery in chat and during an active goal
 
 When preparing a separate profile without PiRetry, add this to the global `settings.json`:
 
@@ -163,7 +163,7 @@ When preparing a separate profile without PiRetry, add this to the global `setti
 { "piGoalCompact": { "providerRetry": { "enabled": true, "windowMs": 900000, "allowSwitch": true } } }
 ```
 
-The new policy stays off outside that profile. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary Astra failure and defaults to 15 minutes. `allowSwitch: false` disables the switch to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch. The extended wait is available for an active goal in the TUI; this setting does not replace `/retry` in ordinary chat or the policy of child profiles.
+The new policy stays off outside that profile. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary failure and defaults to 15 minutes. `allowSwitch: false` disables the switch from Astra to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch. The TUI extends recovery in ordinary chat and during an active goal. If safe chat recovery reaches its deadline, `/retry-request` explicitly retries the last request on the same branch and model; new input invalidates that offer. Child profiles are unchanged for now.
 
 ## Moving from the earlier extensions
 

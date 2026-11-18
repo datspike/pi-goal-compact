@@ -83,16 +83,16 @@ test("отложенное решение не даёт разрешения п�
   });
 });
 
-test("переход существует только для точной Astra и не даёт Sol дополнительных повторов", () => {
+test("переход существует только для точной Astra и не открывает новое окно на Sol", () => {
   const input = failure({ windowMs: 10_000, nowMs: 11_000 });
   assert.deepEqual(decideProviderRetry(input), { type: "switch", model: SOL });
   assert.deepEqual(decideProviderRetry({ ...input, chain: { ...input.chain, model: SOL, switched: true } }), {
     type: "stop", reason: "already-switched",
   });
   for (const model of ["openai/gpt-6.2-astra-preview", "other/gpt-6.2-astra", SOL]) {
-    assert.deepEqual(decideProviderRetry({ ...input, chain: { ...input.chain, model } }), {
-      type: "stop", reason: "model-not-supported",
-    });
+    const sameModel = { ...input, chain: { ...input.chain, model } };
+    assert.deepEqual(decideProviderRetry({ ...sameModel, nowMs: 6_000 }), { type: "retry" });
+    assert.deepEqual(decideProviderRetry(sameModel), { type: "stop", reason: "window-exhausted" });
   }
 });
 

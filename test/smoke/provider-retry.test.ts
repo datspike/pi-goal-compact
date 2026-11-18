@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { Type } from "typebox";
 import { createAssistantMessageEventStream, InMemoryCredentialStore, type AssistantMessage } from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { compose } from "../../src/index.js";
@@ -19,7 +20,7 @@ const newAnswer = "Ответ только на новую реплику.";
 const secondInput = "Следующая реплика с вложением.";
 const attachment = { type: "image" as const, mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVQI12NoAAAAggCB3UNq9AAAAABJRU5ErkJggg==" };
 
-type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change";
+type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "chat-recovery" | "chat-manual" | "chat-manual-stale" | "chat-manual-unsafe" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change";
 
 async function run(variant: Variant) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
@@ -29,6 +30,7 @@ async function run(variant: Variant) {
   const escape = () => { for (const listener of terminals) listener("\u001b"); };
   const failures: string[] = [];
   let standardRetries = 0;
+  let toolExecutions = 0;
   let goal: ReturnType<typeof compose>["goal"] | undefined;
   let submit: ((second?: boolean) => Promise<void>) | undefined;
   const manager = SessionManager.inMemory(cwd);
@@ -36,19 +38,28 @@ async function run(variant: Variant) {
   const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const, "image" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
   const userModel = { ...models[2]!, provider: "openai" as const, api: "retry-probe", baseUrl: "http://127.0.0.1:1" };
   const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
+    if (variant.startsWith("chat-manual")) pi.registerTool({ name: "retry_fixture", label: "Проверка", description: "Возвращает результат для теста повтора", parameters: Type.Object({}), async execute() {
+      toolExecutions++;
+      if (variant === "chat-manual-unsafe") throw new Error("Исход не подтверждён");
+      return { content: [{ type: "text", text: "Сохранённый ответ инструмента." }], details: {} };
+    } });
     pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context, options) {
       const n = requests.length;
       requests.push({ model: model.id, context: JSON.stringify(context) });
       const unknownAbort = variant === "unknown-abort" && n === 1;
-      const plain = variant === "plain-chat";
+      const explicit = variant.startsWith("chat-manual");
+      const plain = variant === "plain-chat" || variant === "chat-recovery" || explicit;
+      const plainFailed = explicit ? n === 1 || n === 2 : n < (variant === "chat-recovery" ? 2 : 1);
+      const fixtureTool = explicit && n === 0;
       const newTurn = variant.startsWith("input-") && JSON.stringify(context).includes(newInput);
       const message: AssistantMessage = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage,
-        stopReason: newTurn ? "stop" : unknownAbort ? "aborted" : plain ? (n === 0 ? "error" : "stop") : n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
-        content: newTurn ? [{ type: "text", text: newAnswer }] : plain ? (n === 0 ? [] : [{ type: "text", text: "Обычный ответ после повтора." }])
+        stopReason: newTurn ? "stop" : unknownAbort ? "aborted" : plain ? (fixtureTool ? "toolUse" : plainFailed ? "error" : "stop") : n === 1 || n === 2 ? "error" : n === 0 || n === 3 ? "toolUse" : "stop",
+        content: newTurn ? [{ type: "text", text: newAnswer }] : plain ? (fixtureTool ? [{ type: "toolCall", id: "manual-fixture-tool", name: "retry_fixture", arguments: {} }]
+          : plainFailed ? [] : [{ type: "text", text: "Обычный ответ после повтора." }])
           : n === 0 ? [{ type: "toolCall", id: "fixture-goal", name: "create_goal", arguments: makeGoal }]
           : n === 3 ? [{ type: "toolCall", id: "fixture-hold", name: "report_goal_progress", arguments: hold }]
           : n < 3 ? [] : [{ type: "text", text: "Готов полезный результат." }],
-        ...(unknownAbort ? { errorMessage: "Operation aborted" } : (plain ? n === 0 : n === 1 || n === 2) ? {
+        ...(unknownAbort ? { errorMessage: "Operation aborted" } : (plain ? plainFailed : n === 1 || n === 2) ? {
           errorMessage: `${variant === "retry-after" ? "Server requested 60s retry delay (max: 15s). " : ""}503 {"error":{"code":"server_is_overloaded"}}`,
         } : {}) };
       const stream = createAssistantMessageEventStream();
@@ -75,7 +86,7 @@ async function run(variant: Variant) {
       return ok;
     } } : pi;
     if (variant === "legacy-owner") pi.registerCommand("retry", { description: "Занятая старым расширением команда", handler: async () => {} });
-    ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" }));
+    ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" && !variant.startsWith("chat-manual") }));
     if (variant === "manual-after-admit") pi.on("agent_before_settle", async event => {
       if (event.continue) await pi.setModel(userModel);
     });
@@ -94,6 +105,7 @@ async function run(variant: Variant) {
   try {
     session.subscribe(event => { if (event.type === "auto_retry_start") standardRetries++; });
     const methods: Partial<ExtensionUIContext> = {
+      notify() {},
       onTerminalInput(handler) { terminals.add(handler); return () => { terminals.delete(handler); }; },
       setStatus(_key, value) {
         if (!value) return;
@@ -104,8 +116,13 @@ async function run(variant: Variant) {
     const ui = new Proxy(methods as ExtensionUIContext, { get(target, name) { return Reflect.get(target, name) ?? (() => {}); } });
     await session.bindExtensions({ uiContext: ui, mode: "tui", abortHandler: () => { void session.abort(); }, onError(error) { failures.push(error.error); } });
     await session.prompt("Проверь восстановление.");
+    if (variant === "chat-manual-stale") await session.prompt("Это другая просьба.");
+    if (variant.startsWith("chat-manual")) {
+      await session.prompt("/retry-request");
+      await session.waitForIdle();
+    }
     assert.deepEqual(failures, []);
-    return { requests, statuses, rows: manager.getBranch(), model: session.model?.id, standardRetries, pause: goal?.getGoal()?.pause };
+    return { requests, statuses, rows: manager.getBranch(), toolExecutions, model: session.model?.id, standardRetries, pause: goal?.getGoal()?.pause };
   } finally {
     try {
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -163,12 +180,22 @@ test("SDK: отмена без Esc не повторяется и не запи�
   assert.ok(cancelled[0]?.requestId && cancelled[0]?.branchEntryId);
 });
 
-test("SDK: обычный чат делает только штатный повтор", { timeout: 8_000 }, async () => {
+test("SDK: успех штатного повтора в обычном чате не запускает дополнительный", { timeout: 8_000 }, async () => {
   const { requests, standardRetries, rows } = await run("plain-chat");
   assert.equal(standardRetries, 1);
   assert.equal(requests.length, 2);
   assert.equal(requests[0]?.context, requests[1]?.context);
   assert.ok(!rows.some(entry => entry.type === "custom" && entry.customType === "pi-goal-provider-retry"));
+});
+
+test("SDK: обычный чат после штатного отказа продолжает тот же ход на Sol", { timeout: 8_000 }, async () => {
+  const { requests, rows, standardRetries, pause } = await run("chat-recovery");
+  assert.equal(standardRetries, 1);
+  assert.deepEqual(requests.map(request => request.model), [astra, astra, sol]);
+  assert.ok(requests.every(request => request.context === requests[0]?.context));
+  assert.equal(rows.filter(entry => entry.type === "message" && entry.message.role === "user").length, 1);
+  assert.ok(rows.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === "Обычный ответ после повтора.")));
+  assert.equal(pause, undefined);
 });
 
 test("SDK: при наличии старого владельца новая смена модели не запускается", { timeout: 8_000 }, async () => {
@@ -225,4 +252,23 @@ test("SDK: после ручной смены модели новая репли
   assert.equal(pause?.kind, "recovery");
   assert.equal(requests.filter(request => request.context.includes(newInput)).length, 1);
   assert.ok(rows.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === newAnswer)));
+});
+
+test("SDK: явный повтор чата сохраняет запрос и не повторяет принятый инструмент", async () => {
+  const { requests, rows, toolExecutions } = await run("chat-manual");
+  assert.equal(toolExecutions, 1);
+  assert.deepEqual(requests.map(request => request.model), [astra, astra, astra, astra]);
+  assert.equal(requests[1]?.context, requests[3]?.context);
+  const marker = rows.find(entry => entry.type === "custom_message" && entry.customType === "pi-goal-provider-retry-request");
+  assert.ok(marker && rows.some(entry => entry.type === "context_edit" && entry.targetId === marker.id && entry.replacement === null));
+  assert.equal(rows.filter(entry => entry.type === "message" && entry.message.role === "user").length, 1);
+});
+
+test("SDK: явный повтор не берёт неизвестное действие или ошибку старого хода", async () => {
+  for (const [variant, count] of [["chat-manual-unsafe", 2], ["chat-manual-stale", 4]] as const) {
+    const { requests, rows, toolExecutions } = await run(variant);
+    assert.equal(requests.length, count);
+    assert.equal(toolExecutions, 1);
+    assert.ok(!rows.some(entry => entry.type === "custom_message" && entry.customType === "pi-goal-provider-retry-request"));
+  }
 });
