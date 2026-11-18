@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { estimateTokens, type AgentBeforeSettleEvent, type BoundaryResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { isProviderLimitError, isRetryableTransientError } from "../goal/recovery.js";
@@ -8,7 +9,7 @@ import type { GoalSession } from "./goal-session.js";
 
 const ASTRA = "openai/gpt-6.2-astra";
 const modelRef = (model: ExtensionContext["model"]) => model ? `${model.provider}/${model.id}` : "";
-type Failure = { entryId: string; at: number; notBefore: number; errorClass: ProviderRetryErrorClass };
+type Failure = { entryId: string; at: number; notBefore: number; errorClass: ProviderRetryErrorClass; requestId: string | undefined; httpStatus: number | undefined };
 type Chain = ProviderRetryChain & { sessionId: string; goalId: string; failure: Failure; abort: AbortController };
 
 function classify(message: string | undefined, status: number | undefined): ProviderRetryErrorClass {
@@ -44,6 +45,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let modelChangeCancelled = false;
   let response: { status: number; notBefore: number } | undefined;
   let unbind: (() => void) | undefined;
+  let runId: string | undefined;
+  let requestCount = 0;
+  let request: { id: string; status?: number; retry?: Chain } | undefined;
+  let lastAssistantEntryId: string | undefined;
+  let loggedCancellation = false;
+  const runningTools = new Set<string>();
 
   const enabled = () => config.enabled && !pi.getCommands().some(command => command.name === "retry");
   const clear = () => { chain?.abort.abort(); chain = undefined; };
@@ -55,9 +62,24 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     session.status.refreshUi(ctx);
   };
   const diagnostic = (ctx: ExtensionContext, kind: string, current?: Chain, reason?: string) => {
-    // Служебная запись не попадает в запрос к модели. В ней нет сообщений, аргументов или HTTP-заголовков.
-    try { pi.appendEntry("pi-goal-provider-retry", { kind, reason, sessionId: ctx.sessionManager.getSessionId(), goalId: current?.goalId, model: current?.model, attempt: current?.attemptsIssued, class: current?.failure.errorClass, at: Date.now() }); }
-    catch { /* Запись диагностики не владеет прогоном. */ }
+    if (kind === "cancelled") {
+      if (loggedCancellation) return;
+      loggedCancellation = true;
+    }
+    const at = Date.now();
+    const mono = performance.now();
+    // Подготовка не доказывает отправку. Сохраняем подтверждение только от события ответа Pi.
+    const requestStage = request?.status !== undefined ? "response-observed" : request ? "prepared-unconfirmed" : "not-prepared";
+    const failure = current?.failure;
+    try { pi.appendEntry("pi-goal-provider-retry", {
+      kind, reason, at, sessionId: ctx.sessionManager.getSessionId(), runId, goalId: current?.goalId ?? currentGoal()?.goalId,
+      model: current?.model ?? modelRef(ctx.model), attempt: current?.attemptsIssued, class: failure?.errorClass,
+      branchEntryId: lastAssistantEntryId, failureEntryId: failure?.entryId, failureRequestId: failure?.requestId,
+      requestId: request?.id, requestStage, httpStatus: request?.status, failureHttpStatus: failure?.httpStatus,
+      retryAfterAt: failure && failure.notBefore > failure.at ? at + Math.round(failure.notBefore - mono) : undefined,
+      deadlineAt: current ? at + Math.round(current.startedAtMs + config.windowMs - mono) : undefined,
+      stage: runningTools.size ? "tool" : requestStage, toolCallIds: runningTools.size ? [...runningTools] : undefined,
+    }); } catch { /* Запись диагностики не владеет прогоном. */ }
   };
   const stop = (ctx: ExtensionContext, reason: string) => {
     diagnostic(ctx, "stopped", chain, reason);
@@ -105,6 +127,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     requestAdmitted = undefined;
     response = undefined;
     modelChangeCancelled = false;
+    runId = randomUUID();
+    requestCount = 0;
+    request = undefined;
+    lastAssistantEntryId = undefined;
+    loggedCancellation = false;
+    runningTools.clear();
   });
   pi.on("input", (event, ctx) => {
     if (event.source === "extension" || !chain) return;
@@ -138,7 +166,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     finally { if (selection === attempt) selection = undefined; }
     return { ok, manualChoice: attempt.manualChoice };
   }
+  pi.on("tool_execution_start", (event, ctx) => {
+    if (enabled() && ctx.mode === "tui") runningTools.add(event.toolCallId);
+  });
+  pi.on("tool_execution_end", event => { runningTools.delete(event.toolCallId); });
   pi.on("after_provider_response", (event, ctx) => {
+    if (request) request.status = event.status;
     if (!canRecover(ctx) || modelRef(ctx.model) !== ASTRA) return;
     const raw = event.headers["retry-after"];
     const ms = raw?.trim() ? (/^\d+(?:\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - Date.now()) : 0;
@@ -147,6 +180,11 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("turn_end", async (event, ctx) => {
     const message = event.message;
     if (!enabled() || message.role !== "assistant") return;
+    lastAssistantEntryId = event.messageEntryId;
+    if (request?.retry) {
+      diagnostic(ctx, "request-result", request.retry, message.stopReason);
+      delete request.retry;
+    }
     if (message.stopReason === "aborted") { seenAbort = true; return; }
     if (message.stopReason !== "error") {
       unsafeToolResult = event.toolResults.some(result => result.isError);
@@ -166,7 +204,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     // Responses передаёт число секунд в ошибке, если задержка превышает лимит транспорта.
     const refusedDelay = /\bServer requested (\d+)s retry delay \(max: \d+s\)/i.exec(message.errorMessage ?? "");
     const notBefore = Math.max(at, response?.notBefore ?? at, at + Number(refusedDelay?.[1] ?? 0) * 1000);
-    const failure = { entryId: event.messageEntryId, at, notBefore, errorClass };
+    const failure = { entryId: event.messageEntryId, at, notBefore, errorClass, requestId: request?.id, httpStatus: response?.status };
     const sessionId = ctx.sessionManager.getSessionId();
     if (chain?.goalId !== goal.goalId || chain.sessionId !== sessionId) {
       clear();
@@ -249,6 +287,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   }
 
   pi.on("before_provider_request", (_event, ctx) => {
+    if (runId && enabled() && ctx.mode === "tui" && !session.runIsForeign()) request = { id: `${runId}:${++requestCount}` };
     const admitted = requestAdmitted;
     if (!admitted) return;
     requestAdmitted = undefined;
@@ -256,6 +295,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       ctx.abort();
       return;
     }
+    if (request) request.retry = admitted;
     diagnostic(ctx, "request-prepared", admitted);
   });
   pi.on("agent_settled", (event, ctx) => {

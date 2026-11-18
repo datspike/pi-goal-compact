@@ -31,7 +31,7 @@ async function run(variant: Variant) {
   const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
   const userModel = { ...models[2]!, provider: "openai" as const, api: "retry-probe", baseUrl: "http://127.0.0.1:1" };
   const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
-    pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context) {
+    pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context, options) {
       const n = requests.length;
       requests.push({ model: model.id, context: JSON.stringify(context) });
       const unknownAbort = variant === "unknown-abort" && n === 1;
@@ -46,7 +46,9 @@ async function run(variant: Variant) {
           errorMessage: `${variant === "retry-after" ? "Server requested 60s retry delay (max: 15s). " : ""}503 {"error":{"code":"server_is_overloaded"}}`,
         } : {}) };
       const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
+      queueMicrotask(async () => {
+        await options?.onPayload?.({ model: model.id }, model);
+        if (message.stopReason === "stop" || message.stopReason === "toolUse") await options?.onResponse?.({ status: 200, headers: {} }, model);
         stream.push({ type: "start", partial: message });
         if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
         else stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
@@ -102,6 +104,19 @@ test("SDK: после штатного повтора Astra передаёт т�
   assert.equal(requests[1]?.context, requests[3]?.context);
   assert.equal(rows.filter(entry => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "create_goal").length, 1);
   assert.ok(rows.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some(part => part.type === "text" && part.text === "Готов полезный результат.")));
+  const trace = rows.flatMap(entry => entry.type === "custom" && entry.customType === "pi-goal-provider-retry" ? [entry.data as Record<string, unknown>] : []);
+  const prepared = trace.find(entry => entry.kind === "request-prepared");
+  const result = trace.find(entry => entry.kind === "request-result");
+  assert.ok(prepared?.runId && prepared.failureEntryId && prepared.failureRequestId);
+  assert.equal(prepared.branchEntryId, prepared.failureEntryId);
+  assert.notEqual(prepared.requestId, prepared.failureRequestId);
+  assert.equal(prepared.requestStage, "prepared-unconfirmed");
+  assert.equal(result?.requestId, prepared.requestId);
+  assert.notEqual(result?.branchEntryId, prepared.branchEntryId);
+  assert.equal(result?.reason, "toolUse");
+  assert.equal(result?.requestStage, "response-observed");
+  assert.equal(result?.httpStatus, 200);
+  assert.ok(!JSON.stringify(trace).includes("server_is_overloaded"));
 });
 
 for (const variant of ["disabled", "escape", "escape-during-selection"] as const) {
@@ -115,11 +130,16 @@ for (const variant of ["disabled", "escape", "escape-during-selection"] as const
 }
 
 test("SDK: отмена без Esc не повторяется и не записывается как ручная", { timeout: 8_000 }, async () => {
-  const { requests, pause, standardRetries } = await run("unknown-abort");
+  const { requests, pause, standardRetries, rows } = await run("unknown-abort");
   assert.equal(standardRetries, 0);
   assert.equal(requests.length, 2);
   assert.equal(pause?.kind, "recovery");
   assert.match(pause?.reason ?? "", /источник отмены неизвестен|cancellation source unknown/);
+  const cancelled = rows.flatMap(entry => entry.type === "custom" && entry.customType === "pi-goal-provider-retry" ? [entry.data as Record<string, unknown>] : []).filter(data => data.kind === "cancelled");
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0]?.reason, "unknown");
+  assert.equal(cancelled[0]?.requestStage, "prepared-unconfirmed");
+  assert.ok(cancelled[0]?.requestId && cancelled[0]?.branchEntryId);
 });
 
 test("SDK: обычный чат делает только штатный повтор", { timeout: 8_000 }, async () => {
