@@ -278,6 +278,8 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     if (!enabled() || message.role !== "assistant") return;
     lastAssistantEntryId = event.messageEntryId;
     if (request?.retry) {
+      // Локальный Pi может пропустить штатную пачку именно для этого ответа.
+      if (message.stopReason === "error" && networkChain(request.retry)) Object.defineProperty(message, Symbol.for("pi-goal-compact.skipAutoRetry"), { value: true });
       diagnostic(ctx, "request-result", networkChain(request.retry), message.stopReason);
       delete request.retry;
     }
