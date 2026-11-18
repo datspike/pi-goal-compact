@@ -20,7 +20,7 @@ const newAnswer = "Ответ только на новую реплику.";
 const secondInput = "Следующая реплика с вложением.";
 const attachment = { type: "image" as const, mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVQI12NoAAAAggCB3UNq9AAAAABJRU5ErkJggg==" };
 
-type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "chat-recovery" | "chat-manual" | "chat-manual-stale" | "chat-manual-unsafe" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change";
+type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "chat-recovery" | "chat-manual" | "chat-manual-stale" | "chat-manual-unsafe" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change" | "output-empty" | "output-length" | "output-cancel" | "output-mixed-cap" | "output-unsafe" | "output-goal-length" | "output-goal-empty" | "output-goal-cap";
 
 async function run(variant: Variant) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
@@ -31,6 +31,8 @@ async function run(variant: Variant) {
   const failures: string[] = [];
   let standardRetries = 0;
   let toolExecutions = 0;
+  const output = variant.startsWith("output-");
+  const outputGoal = variant.startsWith("output-goal-");
   let goal: ReturnType<typeof compose>["goal"] | undefined;
   let submit: ((second?: boolean) => Promise<void>) | undefined;
   const manager = SessionManager.inMemory(cwd);
@@ -38,9 +40,9 @@ async function run(variant: Variant) {
   const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const, "image" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
   const userModel = { ...models[2]!, provider: "openai" as const, api: "retry-probe", baseUrl: "http://127.0.0.1:1" };
   const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
-    if (variant.startsWith("chat-manual")) pi.registerTool({ name: "retry_fixture", label: "Проверка", description: "Возвращает результат для теста повтора", parameters: Type.Object({}), async execute() {
+    if (variant.startsWith("chat-manual") || output) pi.registerTool({ name: "retry_fixture", label: "Проверка", description: "Возвращает результат для теста повтора", parameters: Type.Object({}), async execute() {
       toolExecutions++;
-      if (variant === "chat-manual-unsafe") throw new Error("Исход не подтверждён");
+      if (variant === "chat-manual-unsafe" || variant === "output-unsafe") throw new Error("Исход не подтверждён");
       return { content: [{ type: "text", text: "Сохранённый ответ инструмента." }], details: {} };
     } });
     pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context, options) {
@@ -62,6 +64,26 @@ async function run(variant: Variant) {
         ...(unknownAbort ? { errorMessage: "Operation aborted" } : (plain ? plainFailed : n === 1 || n === 2) ? {
           errorMessage: `${variant === "retry-after" ? "Server requested 60s retry delay (max: 15s). " : ""}503 {"error":{"code":"server_is_overloaded"}}`,
         } : {}) };
+      if (output) {
+        if (n === 0) {
+          message.stopReason = "toolUse";
+          message.content = outputGoal ? [{ type: "toolCall", id: "output-goal", name: "create_goal", arguments: makeGoal }]
+            : [{ type: "toolCall", id: "output-fixture-tool", name: "retry_fixture", arguments: {} }];
+        } else if (outputGoal && n === 3 && variant !== "output-goal-cap") {
+          message.stopReason = "toolUse";
+          message.content = [{ type: "toolCall", id: "output-goal-hold", name: "report_goal_progress", arguments: hold }];
+        } else if (variant === "output-mixed-cap" && (n === 1 || n === 3) || n === 1 && (variant === "output-empty" || variant === "output-goal-empty" || variant === "output-unsafe")) {
+          message.stopReason = "stop";
+          message.content = [{ type: "thinking", thinking: "Без готового ответа." }];
+        } else if (n === 1 || variant === "output-goal-cap" || variant === "output-mixed-cap" && n === 2) {
+          message.stopReason = "length";
+          message.content = [{ type: "text", text: "Начало оборванного ответа." }];
+        } else {
+          message.stopReason = "stop";
+          message.content = [{ type: "text", text: variant === "output-cancel" ? newAnswer : "Окончание ответа." }];
+        }
+        delete message.errorMessage;
+      }
       const stream = createAssistantMessageEventStream();
       queueMicrotask(async () => {
         await options?.onPayload?.({ model: model.id }, model);
@@ -71,10 +93,10 @@ async function run(variant: Variant) {
           await submit?.();
           await submit?.(true);
         }
-        if (message.stopReason === "stop" || message.stopReason === "toolUse") await options?.onResponse?.({ status: 200, headers: {} }, model);
+        if (message.stopReason !== "error" && message.stopReason !== "aborted") await options?.onResponse?.({ status: 200, headers: {} }, model);
         stream.push({ type: "start", partial: message });
         if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
-        else stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
+        else if (message.stopReason !== "pending") stream.push({ type: "done", reason: message.stopReason, message });
         stream.end();
       });
       return stream;
@@ -87,6 +109,9 @@ async function run(variant: Variant) {
     } } : pi;
     if (variant === "legacy-owner") pi.registerCommand("retry", { description: "Занятая старым расширением команда", handler: async () => {} });
     ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" && !variant.startsWith("chat-manual") }));
+    if (variant === "output-cancel") pi.on("agent_before_settle", async event => {
+      if (event.continue) { escape(); await submit?.(); }
+    });
     if (variant === "manual-after-admit") pi.on("agent_before_settle", async event => {
       if (event.continue) await pi.setModel(userModel);
     });
@@ -133,6 +158,52 @@ async function run(variant: Variant) {
     }
   }
 }
+
+test("SDK: пустой ответ повторяет запрос, не перезапуская инструмент", async () => {
+  for (const variant of ["output-empty", "output-goal-empty"] as const) {
+    const { requests, toolExecutions } = await run(variant);
+    assert.equal(toolExecutions, variant === "output-empty" ? 1 : 0);
+    assert.equal(requests.length, variant === "output-empty" ? 3 : 5);
+    assert.equal(requests[1]?.context, requests[2]?.context);
+  }
+});
+
+test("SDK: продолжение после предела сохраняет текст в чате и у цели", async () => {
+  for (const variant of ["output-length", "output-goal-length"] as const) {
+    const { requests, rows } = await run(variant);
+    assert.equal(requests.length, variant === "output-length" ? 3 : 5);
+    assert.match(requests[2]!.context, /Начало оборванного ответа/);
+    assert.ok(rows.some(row => row.type === "message" && row.message.role === "assistant" && row.message.content.some(part => part.type === "text" && part.text === "Окончание ответа.")));
+  }
+});
+
+test("SDK: после трёх продолжений усечённого ответа цель не запускает ещё один запрос", async () => {
+  const { requests, pause, rows } = await run("output-goal-cap");
+  assert.equal(requests.length, 5);
+  assert.equal(pause?.kind, "recovery");
+  assert.ok(rows.some(row => row.type === "custom" && (row.data as { reason?: string } | undefined)?.reason === "length-limit"));
+});
+
+test("SDK: чередование причин не возвращает право ещё раз повторять пустой ответ", async () => {
+  const { requests, rows } = await run("output-mixed-cap");
+  assert.equal(requests.length, 4);
+  assert.ok(rows.some(row => row.type === "custom" && (row.data as { reason?: string } | undefined)?.reason === "empty-limit"));
+});
+
+test("SDK: после отмены скрытая просьба дописать не попадает в новую реплику", async () => {
+  const { requests, rows } = await run("output-cancel");
+  assert.equal(requests.length, 3);
+  assert.match(requests[2]!.context, new RegExp(newInput.replace(/\.$/, "")));
+  assert.doesNotMatch(requests[2]!.context, /Продолжи ответ с места остановки|Continue the answer from where it stopped/);
+  assert.equal(rows.filter(row => row.type === "message" && row.message.role === "user" && JSON.stringify(row.message.content).includes(newInput)).length, 1);
+});
+
+test("SDK: пустой ответ не перезапускает работу, если исход инструмента неизвестен", async () => {
+  const { requests, toolExecutions, rows } = await run("output-unsafe");
+  assert.equal(requests.length, 2);
+  assert.equal(toolExecutions, 1);
+  assert.ok(rows.some(row => row.type === "custom" && (row.data as { reason?: string } | undefined)?.reason === "unsafe-tool-result"));
+});
 
 test("SDK: после штатного повтора Astra передаёт тот же запрос на Sol", { timeout: 8_000 }, async () => {
   const { requests, rows, standardRetries } = await run("switch");

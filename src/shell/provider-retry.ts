@@ -8,11 +8,17 @@ import { say } from "../language.js";
 import { RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
 
+const CHILD_RECOVERY_EVENT = "pi-subagents:provider-recovery";
+type ChildProviderRecovery = { signal: AbortSignal; waitUntil(deadline: number): (() => void) | undefined; allowsModel?(model: string): boolean; continueOutput?(): void; outputLimitReached?(): void };
 const actionId = (details: unknown) => details && typeof details === "object" && "id" in details ? details.id : undefined;
 const modelRef = (model: ExtensionContext["model"]) => model ? `${model.provider}/${model.id}` : "";
 type Failure = { entryId: string; at: number; notBefore: number; errorClass: ProviderRetryErrorClass; requestId: string | undefined; httpStatus: number | undefined };
 type ManualOffer = { sessionId: string; leafId: string | null; model: string; failure: Failure };
 type Chain = ProviderRetryChain & { sessionId: string; goalId: string | undefined; failure: Failure; abort: AbortController };
+type Incomplete = { kind: "empty" | "length"; entryId: string; sessionId: string; goalId: string | undefined; model: string; unsafe: boolean };
+type Attempt = Chain | Incomplete;
+const networkChain = (attempt: Attempt | undefined) => attempt && "failure" in attempt ? attempt : undefined;
+const outputAttempts = { empty: 1, length: 3 } as const;
 
 function classify(message: string | undefined, status: number | undefined): ProviderRetryErrorClass {
   if (isProviderLimitError(message)) return "not-admitted";
@@ -41,28 +47,33 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   let manual = false;
   let seenAbort = false;
   let unsafeToolResult = false;
-  let requestAdmitted: Chain | undefined;
+  let incomplete: Incomplete | undefined;
+  let outputUsed = { empty: 0, length: 0 };
+  let requestAdmitted: Attempt | undefined;
   type Model = NonNullable<ExtensionContext["model"]>;
   let selection: { from: string; to: string; observed: boolean; manualChoice?: { model: Model; thinking: ReturnType<ExtensionAPI["getThinkingLevel"]> } } | undefined;
   let modelChangeCancelled = false;
+  let outputModelChanged = false;
   let response: { status: number; notBefore: number } | undefined;
   let unbind: (() => void) | undefined;
   let runId: string | undefined;
   let requestCount = 0;
-  let request: { id: string; status?: number; retry?: Chain } | undefined;
+  let request: { id: string; status?: number; retry?: Attempt } | undefined;
   let lastAssistantEntryId: string | undefined;
   let loggedCancellation = false;
   const runningTools = new Set<string>();
   let drainingSessionId: string | undefined;
+  let childRecovery: ChildProviderRecovery | undefined;
   let manualOffer: ManualOffer | undefined;
   let manualRun: (ManualOffer & { id: string }) | undefined;
   let pendingInput: { sessionId: string; messages: Array<Pick<InputEvent, "text" | "images">> } | undefined;
 
   const enabled = () => config.enabled && !pi.getCommands().some(command => command.name === "retry");
-  const clear = () => { chain?.abort.abort(); chain = undefined; };
+  const clear = () => { chain?.abort.abort(); chain = incomplete = undefined; };
   const currentGoal = () => session.getGoal()?.status === "active" ? session.getGoal() : null;
+  const supportedHost = (ctx: ExtensionContext) => ctx.mode === "tui" || (ctx.mode === "print" && childRecovery !== undefined && !childRecovery.signal.aborted);
   const canRecover = (ctx: ExtensionContext) => {
-    if (!enabled() || ctx.mode !== "tui" || session.runIsForeign()) return false;
+    if (!enabled() || !supportedHost(ctx) || session.runIsForeign()) return false;
     const goal = session.getGoal();
     return !goal || goal.status === "complete" || (goal.status === "active" && session.canRecover() && !session.isContinuationHeld());
   };
@@ -92,9 +103,9 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       stage: runningTools.size ? "tool" : requestStage, toolCallIds: runningTools.size ? [...runningTools] : undefined,
     }); } catch { /* Запись диагностики не владеет прогоном. */ }
   };
-  const retryInProgress = () => chain ?? requestAdmitted ?? request?.retry;
-  const cancelRetry = (ctx: ExtensionContext, current: Chain, reason: "escape" | "input" | "model-selection") => {
-    diagnostic(ctx, "cancelled", current, reason);
+  const retryInProgress = () => chain ?? incomplete ?? requestAdmitted ?? request?.retry;
+  const cancelRetry = (ctx: ExtensionContext, current: Attempt, reason: "escape" | "input" | "model-selection") => {
+    diagnostic(ctx, "cancelled", networkChain(current), reason);
     drainingSessionId = current.sessionId;
     requestAdmitted = undefined;
     clear();
@@ -103,12 +114,13 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   };
   const stop = (ctx: ExtensionContext, reason: string) => {
     diagnostic(ctx, "stopped", chain, reason);
-    const available = chain && !chain.goalId && (reason === "window-exhausted" || reason === "already-switched" || reason === "manual-failed");
+    const available = ctx.mode === "tui" && chain && !chain.goalId && (reason === "window-exhausted" || reason === "already-switched" || reason === "manual-failed");
     if (available && chain) manualOffer = { sessionId: chain.sessionId, leafId: ctx.sessionManager.getLeafId(), model: chain.model, failure: chain.failure };
     clear();
     setActivity(ctx, null);
     const detail = reason === "retry-after-outside-window" ? say("Провайдер просит ждать дольше заданного срока", "Provider asks to wait beyond the allowed window")
       : reason === "sol-unavailable" || reason === "sol-selection-failed" ? say("Не удалось выбрать Sol", "Could not select Sol")
+      : reason === "child-wait-unavailable" ? say("Дочерний запуск не подтвердил ожидание повтора", "The child host did not admit retry waiting")
       : reason === "manual-failed" ? say("Явный повтор не удался", "The explicit retry failed")
       : reason === "already-switched" ? say("Sol тоже недоступна", "Sol is also unavailable")
       : reason === "sol-window" ? say("Сохранённое окно не помещается в Sol", "Saved context does not fit Sol")
@@ -137,6 +149,8 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("session_start", (_event, ctx) => bind(ctx));
   pi.on("session_tree", (_event, ctx) => bind(ctx));
   const leaveSession = () => {
+    childRecovery = undefined;
+    runId = undefined;
     manualOffer = manualRun = undefined;
     drainingSessionId = pendingInput = requestAdmitted = request = undefined;
     clear();
@@ -145,7 +159,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   pi.on("session_before_fork", leaveSession);
   pi.on("session_before_tree", leaveSession);
   pi.on("session_shutdown", (_event, ctx) => {
-    if (chain && currentGoal()) session.pauseForShutdown(ctx, "Provider recovery was interrupted by session shutdown.");
+    if (retryInProgress() && currentGoal()) session.pauseForShutdown(ctx, "Provider recovery was interrupted by session shutdown.");
     leaveSession();
     unbind?.();
     unbind = undefined;
@@ -156,7 +170,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     description: say("Повторить последний безопасный запрос обычного чата", "Repeat the last safe chat request"),
     async handler(_args, ctx) {
       const offer = manualOffer;
-      if (!offer || !canRecover(ctx) || currentGoal() || !ctx.isIdle() || ctx.hasPendingMessages() ||
+      if (ctx.mode !== "tui" || !offer || !canRecover(ctx) || currentGoal() || !ctx.isIdle() || ctx.hasPendingMessages() ||
           !sameManualTarget(ctx, offer) || performance.now() < offer.failure.notBefore) {
         ctx.ui.notify(say("Нет безопасного запроса для повтора.", "No safe request to retry."), "warning");
         return;
@@ -168,6 +182,8 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    childRecovery = undefined;
+    if (ctx.mode === "print" && enabled()) pi.events.emit(CHILD_RECOVERY_EVENT, { accept(value: ChildProviderRecovery) { childRecovery = value; } });
     manualOffer = undefined;
     if (event.messageType === "custom" && event.message.customType === RECORD.manualProviderRetry) {
       if (!manualRun || actionId(event.message.details) !== manualRun.id || !sameManualTarget(ctx, manualRun) || !canRecover(ctx) || currentGoal()) ctx.abort();
@@ -176,9 +192,10 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     manual = seenAbort = unsafeToolResult = false;
     requestAdmitted = undefined;
     response = undefined;
-    modelChangeCancelled = false;
+    modelChangeCancelled = outputModelChanged = false;
     runId = randomUUID();
     requestCount = 0;
+    outputUsed = { empty: 0, length: 0 };
     request = undefined;
     lastAssistantEntryId = undefined;
     loggedCancellation = false;
@@ -203,7 +220,12 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     const failure = target?.type === "message" && target.message.role === "assistant" ? target.message : undefined;
     const failedIndex = failure ? event.messages.findLastIndex(message => message.role === "assistant" && message.stopReason === "error" &&
       message.timestamp === failure.timestamp && message.model === failure.model && message.provider === failure.provider) : -1;
-    const messages = event.messages.filter((message, index) => index !== failedIndex && !(message.role === "custom" && message.customType === RECORD.manualProviderRetry));
+    const messages = event.messages.filter((message, index, source) => {
+      if (index === failedIndex || message.role === "custom" && message.customType === RECORD.manualProviderRetry) return false;
+      if (message.role !== "custom" || message.customType !== RECORD.providerOutputContinuation) return true;
+      // Не отправляем оставшуюся без ответа просьбу из отменённого прохода.
+      return source[index + 1]?.role === "assistant" || (index === source.length - 1 && actionId(message.details) === runId);
+    });
     return messages.length === event.messages.length ? undefined : { messages };
   });
   pi.on("turn_end", (event, ctx) => {
@@ -224,6 +246,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       return;
     }
     if (selection && !modelChangeCancelled) selection.manualChoice = { model: event.model, thinking: pi.getThinkingLevel() };
+    if (runId && !ctx.isIdle() && modelRef(event.previousModel) !== modelRef(event.model)) outputModelChanged = true;
     const current = retryInProgress();
     if (!current || ctx.isIdle() || drainingSessionId !== undefined) return;
     modelChangeCancelled = true;
@@ -240,7 +263,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     return { ok, manualChoice: attempt.manualChoice };
   }
   pi.on("tool_execution_start", (event, ctx) => {
-    if (enabled() && ctx.mode === "tui") runningTools.add(event.toolCallId);
+    if (enabled() && supportedHost(ctx)) runningTools.add(event.toolCallId);
   });
   pi.on("tool_execution_end", event => { runningTools.delete(event.toolCallId); });
   pi.on("after_provider_response", (event, ctx) => {
@@ -255,13 +278,20 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     if (!enabled() || message.role !== "assistant") return;
     lastAssistantEntryId = event.messageEntryId;
     if (request?.retry) {
-      diagnostic(ctx, "request-result", request.retry, message.stopReason);
+      diagnostic(ctx, "request-result", networkChain(request.retry), message.stopReason);
       delete request.retry;
     }
     if (message.stopReason === "aborted") { seenAbort = true; return; }
     if (message.stopReason !== "error") {
-      unsafeToolResult = event.toolResults.some(result => result.isError);
+      if (event.toolResults.length) unsafeToolResult = event.toolResults.some(result => result.isError);
       clear();
+      const model = modelRef(ctx.model);
+      if (!canRecover(ctx) || manual || manualRun || outputModelChanged || `${message.provider}/${message.model}` !== model) return;
+      const toolCall = message.content.some(part => part.type === "toolCall");
+      const empty = message.stopReason === "stop" && !toolCall && !message.content.some(part => part.type === "text" && part.text.trim());
+      const kind = message.stopReason === "length" ? "length" : empty ? "empty" : undefined;
+      if (kind) incomplete = { kind, entryId: event.messageEntryId, sessionId: ctx.sessionManager.getSessionId(), goalId: currentGoal()?.goalId, model,
+        unsafe: unsafeToolResult || toolCall || event.toolResults.length > 0 || runningTools.size > 0 };
       return;
     }
     const goal = currentGoal();
@@ -285,7 +315,8 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       chain = { startedAtMs: at, attemptsIssued: 0, switched: false, model, goalId: goal?.goalId, sessionId, failure, abort: new AbortController() };
     } else chain.failure = failure;
     // Нельзя дать короткому retry Pi отправить запрос раньше сообщённого сервером срока.
-    const signal = ctx.signal;
+    const requestSignal = ctx.signal;
+    const signal = childRecovery ? (requestSignal ? AbortSignal.any([childRecovery.signal, requestSignal]) : childRecovery.signal) : requestSignal;
     if (failure.notBefore > at && (failure.notBefore > chain.startedAtMs + config.windowMs || !signal)) {
       stop(ctx, "retry-after-outside-window");
       ctx.abort();
@@ -298,11 +329,51 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     }
   });
 
+  const sameAssistant = (ctx: ExtensionContext, attempt: Attempt, entryId: string) => ctx.sessionManager.getSessionId() === attempt.sessionId &&
+    ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id === entryId;
+
+  const sameOutput = (ctx: ExtensionContext, attempt: Incomplete) => ctx.sessionManager.getSessionId() === attempt.sessionId &&
+    ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && (entry.message.role === "assistant" || entry.message.role === "user"))?.id === attempt.entryId;
+
+  function continueOutput(event: AgentBeforeSettleEvent, ctx: ExtensionContext, attempt: Incomplete): BoundaryResult | undefined {
+    incomplete = undefined;
+    if (event.outcome !== "completed" || event.continue || event.context.pendingMessages.length || ctx.hasPendingMessages() || manual ||
+        !canRecover(ctx) || currentGoal()?.goalId !== attempt.goalId || modelRef(ctx.model) !== attempt.model || !sameOutput(ctx, attempt)) return;
+    const count = outputUsed[attempt.kind];
+    if (attempt.unsafe || count >= outputAttempts[attempt.kind]) {
+      const reason = attempt.unsafe ? "unsafe-tool-result" : `${attempt.kind}-limit`;
+      diagnostic(ctx, "stopped", undefined, reason);
+      if (reason === "length-limit") childRecovery?.outputLimitReached?.();
+      const notice = attempt.unsafe ? say("Исход инструмента надо проверить вручную.", "The tool outcome needs a manual check.")
+        : attempt.kind === "empty" ? say("Модель снова вернула пустой ответ.", "The model returned another empty response.")
+        : say("Предел продолжений ответа достигнут. Написанное сохранено.", "The response continuation limit was reached. Existing text was kept.");
+      if (currentGoal()) session.pauseForRecovery(ctx, notice);
+      else if (ctx.hasUI) ctx.ui.notify(notice, "warning");
+      return;
+    }
+    const entries = [...event.entries];
+    if (attempt.kind === "empty") {
+      // После удаления пустого ответа последним должен остаться пользователь или результат инструмента.
+      const history = event.context.llmMessages.filter(message => message.role !== "system");
+      const previous = history.at(-2);
+      if (history.at(-1)?.role !== "assistant" || !previous || (previous.role !== "user" && previous.role !== "toolResult")) return;
+      entries.push({ type: "context_edit", targetId: attempt.entryId, replacement: null });
+    } else {
+      entries.push({ type: "custom_message", customType: RECORD.providerOutputContinuation, display: false, details: { id: runId },
+        content: say("Продолжи ответ с места остановки. Не повторяй уже написанное или выполненные действия.", "Continue the answer from where it stopped. Do not repeat text or actions already completed.") });
+    }
+    outputUsed[attempt.kind]++;
+    requestAdmitted = attempt;
+    diagnostic(ctx, "admitted", undefined, attempt.kind);
+    return { entries, continue: true };
+  }
+
   async function boundary(event: AgentBeforeSettleEvent, ctx: ExtensionContext): Promise<BoundaryResult | undefined> {
+    if (incomplete) return continueOutput(event, ctx, incomplete);
     const current = chain;
     if (!current || event.outcome !== "error") return;
     const failure = current.failure;
-    const sameBranch = () => ctx.sessionManager.getSessionId() === current.sessionId && ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id === failure.entryId;
+    const sameBranch = () => sameAssistant(ctx, current, failure.entryId);
     const valid = () => chain === current && !manual && canRecover(ctx) && currentGoal()?.goalId === current.goalId && sameBranch() && !ctx.hasPendingMessages();
     if (!valid() || event.continue || event.context.pendingMessages.length) { clear(); return; }
     if (manualRun) { stop(ctx, "manual-failed"); return; }
@@ -312,18 +383,33 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
       diagnostic(ctx, "waiting", current);
       setActivity(ctx, say(`${ctx.model?.id} недоступна · следующая попытка через ${Math.ceil((decision.untilMs - performance.now()) / 1000)} с · Esc — остановить`, `${ctx.model?.id} unavailable · next attempt in ${Math.ceil((decision.untilMs - performance.now()) / 1000)} s · Esc to stop`));
       while (valid() && decision.type === "wait") {
-        await delayUntil(decision.untilMs, current.abort.signal);
+        const host = childRecovery;
+        const release = host?.waitUntil(decision.untilMs);
+        if (host && !release) {
+          if (performance.now() >= decision.untilMs) { decision = decide(); continue; }
+          stop(ctx, "child-wait-unavailable");
+          return;
+        }
+        try {
+          await delayUntil(decision.untilMs, host ? AbortSignal.any([current.abort.signal, host.signal]) : current.abort.signal);
+        } finally { release?.(); }
         if (!valid()) break;
         decision = decide();
       }
     }
-    if (!valid()) { setActivity(ctx, null); if (chain === current) clear(); return; }
+    if (!valid()) {
+      if (childRecovery?.signal.aborted) diagnostic(ctx, "cancelled", current, "child-abort");
+      setActivity(ctx, null);
+      if (chain === current) clear();
+      return;
+    }
     if (decision.type === "stop") { stop(ctx, decision.reason); return; }
     if (decision.type === "wait") return;
     if (modelRef(ctx.model) !== current.model) { clear(); setActivity(ctx, null); return; }
     // Убираем только неудавшийся ответ. Сохраняем полную пару предыдущего вызова и результата.
     const entries: BoundaryResult["entries"] = [...event.entries, { type: "context_edit", targetId: failure.entryId, replacement: null }];
     if (decision.type === "switch") {
+      if (childRecovery && !childRecovery.allowsModel?.(decision.model)) { stop(ctx, "sol-unavailable"); return; }
       const original = ctx.model;
       const originalThinking = pi.getThinkingLevel();
       const [provider, id] = decision.model.split("/") as [string, string];
@@ -362,20 +448,25 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
   }
 
   pi.on("before_provider_request", (_event, ctx) => {
-    if (runId && enabled() && ctx.mode === "tui" && !session.runIsForeign()) request = { id: `${runId}:${++requestCount}` };
+    if (runId && enabled() && supportedHost(ctx) && !session.runIsForeign()) request = { id: `${runId}:${++requestCount}` };
     const admitted = requestAdmitted;
     if (!admitted) return;
     requestAdmitted = undefined;
-    if (chain !== admitted || !canRecover(ctx) || modelRef(ctx.model) !== admitted.model || ctx.sessionManager.getSessionId() !== admitted.sessionId) {
+    const network = networkChain(admitted);
+    const stillAdmitted = "kind" in admitted ? sameOutput(ctx, admitted) && currentGoal()?.goalId === admitted.goalId && !manual && !outputModelChanged : chain === admitted;
+    if (!stillAdmitted || !canRecover(ctx) || modelRef(ctx.model) !== admitted.model || ctx.sessionManager.getSessionId() !== admitted.sessionId) {
+      if (childRecovery?.signal.aborted) diagnostic(ctx, "cancelled", network, "child-abort");
       ctx.abort();
       return;
     }
     if (request) request.retry = admitted;
-    diagnostic(ctx, "request-prepared", admitted);
+    if ("kind" in admitted && admitted.kind === "length") childRecovery?.continueOutput?.();
+    diagnostic(ctx, "request-prepared", network, "kind" in admitted ? admitted.kind : undefined);
   });
   pi.on("agent_settled", (event, ctx) => {
     const input = pendingInput;
     manualRun = undefined;
+    childRecovery = undefined;
     drainingSessionId = pendingInput = undefined;
     if (!enabled() && !input) return;
     if ((event.aborted || seenAbort) && !input && !modelChangeCancelled && !ownAbort() && currentGoal() && !session.runIsForeign()) {
@@ -386,6 +477,7 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     requestAdmitted = undefined;
     request = undefined;
     clear();
+    runId = undefined;
     setActivity(ctx, null);
     if (input?.sessionId === ctx.sessionManager.getSessionId() && !session.runIsForeign()) {
       for (const message of input.messages) {
@@ -395,5 +487,5 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     }
   });
 
-  return { enabled, active: () => chain !== undefined, clear, owns, boundary };
+  return { enabled, active: () => chain !== undefined || incomplete !== undefined, clear, owns, boundary };
 }

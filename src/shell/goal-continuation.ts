@@ -289,7 +289,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   pi.on("agent_before_settle", async (event, ctx) => {
     wakeContext = ctx;
     if (session.runIsForeign()) return undefined;
-    if (providerRetry?.active() && event.outcome === "error") return providerRetry.boundary(event, ctx);
+    if (providerRetry?.active()) return providerRetry.boundary(event, ctx);
     noticeIfLimitHeld();
     const reason = holdReason();
     const effects = driver.dispatch({ type: "before_settle", gate: asGate(reason), outcome: event.outcome, pendingMessages: event.context.pendingMessages.length > 0 }, ctx);

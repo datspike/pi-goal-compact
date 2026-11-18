@@ -155,7 +155,7 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 `create_goal` always requires an agreement; the switches do not change that.
 
-### Request recovery in chat and during an active goal
+### Request recovery in chat, during an active goal, and in subagents
 
 When preparing a separate profile without PiRetry, add this to the global `settings.json`:
 
@@ -163,7 +163,13 @@ When preparing a separate profile without PiRetry, add this to the global `setti
 { "piGoalCompact": { "providerRetry": { "enabled": true, "windowMs": 900000, "allowSwitch": true } } }
 ```
 
-The new policy stays off outside that profile. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary failure and defaults to 15 minutes. `allowSwitch: false` disables the switch from Astra to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch. The TUI extends recovery in ordinary chat and during an active goal. If safe chat recovery reaches its deadline, `/retry-request` explicitly retries the last request on the same branch and model; new input invalidates that offer. Child profiles are unchanged for now.
+The new policy is off unless explicitly enabled. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary failure and defaults to 15 minutes. `allowSwitch: false` disables the switch from Astra to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch.
+
+The TUI extends recovery in ordinary chat and during an active goal. If safe chat recovery reaches its deadline, `/retry-request` explicitly retries the last request on the same branch and model; new input invalidates that offer.
+
+Subagent recovery requires `pi-subagents` with `pi-subagents:provider-recovery` support and `pi-goal-compact` loaded in the child session. Waiting does not extend the task deadline, and model switches still obey the role’s restrictions. If PiRetry is loaded in the same session, it remains in charge of extended retries.
+
+An empty response, including reasoning without an answer, can be retried once. After an output limit, the model receives the text it already wrote and can continue it, up to three additional requests per run. These attempts do not switch models. If the cap is reached, generated text is kept; a subagent returns it as an incomplete response.
 
 ## Moving from the earlier extensions
 
