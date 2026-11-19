@@ -107,15 +107,18 @@ interface BranchEntry {
   id: string;
   firstKeptEntryId?: string;
   message?: unknown;
+  targetId?: string;
+  replacement?: { content: unknown } | null;
 }
 
-function messageText(message: unknown): string | null {
+function messageText(message: unknown, edit?: { content: unknown }): string | null {
   if (!message || typeof message !== "object") return null;
   const candidate = message as { role?: unknown; content?: unknown };
   if (candidate.role !== "user") return null;
-  if (typeof candidate.content === "string") return candidate.content;
-  if (!Array.isArray(candidate.content)) return null;
-  const text = candidate.content
+  const content = edit ? edit.content : candidate.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const text = content
     .filter((part): part is { type: "text"; text: string } => Boolean(part) && typeof part === "object" && part.type === "text" && typeof part.text === "string")
     .map((part) => part.text).join("\n");
   return text || null;
@@ -132,11 +135,22 @@ export function compactedOwnerReplies(branch: readonly BranchEntry[]): string[] 
   }
   if (!compaction) return [];
   const keptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
-  const end = keptIndex >= 0 ? keptIndex : branch.indexOf(compaction);
+  const compactIndex = branch.indexOf(compaction);
+  const end = keptIndex >= 0 ? keptIndex : compactIndex;
+  // Как и договорённость, дословные реплики фиксируются на момент сжатия.
+  // Правка может стоять в хвосте, хотя меняет реплику из сжатой части.
+  const edits = new Map<string, { content: unknown } | null>();
+  for (const entry of branch.slice(0, compactIndex)) {
+    if (entry.type === "context_edit" && entry.targetId && entry.replacement !== undefined) {
+      edits.set(entry.targetId, entry.replacement);
+    }
+  }
   const replies: string[] = [];
   for (const entry of branch.slice(0, end)) {
     if (entry.type !== "message") continue;
-    const text = messageText(entry.message);
+    const edit = edits.get(entry.id);
+    if (edit === null) continue;
+    const text = messageText(entry.message, edit);
     if (text) replies.push(text);
   }
   return replies;

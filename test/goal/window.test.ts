@@ -118,6 +118,20 @@ test("в реплики попадает только сжатая часть в
   assert.deepEqual(compactedOwnerReplies(branch.slice(0, 4)), []);
 });
 
+test("дословные реплики учитывают замены и удаления до сжатия", () => {
+  const user = (id: string, content: string) => ({ type: "message", id, message: { role: "user", content } });
+  const edit = (id: string, targetId: string, replacement: { content: unknown } | null) => ({ type: "context_edit", id, targetId, replacement });
+  const branch = [
+    user("old", "Отменённое поручение."), user("removed", "Удалённое поручение."),
+    edit("a", "old", { content: "Первая редакция." }), user("kept", "Свежая реплика."),
+    edit("b", "old", { content: [{ type: "text", text: "Действующая редакция." }] }),
+    edit("c", "removed", null),
+    { type: "compaction", id: "compact", firstKeptEntryId: "kept" },
+  ];
+  assert.deepEqual(compactedOwnerReplies(branch), ["Действующая редакция."]);
+  assert.deepEqual(compactedOwnerReplies([...branch, edit("d", "old", { content: "После сжатия." })]), ["Действующая редакция."]);
+});
+
 const goalRecord = (data: unknown) => ({ type: "custom", customType: RECORD.goal, data });
 const compaction = { type: "compaction" };
 
