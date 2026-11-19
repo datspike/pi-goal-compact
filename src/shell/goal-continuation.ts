@@ -106,9 +106,15 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     driver.dispatch({ type: "wake", gate: reason }, ctx);
   };
 
+  const deferredWakes = new Set<ReturnType<typeof setTimeout>>();
+
   /** Будит после текущего события: Pi ещё держит блокировку сжатия или переключения. */
   const wakeLater = (ctx: ExtensionContext): void => {
-    const timer = setTimeout(() => wake(ctx), 0);
+    const timer = setTimeout(() => {
+      deferredWakes.delete(timer);
+      wake(ctx);
+    }, 0);
+    deferredWakes.add(timer);
     timer.unref?.();
   };
 
@@ -218,6 +224,8 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     wake(ctx);
   });
   pi.on("session_shutdown", () => {
+    for (const timer of deferredWakes) clearTimeout(timer);
+    deferredWakes.clear();
     providerLimit.clear();
     subagents.clear();
     externalRetry.detach();
