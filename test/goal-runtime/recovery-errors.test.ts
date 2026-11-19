@@ -100,6 +100,18 @@ test("upstream request-buffer retry exhaustion stays active with pending recover
   assert.doesNotMatch(harness.goalNotice() ?? "", /\/goal resume/);
 });
 
+test("неожиданный обрыв потока провайдера оставляет цель в ожидании восстановления", async () => {
+  const harness = createRuntimeHarness();
+  await harness.runCommand("ship it");
+  harness.sentMessages.length = 0;
+
+  await emitPersistentAssistantError(harness, 0, "The provider event stream closed unexpectedly. Retry the turn; if it keeps failing, check the provider and server logs.");
+
+  assert.equal(harness.snapshot().goal?.status, "active");
+  assert.equal(harness.sentMessages.length, 0);
+  assert.match(harness.goalNotice() ?? "", /Заблокировано · .*provider error/);
+});
+
 test("silent stop overflow suppresses continuation and shows overflow recovery attention", async () => {
   const harness = createRuntimeHarness({ contextWindow: 128_000 });
   await harness.runCommand("ship it");

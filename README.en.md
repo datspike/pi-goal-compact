@@ -43,6 +43,10 @@ npm install --omit=dev
 pi install "$PWD"
 ```
 
+`pi install "$PWD"` enables the package for all projects. To enable it for only one project, run `pi install -l /absolute/path/to/pi-goal-compact` from that project instead. This writes to `.pi/settings.json` and only takes effect in a trusted project.
+
+Choose one installation scope. If Pi says `Tool "get_goal" conflicts with …` and shows two paths to `pi-goal-compact`, the same package was registered twice. `pi list` shows installs from settings: remove the extra entry with `pi remove <source>` for a global install, or run `pi remove -l <source>` inside the project for a project install. If the extra copy was added manually, take it out of the `extensions` list, the `-e` arguments, or the directory it is discovered from; there is no need to delete the checkout. Then restart Pi. If both copies already have duplicate protection, only the one Pi loads first is active; do not use this to select a version for a project.
+
 If `pi-codex-goal` and `context-compaction` are installed, remove them from Pi's `settings.json` first. Next to the new extension they duplicate tools and commands. To roll back, restore the two old entries and remove the new one.
 
 ## Usage

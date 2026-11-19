@@ -38,6 +38,17 @@ export function compose(pi: ExtensionAPI, retryConfig: ProviderRetryConfig = loa
 	return { goal };
 }
 
+const duplicateProbe = "pi-goal-compact:loaded";
+
 export default function goalCompact(pi: ExtensionAPI): void {
+	// Отдельные копии не делят память модуля, но Pi вызывает подписчиков общей шины
+	// синхронно при emit и снимает подписки при выгрузке расширений.
+	let occupied = false;
+	pi.events.emit(duplicateProbe, () => { occupied = true; });
+	if (occupied) return;
+
 	compose(pi);
+	pi.events.on(duplicateProbe, (answer) => {
+		if (typeof answer === "function") answer();
+	});
 }
