@@ -129,8 +129,9 @@ export function formatFileHints(files: FileLists, messages: readonly AgentMessag
 	const known = new Set(all);
 	const modified = new Set(files.modifiedFiles);
 	const candidates = [...new Set([
-		...all.filter((path) => path.length > 0 && body.includes(path)),
+		// Свежих путей может не быть в тексте; упомянутые там уже доступны модели.
 		...recentPaths(messages).filter((path) => known.has(path)),
+		...all.filter((path) => path.length > 0 && body.includes(path)),
 	])];
 	const groups = new Map<string, string[]>();
 	let selected = 0;

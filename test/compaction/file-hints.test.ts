@@ -72,6 +72,14 @@ describe("bounded file navigation", () => {
 		expect(hints).not.toContain("old.ts"); expect(hints).toContain("не список текущих изменений");
 	});
 
+	test("пути из текста сводки не вытесняют свежий путь из файловых наводок", () => {
+		const archive = Array.from({ length: 26 }, (_, i) => `docs/archive/check-${i}.md`);
+		const current = "notes/current-check.md";
+		const body = archive.map(path => `\`${path}.disabled\``).join(", ");
+		const hints = formatFileHints({ readFiles: [...archive, current], modifiedFiles: [] }, [tool(current)], body);
+		expect(hints).toContain('"current-check.md" [читался]');
+	});
+
 	test("bounds even huge histories and long/unusual names without truncating exact paths", () => {
 		const paths = Array.from({ length: 10000 }, (_, i) => `/root/${i}/` + "long".repeat(70) + ".ts");
 		paths.push("/root/" + "x".repeat(20000), "new\nline.ts", 'quote"name.ts');

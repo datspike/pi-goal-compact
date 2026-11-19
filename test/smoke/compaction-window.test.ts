@@ -79,3 +79,29 @@ test("Б3: окно после сжатия с целью — сводка бе�
     assert.ok(!withFiles.window.includes("Старое поручение."));
   });
 });
+
+test("свежая файловая наводка доходит до провайдера после сжатия по порогу", { timeout: 30_000 }, async () => {
+  const archive = Array.from({ length: 26 }, (_, i) => `docs/archive/check-${i}.md`);
+  const recent = "notes/current-check.md";
+  const timestamp = new Date(0).toISOString();
+  const assistant = { role: "assistant", api: "probe", provider: "probe", model: "offline", timestamp: 1 };
+  const seed = [
+    { type: "session", version: 3, id: "ba7fddf2-494f-49ba-8ee2-5ba0ea13c761", timestamp, cwd: process.cwd() },
+    { type: "message", id: "user", parentId: null, timestamp, message: { role: "user", content: "Сверь результаты.", timestamp: 0 } },
+    { type: "message", id: "read", parentId: "user", timestamp, message: { ...assistant, stopReason: "toolUse", content: [{ type: "toolCall", name: "read", id: "read-1", arguments: { path: recent } }] } },
+    { type: "message", id: "result", parentId: "read", timestamp, message: { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Прочитано." }], isError: false, timestamp: 1 } },
+    { type: "compaction", id: "prior", parentId: "result", timestamp, firstKeptEntryId: "user", tokensBefore: 100, summary: "## Цель\nСверить результаты.", details: { readFiles: archive, modifiedFiles: [] } },
+    { type: "message", id: "kept", parentId: "prior", timestamp, message: { ...assistant, stopReason: "stop", content: [{ type: "text", text: "Данные ".repeat(300) }], usage: { input: 256500, output: 1, totalTokens: 256501, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n";
+  const summaryText = `## Цель\nСверить результаты.\n\n## Исходный запрос\nПроверка открыта.\n\nАрхив: ${archive.map(path => path + ".disabled").join(", ")}`;
+  await withProbe({ calls: {}, heavySteps: [], lastStep: 1, summaryText }, async (start, requests) => {
+    const rows = await start("recent-file", { seed, prompt: "Продолжи проверку." });
+    assert.equal(rows.filter(row => row.type === "compaction").length, 2);
+    const log = requests("recent-file");
+    assert.ok(log.some(r => r.kind === "summary" && r.window.includes(recent)), "чтение вошло в сжимаемую часть");
+    const after = log.find(r => r.kind === "turn");
+    assert.ok(after, "после сжатия есть следующий запрос");
+    const window = after.window.replaceAll('\\"', '"');
+    assert.match(window, /<file-hints>.*?"notes\/":.*?"current-check\.md" \[читался\].*?<\/file-hints>/s);
+  });
+});
