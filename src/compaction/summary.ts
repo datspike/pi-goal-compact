@@ -227,7 +227,8 @@ const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 type SummaryLine = { line: string; protected: boolean };
 type FenceState = { character: "`" | "~"; length: number };
 
-function classifySummaryLines(summary: string): SummaryLine[] {
+/** Отделяет строки структуры сводки от кода и машинных блоков. */
+export function classifySummaryLines(summary: string): SummaryLine[] {
 	let fence: FenceState | undefined;
 	let machineBlock: "read" | "modified" | undefined;
 	return summary.split("\n").map((line) => {

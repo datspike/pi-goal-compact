@@ -36,6 +36,12 @@ test("после удаления короткой цели граница ра�
   }
 });
 
+test("заголовок цели внутри примера не удаляет часть сводки", () => {
+  const example = "```markdown\n## Goal\nExample, not the active goal.\n```";
+  const tail = `## Прогресс\n${example}\nПроверка не закончена.\n\n## Следующие шаги\nЗакончить проверку.`;
+  assert.equal(withoutGoalSection(`## Цель\nСтарое поручение.\n\n${tail}`), tail);
+});
+
 test("при незакрытой цели сразу за сводкой стоит одна копия последней редакции договорённости", () => {
   const goal = goalWithAgreement();
   const window = assembleWindow([summary, kept], { goal, features: DEFAULT_GOAL_FEATURES, ownerReplies: ["Старая реплика."] })!;

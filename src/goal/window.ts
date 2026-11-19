@@ -1,6 +1,6 @@
 import { say } from "../language.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
-import { isSplitTurnBoundary } from "../compaction/summary.js";
+import { classifySummaryLines, isSplitTurnBoundary } from "../compaction/summary.js";
 
 import { RECORD, withCurrentRecordNames } from "../records.js";
 import { renderAgreement } from "./agreement.js";
@@ -25,16 +25,17 @@ const GOAL_HEADINGS = ["## Цель", "## Goal"];
  * Раздел кончается перед следующим заголовком второго уровня или перед разрезанным ходом.
  */
 export function withoutGoalSection(summary: string): string {
-  const lines = summary.split("\n");
   const kept: string[] = [];
   let skipping = false;
-  for (const line of lines) {
-    const heading = line.trimEnd();
-    if (GOAL_HEADINGS.includes(heading)) {
-      skipping = true;
-      continue;
+  for (const { line, protected: isProtected } of classifySummaryLines(summary)) {
+    if (!isProtected) {
+      const heading = line.trimEnd();
+      if (GOAL_HEADINGS.includes(heading)) {
+        skipping = true;
+        continue;
+      }
+      if (skipping && (/^## /.test(heading) || isSplitTurnBoundary(heading))) skipping = false;
     }
-    if (skipping && (/^## /.test(heading) || isSplitTurnBoundary(heading))) skipping = false;
     if (!skipping) kept.push(line);
   }
   return kept.join("\n").replace(/^\n+/, "");
