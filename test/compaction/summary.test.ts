@@ -2,7 +2,7 @@ import { setLanguage } from "../../src/language.js";
 import { MAX_COMPACT_PAYLOAD_CHARS } from "../../src/compaction/compact-budget.js";
 import { describe, expect, test } from "../support/expect.js";
 import { compactedWith, compactWith, treeSummaryWith, type FakeCompactEvent, type FakeComplete, type FakeContext, type FakeEntry, type FakeModel, type FakeTreeEvent } from "../support/compaction.js";
-import type { AgentMessage } from "../../src/compaction/file-hints.js";
+import { withoutFileTracking, type AgentMessage } from "../../src/compaction/file-hints.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -270,6 +270,28 @@ test("сводка /tree не прячет файловые наводки в н
 	const result = await treeSummaryWith(event, ctx);
 	expect(result?.summary).toContain("Пример.\n```\n\n<file-hints>");
 	expect(result?.details.readFiles).toEqual(["notes/probe.md"]);
+});
+
+test("оборванное файловое приложение не захватывает следующее приложение", async () => {
+    const { withoutGoalSection } = await import("../../src/goal/window.js");
+    const raw = "## Goal\nСверить результаты.\n\n<file-hints>\nПрежние данные.\n````\n## Goal\nНе заголовок.";
+    const ctx: FakeContext = { model: { contextWindow: 128000, maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: raw }] }) } };
+    const path = "notes/current.md";
+    const message: AgentMessage = {
+        role: "assistant", timestamp: 1, provider: "fixture", api: "openai-responses", model: "offline", stopReason: "toolUse",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        content: [{ type: "toolCall", id: "read-notes", name: "read", arguments: { path } }],
+    };
+    const fileOps = { read: new Set([path]), edited: new Set<string>() };
+    const compacted = await compactedWith(compactEvent({ messagesToSummarize: [message], fileOps }), ctx);
+    const tree = await treeSummaryWith({ signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [{ type: "message", message }] } }, ctx);
+    for (const saved of [compacted, tree]) {
+        expect(saved?.summary).toContain('"current.md"');
+        const stripped = withoutFileTracking(saved!.summary);
+        expect(stripped).toContain("<file-hints>\nПрежние данные.\n````\n## Goal");
+        expect(stripped).not.toContain("current.md");
+        expect(withoutGoalSection(saved!.summary)).toContain('"current.md"');
+    }
 });
 
 type Call = Parameters<FakeComplete>;

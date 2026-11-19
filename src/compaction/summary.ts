@@ -227,10 +227,10 @@ const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 type SummaryLine = { line: string; protected: boolean; fileBlockStart?: true };
 type FenceState = { character: "`" | "~"; length: number };
 
-function scanSummary(summary: string): { lines: SummaryLine[]; fence: FenceState | undefined } {
+function scanSummary(summary: string) {
 	let fence: FenceState | undefined;
-	let machineBlock: string | undefined;
-	const lines = summary.split("\n").map((line): SummaryLine => {
+	let machineBlock: { close: string; start: number } | undefined;
+	const lines = summary.split("\n").map((line, index): SummaryLine => {
 		const trimmed = line.trim();
 		if (fence) {
 			const close = trimmed.match(/^(`+|~+)\s*$/)?.[1];
@@ -239,7 +239,7 @@ function scanSummary(summary: string): { lines: SummaryLine[]; fence: FenceState
 			return { line, protected: true };
 		}
 		if (machineBlock) {
-			if (trimmed === machineBlock) machineBlock = undefined;
+			if (trimmed === machineBlock.close) machineBlock = undefined;
 			return { line, protected: true };
 		}
 		const openingFence = trimmed.match(/^(`{3,}|~{3,})/)?.[1];
@@ -249,12 +249,12 @@ function scanSummary(summary: string): { lines: SummaryLine[]; fence: FenceState
 		}
 		const fileTag = /^<(read-files|modified-files|file-hints)>$/.exec(line.trimEnd())?.[1];
 		if (fileTag) {
-			machineBlock = `</${fileTag}>`;
+			machineBlock = { close: `</${fileTag}>`, start: index };
 			return { line, protected: true, fileBlockStart: true };
 		}
 		return { line, protected: false };
 	});
-	return { lines, fence };
+	return { lines, fence, machineBlock };
 }
 
 /** Отделяет строки структуры сводки от кода и машинных блоков. */
@@ -262,10 +262,16 @@ export function classifySummaryLines(summary: string): SummaryLine[] {
 	return scanSummary(summary).lines;
 }
 
-/** Наша граница или приложение не должны стать частью незакрытого примера сводчика. */
-function closeFenceBeforeAppend(summary: string): string {
-	const { fence } = scanSummary(summary);
-	return fence ? `${summary}\n${fence.character.repeat(fence.length)}` : summary;
+/** Отделяет добавляемый текст от незакрытого примера или файлового блока сводчика. */
+function separateBeforeAppend(summary: string): string {
+	const { lines, fence, machineBlock } = scanSummary(summary);
+	if (fence) return `${summary}\n${fence.character.repeat(fence.length)}`;
+	if (!machineBlock) return summary;
+	// Оборванный блок неоднозначен: сохраняем его буквально, а не делаем удаляемым приложением.
+	const raw = lines.slice(machineBlock.start).map(({ line }) => line);
+	const length = raw.reduce((max, line) => Math.max(max, (line.trimStart().match(/^`+/)?.[0].length ?? 0) + 1), 3);
+	const marker = "`".repeat(length);
+	return [...lines.slice(0, machineBlock.start).map(({ line }) => line), marker, ...raw, marker].join("\n");
 }
 
 /**
@@ -724,7 +730,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
             const prefixText = localizeSummaryStructure(prefix.text);
             if (!hasLocalizedPrefixStructure(prefixText))
                 throw new SummaryFailure("invalid-response");
-            summary = `${closeFenceBeforeAppend(historyText)}\n\n${text.splitTurnHeader}\n${prefixText}`;
+            summary = `${separateBeforeAppend(historyText)}\n\n${text.splitTurnHeader}\n${prefixText}`;
             usage = combineUsage(historyUsage, prefix.usage);
         }
         else {
@@ -745,7 +751,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         guard.validate();
         return {
             compaction: {
-                summary: `${hints ? closeFenceBeforeAppend(summary) : summary}${hints}`,
+                summary: `${hints ? separateBeforeAppend(summary) : summary}${hints}`,
                 firstKeptEntryId: preparation.firstKeptEntryId,
                 tokensBefore: preparation.tokensBefore,
                 ...(usage ? { usage } : {}),
@@ -782,7 +788,7 @@ export async function summarizeTree(event: SessionBeforeTreeEvent, ctx: Extensio
 		const hints = formatFileHints(files, prepared.messages, summary);
 		return {
 			summary: {
-				summary: hints ? `${closeFenceBeforeAppend(summary)}${hints}` : summary,
+				summary: hints ? `${separateBeforeAppend(summary)}${hints}` : summary,
 				...(result.usage ? { usage: result.usage } : {}),
 				details: files,
 			},
