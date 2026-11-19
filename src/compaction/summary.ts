@@ -2,7 +2,7 @@ import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { MAX_COMPACT_PAYLOAD_CHARS, calculateCompactBudget, type CompactCapability } from "./compact-budget.js";
 import type { Api, AssistantMessage, Model, ModelsApiStreamOptions, TextContent, Usage } from "@earendil-works/pi-ai";
 import { language, type Language } from "../language.js";
-import { collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
+import { carryFileHints, collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
 import {
 	convertToLlm,
 	prepareBranchEntries,
@@ -729,7 +729,8 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         if (unchangedHistory && !hasLocalizedSummaryStructure(summary, true))
             throw new SummaryFailure("invalid-response");
         const files = collectFileLists(preparation.fileOps, event.branchEntries);
-        const hints = formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
+        const carriedHints = unchangedHistory && carryFileHints(unchangedHistory, summary, files, event.branchEntries);
+        const hints = carriedHints ?? formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
         guard.validate();
         return {
             compaction: {

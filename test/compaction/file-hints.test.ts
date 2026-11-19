@@ -107,6 +107,24 @@ describe("summary integration", () => {
 		expect(JSON.stringify(event, (_key, value) => value instanceof Set ? [...value] : value)).toBe(original);
 	});
 
+	test("пустое сжатие сохраняет точные наводки прежней сводки, пока учёт файлов не изменился", async () => {
+		const { ctx, event, prompts } = fixture();
+		const files = { readFiles: ["archive/old.ts"], modifiedFiles: [] };
+		const previousSummary = BODY + formatFileHints(files, [tool("archive/old.ts")], BODY);
+		event.branchEntries = [{ type: "compaction", summary: previousSummary, details: files }];
+		event.preparation.previousSummary = previousSummary;
+		event.preparation.messagesToSummarize = [];
+		event.preparation.fileOps = { read: new Set(), edited: new Set() };
+		const same = await compacted(event, ctx);
+		expect(same.summary).toBe(previousSummary);
+		expect(same.details).toEqual(files);
+		event.preparation.fileOps.edited.add("archive/old.ts");
+		const changed = await compacted(event, ctx);
+		expect(changed.summary === previousSummary).toBe(false);
+		expect(changed.details).toEqual({ readFiles: [], modifiedFiles: ["archive/old.ts"] });
+		expect(prompts).toEqual([]);
+	});
+
 	test("split turn with no history generation carries semantic history, not its appendices", async () => {
 		const prefix = "## Исходный запрос\nПродолжить работу.\n## Контекст для продолжения\nНе повторять старый запуск.";
 		const { ctx, event, prompts } = fixture([prefix]);
