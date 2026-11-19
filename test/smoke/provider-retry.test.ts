@@ -21,8 +21,9 @@ const secondInput = "Следующая реплика с вложением.";
 const attachment = { type: "image" as const, mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVQI12NoAAAAggCB3UNq9AAAAABJRU5ErkJggg==" };
 
 type Variant = "switch" | "disabled" | "escape" | "escape-during-selection" | "unknown-abort" | "plain-chat" | "chat-recovery" | "chat-manual" | "chat-manual-stale" | "chat-manual-unsafe" | "legacy-owner" | "retry-after" | "manual-after-admit" | "manual-during-selection" | "input-after-admit" | "input-after-send" | "input-after-escape" | "input-after-model-change" | "output-empty" | "output-length" | "output-cancel" | "output-mixed-cap" | "output-unsafe" | "output-goal-length" | "output-goal-empty" | "output-goal-cap";
+type StreamFailure = "stream-unexecuted" | "stream-unsafe";
 
-async function run(variant: Variant) {
+async function run(variant: Variant | StreamFailure) {
   const cwd = await mkdtemp(join(tmpdir(), "goal-provider-retry-"));
   const requests: { model: string; context: string }[] = [];
   const statuses: string[] = [];
@@ -33,6 +34,8 @@ async function run(variant: Variant) {
   let toolExecutions = 0;
   const output = variant.startsWith("output-");
   const outputGoal = variant.startsWith("output-goal-");
+  const streamFailure = variant.startsWith("stream-");
+  const toolStarts: string[] = [];
   let goal: ReturnType<typeof compose>["goal"] | undefined;
   let submit: ((second?: boolean) => Promise<void>) | undefined;
   const manager = SessionManager.inMemory(cwd);
@@ -40,9 +43,9 @@ async function run(variant: Variant) {
   const models = [astra, sol, chosen].map(id => ({ id, name: id, reasoning: false, input: ["text" as const, "image" as const], cost: usage.cost, contextWindow: 64_000, maxTokens: 1024 }));
   const userModel = { ...models[2]!, provider: "openai" as const, api: "retry-probe", baseUrl: "http://127.0.0.1:1" };
   const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
-    if (variant.startsWith("chat-manual") || output) pi.registerTool({ name: "retry_fixture", label: "Проверка", description: "Возвращает результат для теста повтора", parameters: Type.Object({}), async execute() {
+    if (variant.startsWith("chat-manual") || output || streamFailure) pi.registerTool({ name: "retry_fixture", label: "Проверка", description: "Возвращает результат для теста повтора", parameters: Type.Object({}), async execute() {
       toolExecutions++;
-      if (variant === "chat-manual-unsafe" || variant === "output-unsafe") throw new Error("Исход не подтверждён");
+      if (variant === "chat-manual-unsafe" || variant === "output-unsafe" || variant === "stream-unsafe") throw new Error("Исход не подтверждён");
       return { content: [{ type: "text", text: "Сохранённый ответ инструмента." }], details: {} };
     } });
     pi.registerProvider("openai", { api: "retry-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models, streamSimple(model, context, options) {
@@ -84,6 +87,15 @@ async function run(variant: Variant) {
         }
         delete message.errorMessage;
       }
+      if (streamFailure && n > 0) {
+        message.stopReason = n === 1 || n === 3 ? "toolUse" : n === 2 ? "error" : "stop";
+        message.content = n === 1 || n === 2
+          ? [{ type: "toolCall", id: n === 1 ? "prior-call" : "unexecuted-call", name: "retry_fixture", arguments: {} }]
+          : n === 3 ? [{ type: "toolCall", id: "fixture-hold", name: "report_goal_progress", arguments: hold }]
+          : [{ type: "text", text: "Готов полезный результат." }];
+        if (n === 2) message.errorMessage = "WebSocket closed 1000";
+        else delete message.errorMessage;
+      }
       const stream = createAssistantMessageEventStream();
       queueMicrotask(async () => {
         await options?.onPayload?.({ model: model.id }, model);
@@ -94,7 +106,11 @@ async function run(variant: Variant) {
           await submit?.(true);
         }
         if (message.stopReason !== "error" && message.stopReason !== "aborted") await options?.onResponse?.({ status: 200, headers: {} }, model);
-        stream.push({ type: "start", partial: message });
+        const streamedCall = streamFailure && n === 2 ? message.content[0] : undefined;
+        stream.push({ type: "start", partial: streamedCall ? { ...message, content: [] } : message });
+        if (streamedCall?.type === "toolCall") {
+          stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: streamedCall, partial: message });
+        }
         if (message.stopReason === "error" || message.stopReason === "aborted") stream.push({ type: "error", reason: message.stopReason, error: message });
         else if (message.stopReason !== "pending") stream.push({ type: "done", reason: message.stopReason, message });
         stream.end();
@@ -108,7 +124,8 @@ async function run(variant: Variant) {
       return ok;
     } } : pi;
     if (variant === "legacy-owner") pi.registerCommand("retry", { description: "Занятая старым расширением команда", handler: async () => {} });
-    ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : 0, allowSwitch: variant !== "disabled" && !variant.startsWith("chat-manual") }));
+    ({ goal } = compose(api, { enabled: true, windowMs: variant === "escape" ? 60_000 : streamFailure ? 15_000 : 0, allowSwitch: variant !== "disabled" && !variant.startsWith("chat-manual") }));
+    if (streamFailure) pi.on("tool_execution_start", event => { toolStarts.push(event.toolCallId); });
     if (variant === "output-cancel") pi.on("agent_before_settle", async event => {
       if (event.continue) { escape(); await submit?.(); }
     });
@@ -125,7 +142,7 @@ async function run(variant: Variant) {
     });
   }] });
   await loader.reload();
-  const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: { ...models[0]!, provider: "openai", api: "retry-probe", baseUrl: "http://127.0.0.1:1" }, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }) });
+  const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: { ...models[0]!, provider: "openai", api: "retry-probe", baseUrl: "http://127.0.0.1:1" }, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: !streamFailure, maxRetries: 1, baseDelayMs: 1 }, compaction: { enabled: false } }) });
   submit = (second = false) => session.prompt(second ? secondInput : newInput, { streamingBehavior: "steer", ...(second ? { images: [attachment] } : {}) });
   try {
     session.subscribe(event => { if (event.type === "auto_retry_start") standardRetries++; });
@@ -147,7 +164,7 @@ async function run(variant: Variant) {
       await session.waitForIdle();
     }
     assert.deepEqual(failures, []);
-    return { requests, statuses, rows: manager.getBranch(), toolExecutions, model: session.model?.id, standardRetries, pause: goal?.getGoal()?.pause };
+    return { requests, statuses, rows: manager.getBranch(), toolExecutions, toolStarts, model: session.model?.id, standardRetries, pause: goal?.getGoal()?.pause };
   } finally {
     try {
       await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
@@ -342,4 +359,27 @@ test("SDK: явный повтор не берёт неизвестное дей
     assert.equal(toolExecutions, 1);
     assert.ok(!rows.some(entry => entry.type === "custom_message" && entry.customType === "pi-goal-provider-retry-request"));
   }
+});
+
+test("SDK: обрыв потока не запускает выданный вызов и повторяет только запрос к модели", async () => {
+  const { requests, toolExecutions, toolStarts, rows, pause } = await run("stream-unexecuted");
+  assert.deepEqual(toolStarts, ["fixture-goal", "prior-call", "fixture-hold"]);
+  assert.equal(toolExecutions, 1);
+  assert.equal(requests.length, 5);
+  assert.equal(requests[2]?.context, requests[3]?.context);
+  assert.match(requests[3]!.context, /Сохранённый ответ инструмента/);
+  assert.doesNotMatch(requests[3]!.context, /unexecuted-call/);
+  assert.notEqual(pause?.kind, "recovery");
+  const failure = rows.find(row => row.type === "message" && row.message.role === "assistant" && row.message.errorMessage === "WebSocket closed 1000");
+  assert.ok(failure && rows.some(row => row.type === "context_edit" && row.targetId === failure.id && row.replacement === null));
+  assert.ok(rows.some(row => row.type === "message" && row.message.role === "assistant" && row.message.content.some(part => part.type === "text" && part.text === "Готов полезный результат.")));
+});
+
+test("SDK: обрыв после инструмента с неясным исходом не повторяет запрос", async () => {
+  const { requests, toolExecutions, toolStarts, rows, pause } = await run("stream-unsafe");
+  assert.deepEqual(toolStarts, ["fixture-goal", "prior-call"]);
+  assert.equal(toolExecutions, 1);
+  assert.equal(requests.length, 3);
+  assert.equal(pause?.kind, "recovery");
+  assert.ok(rows.some(row => row.type === "custom" && (row.data as { reason?: string } | undefined)?.reason === "unsafe-tool-result"));
 });

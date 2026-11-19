@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { estimateTokens, type AgentBeforeSettleEvent, type BoundaryResult, type ExtensionAPI, type ExtensionContext, type InputEvent } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, VERSION, type AgentBeforeSettleEvent, type BoundaryResult, type ExtensionAPI, type ExtensionContext, type InputEvent } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { isProviderLimitError, isRetryableTransientError } from "../goal/recovery.js";
 import type { ProviderRetryConfig } from "../goal/provider-retry-config.js";
@@ -300,7 +300,10 @@ export function registerProviderRetry(pi: ExtensionAPI, session: GoalSession, co
     const model = modelRef(ctx.model);
     if (!canRecover(ctx) || manual || `${message.provider}/${message.model}` !== model) return;
     const errorClass = classify(message.errorMessage, response?.status);
-    if (errorClass !== "not-admitted" && (unsafeToolResult || event.toolResults.length || message.content.some(part => part.type === "toolCall"))) {
+    // В этих версиях Pi ответ с error завершает ход до передачи вызовов инструментам.
+    const stoppedBeforeTools = (VERSION === "1.5.0" || VERSION === "1.5.2") && event.outcome === "error";
+    const unsafeCalls = !stoppedBeforeTools && message.content.some(part => part.type === "toolCall");
+    if (errorClass !== "not-admitted" && (unsafeToolResult || event.toolResults.length || runningTools.size || unsafeCalls)) {
       stop(ctx, "unsafe-tool-result");
       ctx.abort();
       return;
