@@ -210,6 +210,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   };
 
   pi.on("session_start", async (event, ctx) => {
+    cancelDeferredWakes();
     rebind(ctx);
     const goal = session.getGoal();
     // При возобновлении сессии приостановленная цель сама не оживает: владелец решает в диалоге (Ц35).
@@ -337,6 +338,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   };
 
   return {
+    cancelDeferredWakes,
     hooks,
     /** Разрешение цели для сверки билета при доставке: уже выданный билет ждёт только известных работающих сабагентов. */
     gate: (): GoalGate => asGate(holdReason(true)),
