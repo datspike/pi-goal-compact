@@ -124,16 +124,17 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		appendUsage = undefined;
 		stage.beginCompaction(ctx, workingStandard());
 		try {
-			const model = ctx.model ? { ...ctx.model, contextWindow: window.capability(ctx).window } : undefined;
+			const capability = window.capability(ctx);
+			const model = ctx.model ? { ...ctx.model, contextWindow: capability.window } : undefined;
 			let transport: import("../compaction/summary.js").SummaryTransport | undefined;
 			if (append) {
-				try { transport = append.prepare(ctx, event, language); }
+				try { transport = append.prepare(ctx, event, language, capability.window); }
 				catch (error) { pi.appendEntry("append-pilot-attempt", { phase: "preflight-refusal", reason: error instanceof Error ? error.message : String(error) }); }
 			}
 			const run = (useAppend: boolean) => summarizeCompaction(event, ctx, {
 				...(model ? { model } : {}),
 				...(useAppend && transport ? { transport } : {}),
-				capability: window.capability(ctx),
+				capability,
 				isCurrent: () => generation === summarySequence,
 				retryDelaysMs: SUMMARY_RETRY_DELAYS_MS,
 				onRetry: (attempt, attempts, detail) => {

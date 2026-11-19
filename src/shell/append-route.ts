@@ -100,8 +100,8 @@ export class AppendRoute {
         return result;
     }
 
-    /** Привязывает один запрос сводки к неизменному префиксу и разрешённым добавлениям ветки. */
-    prepare(ctx: ExtensionContext, event: SessionBeforeCompactEvent, language: Language): SummaryTransport {
+    /** Привязывает сводку к захваченному префиксу. Бюджет берётся из служебного окна, не из порога рабочего хода. */
+    prepare(ctx: ExtensionContext, event: SessionBeforeCompactEvent, language: Language, serviceWindow: number): SummaryTransport {
         const capture = this.capture, registration = this.registration;
         if (!capture?.payload || !capture.settled || !registration) throw Error("APPEND_CAPTURE_UNAVAILABLE");
         if (capture.session !== ctx.sessionManager.getSessionId() || registration.registry !== ctx.modelRegistry
@@ -130,7 +130,7 @@ export class AppendRoute {
         return {
             prompt,
             inputTokens,
-            outputTokens: (task, requested) => Math.min(requested, Math.max(1, (ctx.model?.contextWindow ?? 0) - inputTokens(task) - COMPACT_WINDOW_MARGIN)),
+            outputTokens: (task, requested) => Math.min(requested, Math.max(1, serviceWindow - inputTokens(task) - COMPACT_WINDOW_MARGIN)),
             request: async (model, task, options) => {
                 validate();
                 let rejected: unknown;
