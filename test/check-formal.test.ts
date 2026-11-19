@@ -17,9 +17,9 @@ test("разбор вывода TLC: ошибка разбора модели н
   assert.notEqual(parseTlcOutput("Fatal error during parsing").error, null);
 });
 
-test("каждое свойство обеих моделей ломается хотя бы одной поломкой", () => {
+test("свойства продолжения и договорённости имеют намеренные поломки", () => {
   const broken = new Set(RUNS.map((run) => run.expect).filter((name) => name !== null));
-  for (const name of ["P1_OneContinuation", "P2_HoldHolds", "P3_NoRevival", "P4_NoUnknownWrite", "P5_NoStaleTicket", "P6_NoSilentStall", "P7_OneCurrentAgreement", "P8_NoStaleClose", "P9_OwnerOnlyEdits"]) {
+  for (const name of ["P1_OneContinuation", "P2_HoldHolds", "P3_NoRevival", "P4_NoUnknownWrite", "P5_NoStaleTicket", "P6_NoSilentStall", "P7_OneCurrentAgreement", "P8_NoStaleClose", "P9_OwnerOnlyEdits", "P17_NoDeferredWakeDuringSwitch"]) {
     assert.ok(broken.has(name), name);
   }
 });

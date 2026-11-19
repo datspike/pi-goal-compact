@@ -23,7 +23,7 @@ EXTENDS Naturals, Sequences, FiniteSets
 CONSTANTS Bug, MaxEpoch, MaxQueue
 
 Bugs == {"none", "noDedupe", "noHoldCheck", "noFreshGuard", "noWriteGuard",
-         "noNotice", "noGoalCheckOnTicket", "completeRuns"}
+         "noNotice", "noGoalCheckOnTicket", "completeRuns", "noDeferredWakeCancel"}
 ASSUME Bug \in Bugs
 
 Goals == {"none", "active", "paused", "awaiting", "complete"}
@@ -39,11 +39,12 @@ VARIABLES
     checkpoint,    \* "none" | "pending" | "compacting"
     subagents,     \* число работающих фоновых сабагентов (0..1)
     errorTimer,    \* взведена пауза перед повтором после ошибки
+    wakePhase,     \* отложенное пробуждение после сжатия и начало переключения
     notice,        \* владелец видит уведомление, почему работа стоит
     bad            \* первое нарушение безопасности: "" или имя свойства
 
 vars == <<goal, epoch, agent, outcome, queue, ownerReplied, writeUnknown,
-          checkpoint, subagents, errorTimer, notice, bad>>
+          checkpoint, subagents, errorTimer, wakePhase, notice, bad>>
 
 Init ==
     /\ goal = "none"
@@ -56,6 +57,7 @@ Init ==
     /\ checkpoint = "none"
     /\ subagents = 0
     /\ errorTimer = FALSE
+    /\ wakePhase = "none"
     /\ notice = FALSE
     /\ bad = ""
 
@@ -322,13 +324,59 @@ DeliverRunning ==
 
 -----------------------------------------------------------------------------
 
-Next ==
-    \/ OwnerInput \/ ResumeCommand \/ ClearGoal \/ SwitchBranch \/ Abort
+\* Начало переключения и завершение раздельны: между ними Pi может ждать.
+BeforeContextSwitch ==
+    /\ agent = "idle"
+    /\ epoch < MaxEpoch
+    /\ wakePhase \in {"none", "pending"}
+    /\ wakePhase' = IF wakePhase = "pending" /\ Bug = "noDeferredWakeCancel"
+                    THEN "switchingWithWake" ELSE "switching"
+    /\ UNCHANGED <<goal, epoch, agent, outcome, queue, ownerReplied, writeUnknown,
+                   checkpoint, subagents, errorTimer, notice, bad>>
+
+ArmDeferredWake ==
+    /\ wakePhase = "none"
+    /\ agent = "idle"
+    /\ goal = "active"
+    /\ wakePhase' = "pending"
+    /\ UNCHANGED <<goal, epoch, agent, outcome, queue, ownerReplied, writeUnknown,
+                   checkpoint, subagents, errorTimer, notice, bad>>
+
+FireDeferredWake ==
+    /\ wakePhase \in {"pending", "switchingWithWake"}
+    /\ wakePhase' = IF wakePhase = "pending" THEN "none" ELSE "switching"
+    /\ queue' = IF agent = "idle" /\ goal = "active" /\ ~WriteBlocks /\ subagents = 0
+                THEN Enqueue ELSE queue
+    /\ bad' = IF bad = "" /\ wakePhase = "switchingWithWake" /\ queue' # queue
+              THEN "P17_DeferredWakeDuringSwitch" ELSE bad
+    /\ UNCHANGED <<goal, epoch, agent, outcome, ownerReplied, writeUnknown,
+                   checkpoint, subagents, errorTimer, notice>>
+
+FinishContextSwitch ==
+    /\ wakePhase \in {"switching", "switchingWithWake"}
+    /\ SwitchBranch
+    /\ wakePhase' = "none"
+
+CancelContextSwitch ==
+    /\ wakePhase \in {"switching", "switchingWithWake"}
+    /\ wakePhase' = "none"
+    /\ UNCHANGED <<goal, epoch, agent, outcome, queue, ownerReplied, writeUnknown,
+                   checkpoint, subagents, errorTimer, notice, bad>>
+
+CoreNext ==
+    \/ OwnerInput \/ ResumeCommand \/ ClearGoal \/ Abort
     \/ CreateGoal \/ ReportAwaiting \/ ReportWorking \/ CompleteGoal
     \/ RequestCheckpoint \/ StartSubagent \/ ProviderError
     \/ WriteBecomesUnknown \/ WriteResolved
     \/ BeforeSettle
     \/ CompactDone \/ SubagentDone \/ TimerFire \/ DeliverIdle \/ DeliverRunning
+
+Next ==
+    \/ /\ wakePhase \in {"none", "pending"}
+       /\ CoreNext
+       /\ UNCHANGED wakePhase
+    \/ BeforeContextSwitch \/ FinishContextSwitch \/ CancelContextSwitch
+    \/ ArmDeferredWake \/ FireDeferredWake
 
 Spec == Init /\ [][Next]_vars
 
@@ -340,6 +388,7 @@ TypeOK ==
     /\ agent \in {"idle", "running"}
     /\ checkpoint \in {"none", "pending", "compacting"}
     /\ subagents \in 0..1
+    /\ wakePhase \in {"none", "pending", "switching", "switchingWithWake"}
 
 \* П1. В очереди не больше одного свежего билета.
 P1_OneContinuation == Cardinality(FreshTickets) <= 1
@@ -350,6 +399,9 @@ P2_HoldHolds       == bad # "P2_HoldBroken"
 P3_NoRevival       == bad # "P3_DeadGoalRevived"
 P4_NoUnknownWrite  == bad # "P4_UnknownWrite"
 P5_NoStaleTicket   == bad # "P5_StaleTicket"
+
+\* П17. Пробуждение старого контекста не выдаёт билет после начала смены.
+P17_NoDeferredWakeDuringSwitch == bad # "P17_DeferredWakeDuringSwitch"
 
 \* П6. Активная цель в простое не стоит молча: есть свежий билет, сжатие,
 \* сабагент, пауза перед повтором или уведомление владельцу.
