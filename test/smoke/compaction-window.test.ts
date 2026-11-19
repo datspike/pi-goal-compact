@@ -55,5 +55,78 @@ test("Б3: окно после сжатия с целью — сводка бе�
     assert.equal(head(closed.window), head(after.window), "начало окна после закрытия то же");
     assert.ok(!closed.window.includes("Довести проверку до закрытия цели."), "раздел «Цель» сводки не вернулся");
     assert.ok(closed.window.includes("остаётся там до следующего сжатия только как история"), "ответ на закрытие несёт пометку");
+
+    // Воспроизводим короткую историческую часть сводки при открытой цели.
+    const compactIndex = rows.findIndex((row) => row.type === "compaction");
+    const source = rows.slice(0, compactIndex + 1);
+    const boundary = "**Контекст разрезанного хода:**";
+    const partial = `## Цель\nСтарое поручение.\n\n${boundary}\nНиже новое поручение.\n\n## Исходный запрос\nПродолжить по новому плану.`;
+    const seed = source.map((row, index) => JSON.stringify(index === compactIndex ? { ...row, summary: partial } : row)).join("\n") + "\n";
+    await start("resume-split", { seed, prompt: "Продолжай по плану." });
+    const resumed = requests("resume-split").find((request) => request.kind === "turn");
+    assert.ok(resumed, "после возобновления есть запрос к провайдеру");
+    assert.ok(resumed.window.includes(boundary), "пометка приоритета доходит до провайдера");
+    assert.ok(!resumed.window.includes("Старое поручение."));
+    assert.equal(count(resumed.window, "## Договорённость (редакция"), 1);
+
+    const fileHint = "<file-hints>\n\"notes/roadmap.md\"\n</file-hints>";
+    const short = source.map((row, index) => JSON.stringify(index === compactIndex
+      ? { ...row, summary: `## Цель\nСтарое поручение.\n\n${fileHint}` } : row)).join("\n") + "\n";
+    await start("resume-files", { seed: short, prompt: "Продолжай по плану." });
+    const withFiles = requests("resume-files").find((request) => request.kind === "turn");
+    assert.ok(withFiles, "после возобновления есть запрос к провайдеру");
+    assert.ok(withFiles.window.includes("notes/roadmap.md"), "файловая наводка доходит до провайдера");
+    assert.ok(!withFiles.window.includes("Старое поручение."));
+  });
+});
+
+test("свежая файловая наводка доходит до провайдера после сжатия по порогу", { timeout: 30_000 }, async () => {
+  const archive = Array.from({ length: 26 }, (_, i) => `docs/archive/check-${i}.md`);
+  const recent = "notes/current-check.md";
+  const timestamp = new Date(0).toISOString();
+  const assistant = { role: "assistant", api: "probe", provider: "probe", model: "offline", timestamp: 1 };
+  const seed = [
+    { type: "session", version: 3, id: "ba7fddf2-494f-49ba-8ee2-5ba0ea13c761", timestamp, cwd: process.cwd() },
+    { type: "message", id: "user", parentId: null, timestamp, message: { role: "user", content: "Сверь результаты.", timestamp: 0 } },
+    { type: "message", id: "read", parentId: "user", timestamp, message: { ...assistant, stopReason: "toolUse", content: [{ type: "toolCall", name: "read", id: "read-1", arguments: { path: recent } }] } },
+    { type: "message", id: "result", parentId: "read", timestamp, message: { role: "toolResult", toolCallId: "read-1", toolName: "read", content: [{ type: "text", text: "Прочитано." }], isError: false, timestamp: 1 } },
+    { type: "compaction", id: "prior", parentId: "result", timestamp, firstKeptEntryId: "user", tokensBefore: 100, summary: "## Цель\nСверить результаты.", details: { readFiles: archive, modifiedFiles: [] } },
+    { type: "message", id: "kept", parentId: "prior", timestamp, message: { ...assistant, stopReason: "stop", content: [{ type: "text", text: "Данные ".repeat(300) }], usage: { input: 256500, output: 1, totalTokens: 256501, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n";
+  const summaryText = `## Цель\nСверить результаты.\n\n## Исходный запрос\nПроверка открыта.\n\nАрхив: ${archive.map(path => path + ".disabled").join(", ")}`;
+  await withProbe({ calls: {}, heavySteps: [], lastStep: 1, summaryText }, async (start, requests) => {
+    const rows = await start("recent-file", { seed, prompt: "Продолжи проверку." });
+    assert.equal(rows.filter(row => row.type === "compaction").length, 2);
+    const log = requests("recent-file");
+    assert.ok(log.some(r => r.kind === "summary" && r.window.includes(recent)), "чтение вошло в сжимаемую часть");
+    const after = log.find(r => r.kind === "turn");
+    assert.ok(after, "после сжатия есть следующий запрос");
+    const window = after.window.replaceAll('\\"', '"');
+    assert.match(window, /<file-hints>.*?"notes\/":.*?"current-check\.md" \[читался\].*?<\/file-hints>/s);
+  });
+});
+
+test("в запрос без цели после сжатия попадает исправленная реплика, а не прежний или служебный текст", { timeout: 30_000 }, async () => {
+  const timestamp = new Date(0).toISOString();
+  const seed = [
+    { type: "session", version: 3, id: "ba7fddf2-494f-49ba-8ee2-5ba0ea13c762", timestamp, cwd: process.cwd() },
+    { type: "message", id: "old", parentId: null, timestamp, message: { role: "user", content: "ORIGINAL_PROBE_TEXT", timestamp: 0 } },
+    { type: "message", id: "removed", parentId: "old", timestamp, message: { role: "user", content: "REMOVED_PROBE_TEXT", timestamp: 0 } },
+    { type: "message", id: "service", parentId: "removed", timestamp, message: { role: "user", content: "SERVICE_QUOTE_PROBE <!-- pi-context-compaction:follow-up:job-1 -->", timestamp: 0 } },
+    { type: "custom", id: "audit", parentId: "service", timestamp, customType: "context-compaction-audit", data: { correlation: "job-1", phase: "send-attempted", origin: "manual-tool" } },
+    { type: "message", id: "kept", parentId: "audit", timestamp, message: { role: "user", content: "KEPT_PROBE_TEXT", timestamp: 0 } },
+    { type: "context_edit", id: "replace", parentId: "kept", timestamp, targetId: "old", replacement: { content: "REPLACEMENT_PROBE_TEXT" } },
+    { type: "context_edit", id: "delete", parentId: "replace", timestamp, targetId: "removed", replacement: null },
+    { type: "compaction", id: "prior", parentId: "delete", timestamp, firstKeptEntryId: "kept", tokensBefore: 100, summary: "## Цель\nПроверить продолжение." },
+  ].map(row => JSON.stringify(row)).join("\n") + "\n";
+  await withProbe({ calls: {}, heavySteps: [], lastStep: 1 }, async (start, requests) => {
+    await start("edited-replies", { seed, prompt: "Продолжи проверку." });
+    const request = requests("edited-replies").find(r => r.kind === "turn");
+    assert.ok(request, "Pi отправил первый запрос после открытия сессии");
+    assert.ok(request.window.includes("REPLACEMENT_PROBE_TEXT"));
+    assert.ok(request.window.includes("KEPT_PROBE_TEXT"));
+    assert.ok(!request.window.includes("ORIGINAL_PROBE_TEXT"));
+    assert.ok(!request.window.includes("REMOVED_PROBE_TEXT"));
+    assert.ok(!request.window.includes("SERVICE_QUOTE_PROBE"));
   });
 });

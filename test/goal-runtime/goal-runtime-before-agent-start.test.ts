@@ -174,3 +174,24 @@ for (const owner of ["foreign", "user", "goal"] as const) {
     }
   });
 }
+
+for (const type of ["session_before_switch", "session_before_fork", "session_before_tree"] as const) {
+  test(`отложенное продолжение гаснет до смены контекста (${type})`, async () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const h = createRuntimeHarness();
+      await h.runCommand("Сверить результат");
+      await h.emit("session_before_compact", sessionBeforeCompactEvent({ reason: "threshold" }));
+      await h.emit("session_compact", sessionCompactEvent({ reason: "threshold" }));
+      await h.emit(type, { type, preparation: { userWantsSummary: false } });
+      flushContinuationScheduler();
+      assert.equal(goalTickets(h).length, 0);
+      if (type === "session_before_tree") {
+        await h.emit("session_tree", { type: "session_tree", oldLeafId: "a", newLeafId: "b" });
+        assert.equal(goalTickets(h).length, 1);
+      }
+    } finally {
+      mock.timers.reset();
+    }
+  });
+}

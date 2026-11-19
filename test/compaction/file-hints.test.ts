@@ -72,6 +72,14 @@ describe("bounded file navigation", () => {
 		expect(hints).not.toContain("old.ts"); expect(hints).toContain("не список текущих изменений");
 	});
 
+	test("пути из текста сводки не вытесняют свежий путь из файловых наводок", () => {
+		const archive = Array.from({ length: 26 }, (_, i) => `docs/archive/check-${i}.md`);
+		const current = "notes/current-check.md";
+		const body = archive.map(path => `\`${path}.disabled\``).join(", ");
+		const hints = formatFileHints({ readFiles: [...archive, current], modifiedFiles: [] }, [tool(current)], body);
+		expect(hints).toContain('"current-check.md" [читался]');
+	});
+
 	test("bounds even huge histories and long/unusual names without truncating exact paths", () => {
 		const paths = Array.from({ length: 10000 }, (_, i) => `/root/${i}/` + "long".repeat(70) + ".ts");
 		paths.push("/root/" + "x".repeat(20000), "new\nline.ts", 'quote"name.ts');
@@ -97,6 +105,24 @@ describe("summary integration", () => {
 		expect(result.firstKeptEntryId).toBe("retained"); expect(result.usage).toEqual(usage);
 		expect(options[0]?.signal).toBe(event.signal);
 		expect(JSON.stringify(event, (_key, value) => value instanceof Set ? [...value] : value)).toBe(original);
+	});
+
+	test("пустое сжатие сохраняет точные наводки прежней сводки, пока учёт файлов не изменился", async () => {
+		const { ctx, event, prompts } = fixture();
+		const files = { readFiles: ["archive/old.ts"], modifiedFiles: [] };
+		const previousSummary = BODY + formatFileHints(files, [tool("archive/old.ts")], BODY);
+		event.branchEntries = [{ type: "compaction", summary: previousSummary, details: files }];
+		event.preparation.previousSummary = previousSummary;
+		event.preparation.messagesToSummarize = [];
+		event.preparation.fileOps = { read: new Set(), edited: new Set() };
+		const same = await compacted(event, ctx);
+		expect(same.summary).toBe(previousSummary);
+		expect(same.details).toEqual(files);
+		event.preparation.fileOps.edited.add("archive/old.ts");
+		const changed = await compacted(event, ctx);
+		expect(changed.summary === previousSummary).toBe(false);
+		expect(changed.details).toEqual({ readFiles: [], modifiedFiles: ["archive/old.ts"] });
+		expect(prompts).toEqual([]);
 	});
 
 	test("split turn with no history generation carries semantic history, not its appendices", async () => {

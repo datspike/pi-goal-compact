@@ -36,6 +36,7 @@ export const RUNS: readonly Run[] = [
   { model: "Continuation", bug: "noFreshGuard", expect: "P5_NoStaleTicket", meaning: "билет не сверяется с эпохой" },
   { model: "Continuation", bug: "noNotice", expect: "P6_NoSilentStall", meaning: "остановка из-за записи не объясняется владельцу" },
   { model: "Continuation", bug: "noGoalCheckOnTicket", expect: "P2_HoldHolds", meaning: "билет после сжатия не сверяется с состоянием цели" },
+  { model: "Continuation", bug: "noDeferredWakeCancel", expect: "P17_NoDeferredWakeDuringSwitch", meaning: "старый таймер выдаёт билет после начала переключения" },
   { model: "Agreement", bug: "none", expect: null, meaning: "исправная модель договорённости" },
   { model: "Agreement", bug: "noStrip", expect: "P7_OneCurrentAgreement", meaning: "раздел «Цель» сводки не заменяется" },
   { model: "Agreement", bug: "liveHead", expect: "P14_StableHead", meaning: "начало окна следует за каждой правкой цели" },

@@ -2,7 +2,7 @@ import { setLanguage } from "../../src/language.js";
 import { MAX_COMPACT_PAYLOAD_CHARS } from "../../src/compaction/compact-budget.js";
 import { describe, expect, test } from "../support/expect.js";
 import { compactedWith, compactWith, treeSummaryWith, type FakeCompactEvent, type FakeComplete, type FakeContext, type FakeEntry, type FakeModel, type FakeTreeEvent } from "../support/compaction.js";
-import type { AgentMessage } from "../../src/compaction/file-hints.js";
+import { withoutFileTracking, type AgentMessage } from "../../src/compaction/file-hints.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,6 +130,83 @@ test("Russian compact keeps localized headings, split-turn context and cumulativ
 	expect(split.summary).toContain("действует он; разделы выше описывают состояние до хода.\n## Исходный запрос");
 });
 
+test("незакрытый пример не поглощает свежий запрос и файловое приложение", async () => {
+	const { withoutGoalSection } = await import("../../src/goal/window.js");
+	const responses = [
+		"## Goal\nOld.\n\n```markdown\nExample.",
+		"## Original Request\nТолько чтение.\n\n~~~~text\nExample.",
+		"## Goal\nOld.\n\n```markdown\nExample.",
+	];
+	const ctx: FakeContext = { model: { maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: responses.shift() }], usage: { input: 1 } }) } };
+	const message = userMessage("Только чтение.");
+	const fileOps = { read: new Set(["notes/map.md"]), edited: new Set<string>() };
+	const split = await compactedWith(compactEvent({ isSplitTurn: true, messagesToSummarize: [message], turnPrefixMessages: [message], fileOps }), ctx);
+	const stripped = withoutGoalSection(split.summary);
+	expect(stripped).toContain("**Контекст разрезанного хода:**");
+	expect(stripped).toContain("Только чтение.");
+	expect(stripped).toContain("~~~~\n\n<file-hints>");
+	const normal = await compactedWith(compactEvent({ messagesToSummarize: [message], fileOps }), ctx);
+	expect(withoutGoalSection(normal.summary)).toContain("<file-hints>");
+});
+
+test("если после фильтра нет нового содержания, сводка сохраняется с разрезом хода и без него", async () => {
+    const previousSummary = "## Цель\nСверить результаты.\n\n## Следующие шаги\nОткрытая проверка.";
+    let calls = 0;
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async () => {
+            calls++;
+            return { content: [{ type: "text", text: "## Цель\nНовая сводка вместо старой." }] };
+        } },
+    };
+    for (const isSplitTurn of [true, false]) {
+        const saved = await compactedWith(compactEvent({ isSplitTurn, previousSummary }), ctx);
+        expect(calls).toEqual(0);
+        expect(saved.summary).toEqual(previousSummary);
+        expect(saved.firstKeptEntryId).toEqual("kept");
+    }
+});
+
+test("новые наводки при переносе сводки остаются вне незакрытого примера", async () => {
+    const { withoutGoalSection } = await import("../../src/goal/window.js");
+    const previousSummary = "## Цель\nСверить результаты.\n\n```markdown\nПример.";
+    const ctx: FakeContext = { model: { maxTokens: 8192 }, modelRegistry: { complete: async () => { throw new Error("лишний запрос"); } } };
+    const fileOps = { read: new Set(["notes/map.md"]), edited: new Set<string>() };
+    const saved = await compactedWith(compactEvent({ previousSummary, fileOps }), ctx);
+    expect(saved.summary).toContain(`${previousSummary}\n\`\`\`\n\n<file-hints>`);
+    expect(withoutGoalSection(saved.summary)).toContain("<file-hints>");
+    expect(saved.details.readFiles).toEqual(["notes/map.md"]);
+});
+
+test("явные инструкции пересказывают прежнюю сводку даже при пустом разрезе", async () => {
+    const previousSummary = "## Цель\nСверить результаты.";
+    const customInstructions = "Укажи, какая проверка осталась открытой.";
+    const requests: string[] = [];
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async (_model, context) => {
+            requests.push(JSON.stringify(context.messages));
+            return { content: [{ type: "text", text: "## Цель\nСверить результаты. Открыта проверка второй строки." }] };
+        } },
+    };
+    const saved = await compactedWith({ ...compactEvent({ isSplitTurn: true, previousSummary }), customInstructions }, ctx);
+    expect(requests.length).toEqual(1);
+    expect(requests[0]).toContain(JSON.stringify(previousSummary).slice(1, -1));
+    expect(requests[0]).toContain(customInstructions);
+    expect(saved.summary).toContain("Открыта проверка второй строки.");
+});
+
+test("негодная прежняя сводка не переносится в пустой разрез", async () => {
+    const reasons: string[] = [];
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async () => { throw new Error("лишний запрос"); } },
+    };
+    const event = compactEvent({ isSplitTurn: true, previousSummary: "Без структурного заголовка." });
+    expect(await compactWith(event, ctx, { onFailure: (reason) => reasons.push(reason) })).toEqual({ cancel: true });
+    expect(reasons).toEqual(["invalid-response"]);
+});
+
 test("английскую сводку тоже пишет расширение: английские разделы, правила и наводки", async () => {
 	setLanguage("en");
 	try {
@@ -183,6 +260,38 @@ test("Russian /tree keeps localized headings and usage", async () => {
 	const result = await treeSummaryWith(event, ctx);
 	expect(result?.summary).toContain("## Цель\nRead src/a.ts");
 	expect(result?.usage).toEqual({ input: 3 });
+});
+
+test("сводка /tree не прячет файловые наводки в незакрытом примере", async () => {
+	const ctx: FakeContext = { model: { contextWindow: 128000, maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: "## Goal\nПроверить ветку.\n\n```md\nПример." }], usage: { input: 3 } }) } };
+	const event: FakeTreeEvent = { signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [{
+		type: "compaction", summary: "Прежняя сводка.", details: { readFiles: ["notes/probe.md"], modifiedFiles: [] },
+	}] } };
+	const result = await treeSummaryWith(event, ctx);
+	expect(result?.summary).toContain("Пример.\n```\n\n<file-hints>");
+	expect(result?.details.readFiles).toEqual(["notes/probe.md"]);
+});
+
+test("оборванное файловое приложение не захватывает следующее приложение", async () => {
+    const { withoutGoalSection } = await import("../../src/goal/window.js");
+    const raw = "## Goal\nСверить результаты.\n\n<file-hints>\nПрежние данные.\n````\n## Goal\nНе заголовок.";
+    const ctx: FakeContext = { model: { contextWindow: 128000, maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: raw }] }) } };
+    const path = "notes/current.md";
+    const message: AgentMessage = {
+        role: "assistant", timestamp: 1, provider: "fixture", api: "openai-responses", model: "offline", stopReason: "toolUse",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        content: [{ type: "toolCall", id: "read-notes", name: "read", arguments: { path } }],
+    };
+    const fileOps = { read: new Set([path]), edited: new Set<string>() };
+    const compacted = await compactedWith(compactEvent({ messagesToSummarize: [message], fileOps }), ctx);
+    const tree = await treeSummaryWith({ signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [{ type: "message", message }] } }, ctx);
+    for (const saved of [compacted, tree]) {
+        expect(saved?.summary).toContain('"current.md"');
+        const stripped = withoutFileTracking(saved!.summary);
+        expect(stripped).toContain("<file-hints>\nПрежние данные.\n````\n## Goal");
+        expect(stripped).not.toContain("current.md");
+        expect(withoutGoalSection(saved!.summary)).toContain('"current.md"');
+    }
 });
 
 type Call = Parameters<FakeComplete>;

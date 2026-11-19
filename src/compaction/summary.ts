@@ -2,7 +2,7 @@ import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { MAX_COMPACT_PAYLOAD_CHARS, calculateCompactBudget, type CompactCapability } from "./compact-budget.js";
 import type { Api, AssistantMessage, Model, ModelsApiStreamOptions, TextContent, Usage } from "@earendil-works/pi-ai";
 import { language, type Language } from "../language.js";
-import { collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
+import { carryFileHints, collectFileLists, formatFileHints, withoutFileTracking, withoutMessageFileTracking, type AgentMessage } from "./file-hints.js";
 import {
 	convertToLlm,
 	prepareBranchEntries,
@@ -201,6 +201,11 @@ export function summaryText(): SummaryText {
 	return SUMMARY_TEXT[language()];
 }
 
+/** Обе границы есть в сохранённых сводках, в том числе после смены языка. */
+export function isSplitTurnBoundary(line: string): boolean {
+  return Object.values(SUMMARY_TEXT).some(({ splitTurnHeader }) => splitTurnHeader.startsWith(`${line}\n`));
+}
+
 const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 	"## Goal": "## Цель",
 	"## Constraints & Preferences": "## Ограничения и предпочтения",
@@ -219,13 +224,13 @@ const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 	"**Turn Context (split turn):**": "**Контекст разрезанного хода:**",
 };
 
-type SummaryLine = { line: string; protected: boolean };
+type SummaryLine = { line: string; protected: boolean; fileBlockStart?: true };
 type FenceState = { character: "`" | "~"; length: number };
 
-function classifySummaryLines(summary: string): SummaryLine[] {
+function scanSummary(summary: string) {
 	let fence: FenceState | undefined;
-	let machineBlock: "read" | "modified" | undefined;
-	return summary.split("\n").map((line) => {
+	let machineBlock: { close: string; start: number } | undefined;
+	const lines = summary.split("\n").map((line, index): SummaryLine => {
 		const trimmed = line.trim();
 		if (fence) {
 			const close = trimmed.match(/^(`+|~+)\s*$/)?.[1];
@@ -233,20 +238,40 @@ function classifySummaryLines(summary: string): SummaryLine[] {
 			if (closesFence) fence = undefined;
 			return { line, protected: true };
 		}
+		if (machineBlock) {
+			if (trimmed === machineBlock.close) machineBlock = undefined;
+			return { line, protected: true };
+		}
 		const openingFence = trimmed.match(/^(`{3,}|~{3,})/)?.[1];
 		if (openingFence) {
 			fence = { character: openingFence[0] as "`" | "~", length: openingFence.length };
 			return { line, protected: true };
 		}
-		if (machineBlock) {
-			const closesMachine = (machineBlock === "read" && trimmed === "</read-files>") || (machineBlock === "modified" && trimmed === "</modified-files>");
-			if (closesMachine) machineBlock = undefined;
-			return { line, protected: true };
+		const fileTag = /^<(read-files|modified-files|file-hints)>$/.exec(line.trimEnd())?.[1];
+		if (fileTag) {
+			machineBlock = { close: `</${fileTag}>`, start: index };
+			return { line, protected: true, fileBlockStart: true };
 		}
-		if (trimmed === "<read-files>") { machineBlock = "read"; return { line, protected: true }; }
-		if (trimmed === "<modified-files>") { machineBlock = "modified"; return { line, protected: true }; }
 		return { line, protected: false };
 	});
+	return { lines, fence, machineBlock };
+}
+
+/** Отделяет строки структуры сводки от кода и машинных блоков. */
+export function classifySummaryLines(summary: string): SummaryLine[] {
+	return scanSummary(summary).lines;
+}
+
+/** Отделяет добавляемый текст от незакрытого примера или файлового блока сводчика. */
+function separateBeforeAppend(summary: string): string {
+	const { lines, fence, machineBlock } = scanSummary(summary);
+	if (fence) return `${summary}\n${fence.character.repeat(fence.length)}`;
+	if (!machineBlock) return summary;
+	// Оборванный блок неоднозначен: сохраняем его буквально, а не делаем удаляемым приложением.
+	const raw = lines.slice(machineBlock.start).map(({ line }) => line);
+	const length = raw.reduce((max, line) => Math.max(max, (line.trimStart().match(/^`+/)?.[0].length ?? 0) + 1), 3);
+	const marker = "`".repeat(length);
+	return [...lines.slice(0, machineBlock.start).map(({ line }) => line), marker, ...raw, marker].join("\n");
 }
 
 /**
@@ -679,7 +704,14 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         const maxTokens = Math.min(Math.floor(preparation.settings.reserveTokens * 0.8), serviceMaxTokens > 0 ? serviceMaxTokens : Number.POSITIVE_INFINITY);
         let summary: string;
         let usage: Usage | undefined;
-        if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
+        const unchangedHistory = preparation.turnPrefixMessages.length === 0 && preparation.messagesToSummarize.length === 0 && !event.customInstructions
+            ? preparation.previousSummary
+            : undefined;
+        if (unchangedHistory) {
+            // После фильтра в сжатой части могли остаться только данные прежней сводки.
+            summary = unchangedHistory;
+        }
+        else if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
             let historyText = preparation.previousSummary ? localizeSummaryStructure(withoutFileTracking(preparation.previousSummary, sources)) : text.noHistory;
             let historyUsage: Usage | undefined;
             if (preparation.messagesToSummarize.length > 0) {
@@ -698,7 +730,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
             const prefixText = localizeSummaryStructure(prefix.text);
             if (!hasLocalizedPrefixStructure(prefixText))
                 throw new SummaryFailure("invalid-response");
-            summary = `${historyText}\n\n${text.splitTurnHeader}\n${prefixText}`;
+            summary = `${separateBeforeAppend(historyText)}\n\n${text.splitTurnHeader}\n${prefixText}`;
             usage = combineUsage(historyUsage, prefix.usage);
         }
         else {
@@ -710,13 +742,16 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
                 throw new SummaryFailure("invalid-response");
         }
         guard.validate();
-        summary = withoutFileTracking(summary);
+        summary = withoutFileTracking(summary, unchangedHistory ? sources : []);
+        if (unchangedHistory && !hasLocalizedSummaryStructure(summary, true))
+            throw new SummaryFailure("invalid-response");
         const files = collectFileLists(preparation.fileOps, event.branchEntries);
-        const hints = formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
+        const carriedHints = unchangedHistory ? carryFileHints(unchangedHistory, summary, files, event.branchEntries) : undefined;
+        const hints = carriedHints ?? formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
         guard.validate();
         return {
             compaction: {
-                summary: `${summary}${hints}`,
+                summary: `${hints ? separateBeforeAppend(summary) : summary}${hints}`,
                 firstKeptEntryId: preparation.firstKeptEntryId,
                 tokensBefore: preparation.tokensBefore,
                 ...(usage ? { usage } : {}),
@@ -750,9 +785,10 @@ export async function summarizeTree(event: SessionBeforeTreeEvent, ctx: Extensio
 		const summary = withoutFileTracking(localizeSummaryStructure(stripBranchSummaryPreamble(result.text)));
 		if (!replaceInstructions && !hasLocalizedSummaryStructure(summary, false)) return undefined;
 		const files = collectFileLists(prepared.fileOps, event.preparation.entriesToSummarize);
+		const hints = formatFileHints(files, prepared.messages, summary);
 		return {
 			summary: {
-				summary: `${summary}${formatFileHints(files, prepared.messages, summary)}`,
+				summary: hints ? `${separateBeforeAppend(summary)}${hints}` : summary,
 				...(result.usage ? { usage: result.usage } : {}),
 				details: files,
 			},

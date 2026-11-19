@@ -26,9 +26,11 @@ export function compose(pi: ExtensionAPI, retryConfig: ProviderRetryConfig = loa
 	// восстановленную цель и новую эпоху ядра.
 	let gate = (): GoalGate => "absent";
 	const tickets = registerTickets(pi, driver, () => gate());
-	const compaction = registerCompaction(pi, settings, driver, tickets, () => gate());
+	let cancelDeferredWakes = (): void => {};
+	const compaction = registerCompaction(pi, settings, driver, tickets, () => gate(), () => cancelDeferredWakes());
 	const continuation = registerGoalContinuation(pi, goal, driver, tickets, retryConfig);
 	gate = continuation.gate;
+	cancelDeferredWakes = continuation.cancelDeferredWakes;
 	goal.bindRunHooks(continuation.hooks);
 	driver.bind((effect, ctx) => {
 		tickets.execute(effect);

@@ -68,7 +68,7 @@ type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durati
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
  * карточки и рабочая стадия (строки реестра С01–С14).
  */
-export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets, gate: () => GoalGate = () => "absent"): (effect: CoreEffect, ctx: ExtensionContext) => void {
+export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets, gate: () => GoalGate = () => "absent", cancelDeferredWakes: () => void = () => {}): (effect: CoreEffect, ctx: ExtensionContext) => void {
 	const language = settings.summaryLanguage;
 	const say = sayFor(language);
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
@@ -278,13 +278,14 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		transfer.restore(ctx);
 	});
 	const switched = (ctx: ExtensionContext): void => {
+		cancelDeferredWakes();
 		++summarySequence;
 		transfer.cancel(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
 	};
 	pi.on("session_before_switch", (_event, ctx) => { switched(ctx); });
 	pi.on("session_before_fork", (_event, ctx) => { switched(ctx); });
-	pi.on("session_tree", (_event, ctx) => { transfer.cancel(ctx); });
+	pi.on("session_tree", (_event, ctx) => { switched(ctx); });
 	pi.on("model_select", async (event, ctx) => {
 		stage.observe("model_select", event, ctx);
 		++summarySequence;
