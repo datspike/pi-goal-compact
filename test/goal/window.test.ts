@@ -132,6 +132,24 @@ test("дословные реплики учитывают замены и уд�
   assert.deepEqual(compactedOwnerReplies([...branch, edit("d", "old", { content: "После сжатия." })]), ["Действующая редакция."]);
 });
 
+test("в дословные цитаты не возвращаются подтверждённые журналом служебные запросы", () => {
+  const operation = "12345678-1234-1234-1234-123456789abc";
+  const native = `[context-compaction-native:${operation}] Служебный запрос.`;
+  const followUp = "Служебное продолжение. <!-- pi-context-compaction:follow-up:job-1 -->";
+  const user = (id: string, content: string) => ({ type: "message", id, message: { role: "user", content } });
+  const branch = [
+    user("human", "Настоящее поручение."),
+    user("native", native),
+    { type: "custom", id: "operation", customType: "context-compaction-native", data: { id: operation, phase: "queued" } },
+    user("followUp", followUp),
+    { type: "custom", id: "audit", customType: "context-compaction-audit", data: { correlation: "job-1", phase: "send-attempted", origin: "manual-tool" } },
+    user("kept", "Хвост."),
+    { type: "compaction", id: "compact", firstKeptEntryId: "kept" },
+  ];
+  assert.deepEqual(compactedOwnerReplies(branch), ["Настоящее поручение."]);
+  assert.deepEqual(compactedOwnerReplies(branch.filter(e => e.type !== "custom")), ["Настоящее поручение.", native, followUp]);
+});
+
 const goalRecord = (data: unknown) => ({ type: "custom", customType: RECORD.goal, data });
 const compaction = { type: "compaction" };
 

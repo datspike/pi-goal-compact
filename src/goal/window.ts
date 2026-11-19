@@ -1,4 +1,5 @@
 import { say } from "../language.js";
+import { isHumanUserMessage } from "../compaction/checkpoint.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
 import { classifySummaryLines, isSplitTurnBoundary } from "../compaction/summary.js";
 
@@ -106,16 +107,14 @@ interface BranchEntry {
   type: string;
   id: string;
   firstKeptEntryId?: string;
-  message?: unknown;
+  message?: { role?: string; content?: unknown };
+  customType?: string;
+  data?: unknown;
   targetId?: string;
   replacement?: { content: unknown } | null;
 }
 
-function messageText(message: unknown, edit?: { content: unknown }): string | null {
-  if (!message || typeof message !== "object") return null;
-  const candidate = message as { role?: unknown; content?: unknown };
-  if (candidate.role !== "user") return null;
-  const content = edit ? edit.content : candidate.content;
+function messageText(content: unknown): string | null {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return null;
   const text = content
@@ -139,18 +138,19 @@ export function compactedOwnerReplies(branch: readonly BranchEntry[]): string[] 
   const end = keptIndex >= 0 ? keptIndex : compactIndex;
   // Как и договорённость, дословные реплики фиксируются на момент сжатия.
   // Правка может стоять в хвосте, хотя меняет реплику из сжатой части.
+  const beforeCompaction = branch.slice(0, compactIndex);
   const edits = new Map<string, { content: unknown } | null>();
-  for (const entry of branch.slice(0, compactIndex)) {
+  for (const entry of beforeCompaction) {
     if (entry.type === "context_edit" && entry.targetId && entry.replacement !== undefined) {
       edits.set(entry.targetId, entry.replacement);
     }
   }
   const replies: string[] = [];
   for (const entry of branch.slice(0, end)) {
-    if (entry.type !== "message") continue;
+    if (!isHumanUserMessage(entry, beforeCompaction)) continue;
     const edit = edits.get(entry.id);
     if (edit === null) continue;
-    const text = messageText(entry.message, edit);
+    const text = messageText(edit ? edit.content : entry.message?.content);
     if (text) replies.push(text);
   }
   return replies;

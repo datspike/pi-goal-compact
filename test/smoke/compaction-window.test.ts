@@ -106,13 +106,15 @@ test("свежая файловая наводка доходит до пров�
   });
 });
 
-test("в запрос без цели после сжатия попадает исправленная реплика, а не прежний текст", { timeout: 30_000 }, async () => {
+test("в запрос без цели после сжатия попадает исправленная реплика, а не прежний или служебный текст", { timeout: 30_000 }, async () => {
   const timestamp = new Date(0).toISOString();
   const seed = [
     { type: "session", version: 3, id: "ba7fddf2-494f-49ba-8ee2-5ba0ea13c762", timestamp, cwd: process.cwd() },
     { type: "message", id: "old", parentId: null, timestamp, message: { role: "user", content: "ORIGINAL_PROBE_TEXT", timestamp: 0 } },
     { type: "message", id: "removed", parentId: "old", timestamp, message: { role: "user", content: "REMOVED_PROBE_TEXT", timestamp: 0 } },
-    { type: "message", id: "kept", parentId: "removed", timestamp, message: { role: "user", content: "KEPT_PROBE_TEXT", timestamp: 0 } },
+    { type: "message", id: "service", parentId: "removed", timestamp, message: { role: "user", content: "SERVICE_QUOTE_PROBE <!-- pi-context-compaction:follow-up:job-1 -->", timestamp: 0 } },
+    { type: "custom", id: "audit", parentId: "service", timestamp, customType: "context-compaction-audit", data: { correlation: "job-1", phase: "send-attempted", origin: "manual-tool" } },
+    { type: "message", id: "kept", parentId: "audit", timestamp, message: { role: "user", content: "KEPT_PROBE_TEXT", timestamp: 0 } },
     { type: "context_edit", id: "replace", parentId: "kept", timestamp, targetId: "old", replacement: { content: "REPLACEMENT_PROBE_TEXT" } },
     { type: "context_edit", id: "delete", parentId: "replace", timestamp, targetId: "removed", replacement: null },
     { type: "compaction", id: "prior", parentId: "delete", timestamp, firstKeptEntryId: "kept", tokensBefore: 100, summary: "## Цель\nПроверить продолжение." },
@@ -125,5 +127,6 @@ test("в запрос без цели после сжатия попадает �
     assert.ok(request.window.includes("KEPT_PROBE_TEXT"));
     assert.ok(!request.window.includes("ORIGINAL_PROBE_TEXT"));
     assert.ok(!request.window.includes("REMOVED_PROBE_TEXT"));
+    assert.ok(!request.window.includes("SERVICE_QUOTE_PROBE"));
   });
 });
