@@ -284,7 +284,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	};
 	pi.on("session_before_switch", (_event, ctx) => { switched(ctx); });
 	pi.on("session_before_fork", (_event, ctx) => { switched(ctx); });
-	pi.on("session_tree", (_event, ctx) => { transfer.cancel(ctx); });
+	pi.on("session_tree", (_event, ctx) => { switched(ctx); });
 	pi.on("model_select", async (event, ctx) => {
 		stage.observe("model_select", event, ctx);
 		++summarySequence;

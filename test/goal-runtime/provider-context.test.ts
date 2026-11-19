@@ -82,3 +82,25 @@ test("устаревший билет гаснет одинаково в каж�
   assert.doesNotMatch(first[0]!, /pi_goal_continuation|Continue/);
   assert.deepEqual(second.slice(0, 1), first);
 });
+
+test("переход по дереву гасит билет старой цели, но допускает билет выбранной ветки", async () => {
+  const harness = createRuntimeHarness();
+  await harness.runCommand("Работа в ветке A");
+  await harness.emit("session_tree", { type: "session_tree", oldLeafId: "root", newLeafId: "a" });
+  const old = goalTickets(harness)[0];
+  assert.ok(old);
+  const other = createRuntimeHarness();
+  await other.runCommand("Работа в ветке B");
+  harness.entries.splice(0, harness.entries.length, ...other.entries);
+  await harness.emit("session_tree", { type: "session_tree", oldLeafId: "a", newLeafId: "b" });
+  assert.equal(harness.snapshot().goal?.objective, "Работа в ветке B");
+  await deliverTicket(harness, old);
+  assert.equal(harness.abortCount, 1);
+  const current = goalTickets(harness)[1];
+  assert.ok(current);
+  const goal = harness.snapshot().goal;
+  assert.ok(goal);
+  assert.ok(String(current.message.content).includes(`goal_id="${goal.goalId}"`));
+  await deliverTicket(harness, current);
+  assert.equal(harness.abortCount, 1);
+});
