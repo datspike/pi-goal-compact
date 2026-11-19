@@ -687,7 +687,14 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         const maxTokens = Math.min(Math.floor(preparation.settings.reserveTokens * 0.8), serviceMaxTokens > 0 ? serviceMaxTokens : Number.POSITIVE_INFINITY);
         let summary: string;
         let usage: Usage | undefined;
-        if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
+        const unchangedHistory = preparation.isSplitTurn && preparation.turnPrefixMessages.length === 0 && preparation.messagesToSummarize.length === 0 && !event.customInstructions
+            ? preparation.previousSummary
+            : undefined;
+        if (unchangedHistory) {
+            // Фильтр мог убрать весь отрезанный служебный ход. Переписывать прежний смысл нечем.
+            summary = unchangedHistory;
+        }
+        else if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
             let historyText = preparation.previousSummary ? localizeSummaryStructure(withoutFileTracking(preparation.previousSummary, sources)) : text.noHistory;
             let historyUsage: Usage | undefined;
             if (preparation.messagesToSummarize.length > 0) {
@@ -718,7 +725,9 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
                 throw new SummaryFailure("invalid-response");
         }
         guard.validate();
-        summary = withoutFileTracking(summary);
+        summary = withoutFileTracking(summary, unchangedHistory ? sources : []);
+        if (unchangedHistory && !hasLocalizedSummaryStructure(summary, true))
+            throw new SummaryFailure("invalid-response");
         const files = collectFileLists(preparation.fileOps, event.branchEntries);
         const hints = formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
         guard.validate();

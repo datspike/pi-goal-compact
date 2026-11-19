@@ -130,6 +130,51 @@ test("Russian compact keeps localized headings, split-turn context and cumulativ
 	expect(split.summary).toContain("действует он; разделы выше описывают состояние до хода.\n## Исходный запрос");
 });
 
+test("пустой после фильтра разрез не переписывает прежнюю сводку", async () => {
+    const previousSummary = "## Цель\nСверить результаты.\n\n## Следующие шаги\nОткрытая проверка.";
+    let calls = 0;
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async () => {
+            calls++;
+            return { content: [{ type: "text", text: "## Цель\nНовая сводка вместо старой." }] };
+        } },
+    };
+    const saved = await compactedWith(compactEvent({ isSplitTurn: true, previousSummary }), ctx);
+    expect(calls).toEqual(0);
+    expect(saved.summary).toEqual(previousSummary);
+    expect(saved.firstKeptEntryId).toEqual("kept");
+});
+
+test("явные инструкции пересказывают прежнюю сводку даже при пустом разрезе", async () => {
+    const previousSummary = "## Цель\nСверить результаты.";
+    const customInstructions = "Укажи, какая проверка осталась открытой.";
+    const requests: string[] = [];
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async (_model, context) => {
+            requests.push(JSON.stringify(context.messages));
+            return { content: [{ type: "text", text: "## Цель\nСверить результаты. Открыта проверка второй строки." }] };
+        } },
+    };
+    const saved = await compactedWith({ ...compactEvent({ isSplitTurn: true, previousSummary }), customInstructions }, ctx);
+    expect(requests.length).toEqual(1);
+    expect(requests[0]).toContain(JSON.stringify(previousSummary).slice(1, -1));
+    expect(requests[0]).toContain(customInstructions);
+    expect(saved.summary).toContain("Открыта проверка второй строки.");
+});
+
+test("негодная прежняя сводка не переносится в пустой разрез", async () => {
+    const reasons: string[] = [];
+    const ctx: FakeContext = {
+        model: { maxTokens: 8192 },
+        modelRegistry: { complete: async () => { throw new Error("лишний запрос"); } },
+    };
+    const event = compactEvent({ isSplitTurn: true, previousSummary: "Без структурного заголовка." });
+    expect(await compactWith(event, ctx, { onFailure: (reason) => reasons.push(reason) })).toEqual({ cancel: true });
+    expect(reasons).toEqual(["invalid-response"]);
+});
+
 test("английскую сводку тоже пишет расширение: английские разделы, правила и наводки", async () => {
 	setLanguage("en");
 	try {
