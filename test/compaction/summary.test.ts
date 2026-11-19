@@ -130,6 +130,25 @@ test("Russian compact keeps localized headings, split-turn context and cumulativ
 	expect(split.summary).toContain("действует он; разделы выше описывают состояние до хода.\n## Исходный запрос");
 });
 
+test("незакрытый пример не поглощает свежий запрос и файловое приложение", async () => {
+	const { withoutGoalSection } = await import("../../src/goal/window.js");
+	const responses = [
+		"## Goal\nOld.\n\n```markdown\nExample.",
+		"## Original Request\nТолько чтение.\n\n~~~~text\nExample.",
+		"## Goal\nOld.\n\n```markdown\nExample.",
+	];
+	const ctx: FakeContext = { model: { maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: responses.shift() }], usage: { input: 1 } }) } };
+	const message = userMessage("Только чтение.");
+	const fileOps = { read: new Set(["notes/map.md"]), edited: new Set<string>() };
+	const split = await compactedWith(compactEvent({ isSplitTurn: true, messagesToSummarize: [message], turnPrefixMessages: [message], fileOps }), ctx);
+	const stripped = withoutGoalSection(split.summary);
+	expect(stripped).toContain("**Контекст разрезанного хода:**");
+	expect(stripped).toContain("Только чтение.");
+	expect(stripped).toContain("~~~~\n\n<file-hints>");
+	const normal = await compactedWith(compactEvent({ messagesToSummarize: [message], fileOps }), ctx);
+	expect(withoutGoalSection(normal.summary)).toContain("<file-hints>");
+});
+
 test("если после фильтра нет нового содержания, сводка сохраняется с разрезом хода и без него", async () => {
     const previousSummary = "## Цель\nСверить результаты.\n\n## Следующие шаги\nОткрытая проверка.";
     let calls = 0;

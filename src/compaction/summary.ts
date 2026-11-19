@@ -227,11 +227,10 @@ const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 type SummaryLine = { line: string; protected: boolean; fileBlockStart?: true };
 type FenceState = { character: "`" | "~"; length: number };
 
-/** Отделяет строки структуры сводки от кода и машинных блоков. */
-export function classifySummaryLines(summary: string): SummaryLine[] {
+function scanSummary(summary: string): { lines: SummaryLine[]; fence: FenceState | undefined } {
 	let fence: FenceState | undefined;
 	let machineBlock: string | undefined;
-	return summary.split("\n").map((line) => {
+	const lines = summary.split("\n").map((line): SummaryLine => {
 		const trimmed = line.trim();
 		if (fence) {
 			const close = trimmed.match(/^(`+|~+)\s*$/)?.[1];
@@ -255,6 +254,18 @@ export function classifySummaryLines(summary: string): SummaryLine[] {
 		}
 		return { line, protected: false };
 	});
+	return { lines, fence };
+}
+
+/** Отделяет строки структуры сводки от кода и машинных блоков. */
+export function classifySummaryLines(summary: string): SummaryLine[] {
+	return scanSummary(summary).lines;
+}
+
+/** Наша граница или приложение не должны стать частью незакрытого примера сводчика. */
+function closeFenceBeforeAppend(summary: string): string {
+	const { fence } = scanSummary(summary);
+	return fence ? `${summary}\n${fence.character.repeat(fence.length)}` : summary;
 }
 
 /**
@@ -713,7 +724,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
             const prefixText = localizeSummaryStructure(prefix.text);
             if (!hasLocalizedPrefixStructure(prefixText))
                 throw new SummaryFailure("invalid-response");
-            summary = `${historyText}\n\n${text.splitTurnHeader}\n${prefixText}`;
+            summary = `${closeFenceBeforeAppend(historyText)}\n\n${text.splitTurnHeader}\n${prefixText}`;
             usage = combineUsage(historyUsage, prefix.usage);
         }
         else {
@@ -734,7 +745,7 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         guard.validate();
         return {
             compaction: {
-                summary: `${summary}${hints}`,
+                summary: `${hints && !unchangedHistory ? closeFenceBeforeAppend(summary) : summary}${hints}`,
                 firstKeptEntryId: preparation.firstKeptEntryId,
                 tokensBefore: preparation.tokensBefore,
                 ...(usage ? { usage } : {}),
