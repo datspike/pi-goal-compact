@@ -130,7 +130,7 @@ test("Russian compact keeps localized headings, split-turn context and cumulativ
 	expect(split.summary).toContain("действует он; разделы выше описывают состояние до хода.\n## Исходный запрос");
 });
 
-test("пустой после фильтра разрез не переписывает прежнюю сводку", async () => {
+test("если после фильтра нет нового содержания, сводка сохраняется с разрезом хода и без него", async () => {
     const previousSummary = "## Цель\nСверить результаты.\n\n## Следующие шаги\nОткрытая проверка.";
     let calls = 0;
     const ctx: FakeContext = {
@@ -140,10 +140,12 @@ test("пустой после фильтра разрез не переписы�
             return { content: [{ type: "text", text: "## Цель\nНовая сводка вместо старой." }] };
         } },
     };
-    const saved = await compactedWith(compactEvent({ isSplitTurn: true, previousSummary }), ctx);
-    expect(calls).toEqual(0);
-    expect(saved.summary).toEqual(previousSummary);
-    expect(saved.firstKeptEntryId).toEqual("kept");
+    for (const isSplitTurn of [true, false]) {
+        const saved = await compactedWith(compactEvent({ isSplitTurn, previousSummary }), ctx);
+        expect(calls).toEqual(0);
+        expect(saved.summary).toEqual(previousSummary);
+        expect(saved.firstKeptEntryId).toEqual("kept");
+    }
 });
 
 test("явные инструкции пересказывают прежнюю сводку даже при пустом разрезе", async () => {

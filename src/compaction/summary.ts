@@ -687,11 +687,11 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         const maxTokens = Math.min(Math.floor(preparation.settings.reserveTokens * 0.8), serviceMaxTokens > 0 ? serviceMaxTokens : Number.POSITIVE_INFINITY);
         let summary: string;
         let usage: Usage | undefined;
-        const unchangedHistory = preparation.isSplitTurn && preparation.turnPrefixMessages.length === 0 && preparation.messagesToSummarize.length === 0 && !event.customInstructions
+        const unchangedHistory = preparation.turnPrefixMessages.length === 0 && preparation.messagesToSummarize.length === 0 && !event.customInstructions
             ? preparation.previousSummary
             : undefined;
         if (unchangedHistory) {
-            // Фильтр мог убрать весь отрезанный служебный ход. Переписывать прежний смысл нечем.
+            // После фильтра в сжатой части могли остаться только данные прежней сводки.
             summary = unchangedHistory;
         }
         else if (preparation.isSplitTurn && preparation.turnPrefixMessages.length > 0) {
