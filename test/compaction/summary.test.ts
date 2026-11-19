@@ -167,6 +167,17 @@ test("если после фильтра нет нового содержани�
     }
 });
 
+test("новые наводки при переносе сводки остаются вне незакрытого примера", async () => {
+    const { withoutGoalSection } = await import("../../src/goal/window.js");
+    const previousSummary = "## Цель\nСверить результаты.\n\n```markdown\nПример.";
+    const ctx: FakeContext = { model: { maxTokens: 8192 }, modelRegistry: { complete: async () => { throw new Error("лишний запрос"); } } };
+    const fileOps = { read: new Set(["notes/map.md"]), edited: new Set<string>() };
+    const saved = await compactedWith(compactEvent({ previousSummary, fileOps }), ctx);
+    expect(saved.summary).toContain(`${previousSummary}\n\`\`\`\n\n<file-hints>`);
+    expect(withoutGoalSection(saved.summary)).toContain("<file-hints>");
+    expect(saved.details.readFiles).toEqual(["notes/map.md"]);
+});
+
 test("явные инструкции пересказывают прежнюю сводку даже при пустом разрезе", async () => {
     const previousSummary = "## Цель\nСверить результаты.";
     const customInstructions = "Укажи, какая проверка осталась открытой.";

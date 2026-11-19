@@ -740,12 +740,12 @@ export async function summarizeCompaction(event: SessionBeforeCompactEvent, ctx:
         if (unchangedHistory && !hasLocalizedSummaryStructure(summary, true))
             throw new SummaryFailure("invalid-response");
         const files = collectFileLists(preparation.fileOps, event.branchEntries);
-        const carriedHints = unchangedHistory && carryFileHints(unchangedHistory, summary, files, event.branchEntries);
+        const carriedHints = unchangedHistory ? carryFileHints(unchangedHistory, summary, files, event.branchEntries) : undefined;
         const hints = carriedHints ?? formatFileHints(files, [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], summary);
         guard.validate();
         return {
             compaction: {
-                summary: `${hints && !unchangedHistory ? closeFenceBeforeAppend(summary) : summary}${hints}`,
+                summary: `${hints ? closeFenceBeforeAppend(summary) : summary}${hints}`,
                 firstKeptEntryId: preparation.firstKeptEntryId,
                 tokensBefore: preparation.tokensBefore,
                 ...(usage ? { usage } : {}),
