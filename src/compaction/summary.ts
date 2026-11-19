@@ -779,9 +779,10 @@ export async function summarizeTree(event: SessionBeforeTreeEvent, ctx: Extensio
 		const summary = withoutFileTracking(localizeSummaryStructure(stripBranchSummaryPreamble(result.text)));
 		if (!replaceInstructions && !hasLocalizedSummaryStructure(summary, false)) return undefined;
 		const files = collectFileLists(prepared.fileOps, event.preparation.entriesToSummarize);
+		const hints = formatFileHints(files, prepared.messages, summary);
 		return {
 			summary: {
-				summary: `${summary}${formatFileHints(files, prepared.messages, summary)}`,
+				summary: hints ? `${closeFenceBeforeAppend(summary)}${hints}` : summary,
 				...(result.usage ? { usage: result.usage } : {}),
 				details: files,
 			},

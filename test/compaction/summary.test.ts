@@ -251,6 +251,16 @@ test("Russian /tree keeps localized headings and usage", async () => {
 	expect(result?.usage).toEqual({ input: 3 });
 });
 
+test("сводка /tree не прячет файловые наводки в незакрытом примере", async () => {
+	const ctx: FakeContext = { model: { contextWindow: 128000, maxTokens: 8192 }, modelRegistry: { complete: async () => ({ content: [{ type: "text", text: "## Goal\nПроверить ветку.\n\n```md\nПример." }], usage: { input: 3 } }) } };
+	const event: FakeTreeEvent = { signal: new AbortController().signal, preparation: { userWantsSummary: true, entriesToSummarize: [{
+		type: "compaction", summary: "Прежняя сводка.", details: { readFiles: ["notes/probe.md"], modifiedFiles: [] },
+	}] } };
+	const result = await treeSummaryWith(event, ctx);
+	expect(result?.summary).toContain("Пример.\n```\n\n<file-hints>");
+	expect(result?.details.readFiles).toEqual(["notes/probe.md"]);
+});
+
 type Call = Parameters<FakeComplete>;
 
 /** Сжатие под охраной контекста: сессия, дерево, модель и маршрут могут меняться во время запроса. */
