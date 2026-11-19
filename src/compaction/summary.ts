@@ -224,13 +224,13 @@ const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 	"**Turn Context (split turn):**": "**Контекст разрезанного хода:**",
 };
 
-type SummaryLine = { line: string; protected: boolean };
+type SummaryLine = { line: string; protected: boolean; fileBlockStart?: true };
 type FenceState = { character: "`" | "~"; length: number };
 
 /** Отделяет строки структуры сводки от кода и машинных блоков. */
 export function classifySummaryLines(summary: string): SummaryLine[] {
 	let fence: FenceState | undefined;
-	let machineBlock: "read" | "modified" | undefined;
+	let machineBlock: string | undefined;
 	return summary.split("\n").map((line) => {
 		const trimmed = line.trim();
 		if (fence) {
@@ -239,18 +239,20 @@ export function classifySummaryLines(summary: string): SummaryLine[] {
 			if (closesFence) fence = undefined;
 			return { line, protected: true };
 		}
+		if (machineBlock) {
+			if (trimmed === machineBlock) machineBlock = undefined;
+			return { line, protected: true };
+		}
 		const openingFence = trimmed.match(/^(`{3,}|~{3,})/)?.[1];
 		if (openingFence) {
 			fence = { character: openingFence[0] as "`" | "~", length: openingFence.length };
 			return { line, protected: true };
 		}
-		if (machineBlock) {
-			const closesMachine = (machineBlock === "read" && trimmed === "</read-files>") || (machineBlock === "modified" && trimmed === "</modified-files>");
-			if (closesMachine) machineBlock = undefined;
-			return { line, protected: true };
+		const fileTag = /^<(read-files|modified-files|file-hints)>$/.exec(line.trimEnd())?.[1];
+		if (fileTag) {
+			machineBlock = `</${fileTag}>`;
+			return { line, protected: true, fileBlockStart: true };
 		}
-		if (trimmed === "<read-files>") { machineBlock = "read"; return { line, protected: true }; }
-		if (trimmed === "<modified-files>") { machineBlock = "modified"; return { line, protected: true }; }
 		return { line, protected: false };
 	});
 }

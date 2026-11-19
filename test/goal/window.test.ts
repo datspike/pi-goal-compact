@@ -42,6 +42,14 @@ test("заголовок цели внутри примера не удаляе�
   assert.equal(withoutGoalSection(`## Цель\nСтарое поручение.\n\n${tail}`), tail);
 });
 
+test("при удалении единственного раздела цели файловое приложение остаётся", () => {
+  for (const tag of ["file-hints", "read-files", "modified-files"]) {
+    const example = `\`\`\`xml\n<${tag}>\nне файловое приложение\n</${tag}>\n\`\`\``;
+    const appendix = `<${tag}>\n${tag === "file-hints" ? "\"notes/roadmap.md\"" : "notes/roadmap.md"}\n</${tag}>`;
+    assert.equal(withoutGoalSection(`## Цель\n${example}\nСтарое поручение.\n\n${appendix}`), appendix);
+  }
+});
+
 test("при незакрытой цели сразу за сводкой стоит одна копия последней редакции договорённости", () => {
   const goal = goalWithAgreement();
   const window = assembleWindow([summary, kept], { goal, features: DEFAULT_GOAL_FEATURES, ownerReplies: ["Старая реплика."] })!;

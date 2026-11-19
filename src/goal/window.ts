@@ -22,12 +22,13 @@ const GOAL_HEADINGS = ["## Цель", "## Goal"];
 
 /**
  * Убирает из сводки её раздел «Цель»: при незакрытой цели его место занимает договорённость (Т5.3).
- * Раздел кончается перед следующим заголовком второго уровня или перед разрезанным ходом.
+ * Раздел кончается перед следующим заголовком второго уровня, разрезанным ходом или файловым приложением.
  */
 export function withoutGoalSection(summary: string): string {
   const kept: string[] = [];
   let skipping = false;
-  for (const { line, protected: isProtected } of classifySummaryLines(summary)) {
+  for (const { line, protected: isProtected, fileBlockStart } of classifySummaryLines(summary)) {
+    if (fileBlockStart) skipping = false;
     if (!isProtected) {
       const heading = line.trimEnd();
       if (GOAL_HEADINGS.includes(heading)) {

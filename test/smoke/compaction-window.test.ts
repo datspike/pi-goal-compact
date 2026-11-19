@@ -68,5 +68,14 @@ test("Б3: окно после сжатия с целью — сводка бе�
     assert.ok(resumed.window.includes(boundary), "пометка приоритета доходит до провайдера");
     assert.ok(!resumed.window.includes("Старое поручение."));
     assert.equal(count(resumed.window, "## Договорённость (редакция"), 1);
+
+    const fileHint = "<file-hints>\n\"notes/roadmap.md\"\n</file-hints>";
+    const short = source.map((row, index) => JSON.stringify(index === compactIndex
+      ? { ...row, summary: `## Цель\nСтарое поручение.\n\n${fileHint}` } : row)).join("\n") + "\n";
+    await start("resume-files", { seed: short, prompt: "Продолжай по плану." });
+    const withFiles = requests("resume-files").find((request) => request.kind === "turn");
+    assert.ok(withFiles, "после возобновления есть запрос к провайдеру");
+    assert.ok(withFiles.window.includes("notes/roadmap.md"), "файловая наводка доходит до провайдера");
+    assert.ok(!withFiles.window.includes("Старое поручение."));
   });
 });
