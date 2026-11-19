@@ -19,6 +19,7 @@ export const PROBE_DONE = "PROBE_DONE";
 /** Сценарий провайдера: вызов инструмента на ходу, ходы с переполненным окном и последний ход. */
 export type ProbeScript = {
   calls: Record<number, [tool: string, args: Record<string, unknown>]>;
+  summaryText?: string;
   /** Ходы, после которых окно почти заполнено и Pi сжимает его по порогу. */
   heavySteps: number[];
   /** Последний ход отвечает текстом `PROBE_DONE`; ход сверх него — ошибка стенда. */
@@ -71,7 +72,7 @@ export default function(pi) {
       // Ход может быть разрезан сжатием, поэтому сводка годится и для истории («Цель»), и для начала хода («Исходный запрос»).
       if (window.includes("context summarization assistant")) {
         log("summary");
-        return reply({ ...base, stopReason: "stop", content: [{ type: "text", text: "## Цель\\nДовести проверку до закрытия цели.\\n\\n## Исходный запрос\\nПродолжить проверку." }], usage: usage(100) });
+        return reply({ ...base, stopReason: "stop", content: [{ type: "text", text: script.summaryText ?? "## Цель\\nДовести проверку до закрытия цели.\\n\\n## Исходный запрос\\nПродолжить проверку." }], usage: usage(100) });
       }
       step++;
       if (step > script.lastStep) throw new Error("Unexpected continuation loop");

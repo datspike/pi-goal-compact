@@ -57,6 +57,21 @@ async function transferSession(prefix: string, summarySteps: SummaryStep[], noti
  await session.bindExtensions({});
  return { session, manager, trace, async close() { await new Promise(resolve => setTimeout(resolve, 10)); session.dispose(); await rm(cwd, { recursive: true, force: true }); } };
 }
+
+test("перезагрузка сразу после сжатия отменяет проверку продолжения старого расширения", { timeout: 20_000 }, async () => {
+ const fixture = await transferSession("compact-reload-", ["ok"], false);
+ const { session, manager, trace } = fixture;
+ try {
+  await session.compact();
+  await session.reload();
+  // Даём выполниться таймеру, который до перезагрузки запланировало сжатие.
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await session.prompt("Продолжи после перезагрузки.");
+  assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 1);
+  assert.deepEqual(trace.map(item => item.split(":")[1]), ["summary", "work"]);
+ } finally { await fixture.close(); }
+});
+
 test("настоящий SDK при overflow сжимает старой моделью и повторяет запрос только новой", { timeout: 20000 }, async () => {
  const cwd = await mkdtemp(join(tmpdir(), "model-transfer-sdk-"));
  const trace: string[] = [];

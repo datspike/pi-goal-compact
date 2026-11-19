@@ -106,9 +106,19 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     driver.dispatch({ type: "wake", gate: reason }, ctx);
   };
 
+  const deferredWakes = new Set<ReturnType<typeof setTimeout>>();
+  const cancelDeferredWakes = (): void => {
+    for (const timer of deferredWakes) clearTimeout(timer);
+    deferredWakes.clear();
+  };
+
   /** Будит после текущего события: Pi ещё держит блокировку сжатия или переключения. */
   const wakeLater = (ctx: ExtensionContext): void => {
-    const timer = setTimeout(() => wake(ctx), 0);
+    const timer = setTimeout(() => {
+      deferredWakes.delete(timer);
+      wake(ctx);
+    }, 0);
+    deferredWakes.add(timer);
     timer.unref?.();
   };
 
@@ -200,6 +210,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   };
 
   pi.on("session_start", async (event, ctx) => {
+    cancelDeferredWakes();
     rebind(ctx);
     const goal = session.getGoal();
     // При возобновлении сессии приостановленная цель сама не оживает: владелец решает в диалоге (Ц35).
@@ -214,10 +225,12 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     wake(ctx);
   });
   pi.on("session_tree", (_event, ctx) => {
+    cancelDeferredWakes();
     rebind(ctx);
     wake(ctx);
   });
   pi.on("session_shutdown", () => {
+    cancelDeferredWakes();
     providerLimit.clear();
     subagents.clear();
     externalRetry.detach();
@@ -325,6 +338,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
   };
 
   return {
+    cancelDeferredWakes,
     hooks,
     /** Разрешение цели для сверки билета при доставке: уже выданный билет ждёт только известных работающих сабагентов. */
     gate: (): GoalGate => asGate(holdReason(true)),

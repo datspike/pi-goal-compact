@@ -26,6 +26,30 @@ test("раздел «Цель» вырезается до следующего �
   assert.equal(withoutGoalSection("## Goal\nx\n## Progress\ny"), "## Progress\ny");
 });
 
+test("после удаления короткой цели граница разрезанного хода остаётся в окне", () => {
+  for (const [goal, boundary, request] of [
+    ["Цель", "Контекст разрезанного хода", "Исходный запрос"],
+    ["Goal", "Turn Context (split turn)", "Original Request"],
+  ]) {
+    const tail = `**${boundary}:**\nЭтот ход меняет прежнее поручение.\n\n## ${request}\nНовое поручение.`;
+    assert.equal(withoutGoalSection(`## ${goal}\nСтарое поручение.\n\n${tail}`), tail);
+  }
+});
+
+test("заголовок цели внутри примера не удаляет часть сводки", () => {
+  const example = "```markdown\n## Goal\nExample, not the active goal.\n```";
+  const tail = `## Прогресс\n${example}\nПроверка не закончена.\n\n## Следующие шаги\nЗакончить проверку.`;
+  assert.equal(withoutGoalSection(`## Цель\nСтарое поручение.\n\n${tail}`), tail);
+});
+
+test("при удалении единственного раздела цели файловое приложение остаётся", () => {
+  for (const tag of ["file-hints", "read-files", "modified-files"]) {
+    const example = `\`\`\`xml\n<${tag}>\nне файловое приложение\n</${tag}>\n\`\`\``;
+    const appendix = `<${tag}>\n${tag === "file-hints" ? "\"notes/roadmap.md\"" : "notes/roadmap.md"}\n</${tag}>`;
+    assert.equal(withoutGoalSection(`## Цель\n${example}\nСтарое поручение.\n\n${appendix}`), appendix);
+  }
+});
+
 test("при незакрытой цели сразу за сводкой стоит одна копия последней редакции договорённости", () => {
   const goal = goalWithAgreement();
   const window = assembleWindow([summary, kept], { goal, features: DEFAULT_GOAL_FEATURES, ownerReplies: ["Старая реплика."] })!;
@@ -92,6 +116,38 @@ test("в реплики попадает только сжатая часть в
   ];
   assert.deepEqual(compactedOwnerReplies(branch), ["Первая реплика.", "Вторая"]);
   assert.deepEqual(compactedOwnerReplies(branch.slice(0, 4)), []);
+});
+
+test("дословные реплики учитывают замены и удаления до сжатия", () => {
+  const user = (id: string, content: string) => ({ type: "message", id, message: { role: "user", content } });
+  const edit = (id: string, targetId: string, replacement: { content: unknown } | null) => ({ type: "context_edit", id, targetId, replacement });
+  const branch = [
+    user("old", "Отменённое поручение."), user("removed", "Удалённое поручение."),
+    edit("a", "old", { content: "Первая редакция." }), user("kept", "Свежая реплика."),
+    edit("b", "old", { content: [{ type: "text", text: "Действующая редакция." }] }),
+    edit("c", "removed", null),
+    { type: "compaction", id: "compact", firstKeptEntryId: "kept" },
+  ];
+  assert.deepEqual(compactedOwnerReplies(branch), ["Действующая редакция."]);
+  assert.deepEqual(compactedOwnerReplies([...branch, edit("d", "old", { content: "После сжатия." })]), ["Действующая редакция."]);
+});
+
+test("в дословные цитаты не возвращаются подтверждённые журналом служебные запросы", () => {
+  const operation = "12345678-1234-1234-1234-123456789abc";
+  const native = `[context-compaction-native:${operation}] Служебный запрос.`;
+  const followUp = "Служебное продолжение. <!-- pi-context-compaction:follow-up:job-1 -->";
+  const user = (id: string, content: string) => ({ type: "message", id, message: { role: "user", content } });
+  const branch = [
+    user("human", "Настоящее поручение."),
+    user("native", native),
+    { type: "custom", id: "operation", customType: "context-compaction-native", data: { id: operation, phase: "queued" } },
+    user("followUp", followUp),
+    { type: "custom", id: "audit", customType: "context-compaction-audit", data: { correlation: "job-1", phase: "send-attempted", origin: "manual-tool" } },
+    user("kept", "Хвост."),
+    { type: "compaction", id: "compact", firstKeptEntryId: "kept" },
+  ];
+  assert.deepEqual(compactedOwnerReplies(branch), ["Настоящее поручение."]);
+  assert.deepEqual(compactedOwnerReplies(branch.filter(e => e.type !== "custom")), ["Настоящее поручение.", native, followUp]);
 });
 
 const goalRecord = (data: unknown) => ({ type: "custom", customType: RECORD.goal, data });
