@@ -201,6 +201,11 @@ export function summaryText(): SummaryText {
 	return SUMMARY_TEXT[language()];
 }
 
+/** Обе границы есть в сохранённых сводках, в том числе после смены языка. */
+export function isSplitTurnBoundary(line: string): boolean {
+  return Object.values(SUMMARY_TEXT).some(({ splitTurnHeader }) => splitTurnHeader.startsWith(`${line}\n`));
+}
+
 const SUMMARY_HEADINGS: Readonly<Record<string, string>> = {
 	"## Goal": "## Цель",
 	"## Constraints & Preferences": "## Ограничения и предпочтения",

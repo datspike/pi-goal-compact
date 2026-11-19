@@ -26,6 +26,16 @@ test("раздел «Цель» вырезается до следующего �
   assert.equal(withoutGoalSection("## Goal\nx\n## Progress\ny"), "## Progress\ny");
 });
 
+test("после удаления короткой цели граница разрезанного хода остаётся в окне", () => {
+  for (const [goal, boundary, request] of [
+    ["Цель", "Контекст разрезанного хода", "Исходный запрос"],
+    ["Goal", "Turn Context (split turn)", "Original Request"],
+  ]) {
+    const tail = `**${boundary}:**\nЭтот ход меняет прежнее поручение.\n\n## ${request}\nНовое поручение.`;
+    assert.equal(withoutGoalSection(`## ${goal}\nСтарое поручение.\n\n${tail}`), tail);
+  }
+});
+
 test("при незакрытой цели сразу за сводкой стоит одна копия последней редакции договорённости", () => {
   const goal = goalWithAgreement();
   const window = assembleWindow([summary, kept], { goal, features: DEFAULT_GOAL_FEATURES, ownerReplies: ["Старая реплика."] })!;

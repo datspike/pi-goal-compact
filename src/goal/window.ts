@@ -1,5 +1,6 @@
 import { say } from "../language.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
+import { isSplitTurnBoundary } from "../compaction/summary.js";
 
 import { RECORD, withCurrentRecordNames } from "../records.js";
 import { renderAgreement } from "./agreement.js";
@@ -21,7 +22,7 @@ const GOAL_HEADINGS = ["## Цель", "## Goal"];
 
 /**
  * Убирает из сводки её раздел «Цель»: при незакрытой цели его место занимает договорённость (Т5.3).
- * Раздел идёт от заголовка до следующего заголовка второго уровня.
+ * Раздел кончается перед следующим заголовком второго уровня или перед разрезанным ходом.
  */
 export function withoutGoalSection(summary: string): string {
   const lines = summary.split("\n");
@@ -33,7 +34,7 @@ export function withoutGoalSection(summary: string): string {
       skipping = true;
       continue;
     }
-    if (skipping && /^## /.test(heading)) skipping = false;
+    if (skipping && (/^## /.test(heading) || isSplitTurnBoundary(heading))) skipping = false;
     if (!skipping) kept.push(line);
   }
   return kept.join("\n").replace(/^\n+/, "");
