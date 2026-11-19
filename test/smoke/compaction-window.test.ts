@@ -55,5 +55,18 @@ test("Б3: окно после сжатия с целью — сводка бе�
     assert.equal(head(closed.window), head(after.window), "начало окна после закрытия то же");
     assert.ok(!closed.window.includes("Довести проверку до закрытия цели."), "раздел «Цель» сводки не вернулся");
     assert.ok(closed.window.includes("остаётся там до следующего сжатия только как история"), "ответ на закрытие несёт пометку");
+
+    // Воспроизводим короткую историческую часть сводки при открытой цели.
+    const compactIndex = rows.findIndex((row) => row.type === "compaction");
+    const source = rows.slice(0, compactIndex + 1);
+    const boundary = "**Контекст разрезанного хода:**";
+    const partial = `## Цель\nСтарое поручение.\n\n${boundary}\nНиже новое поручение.\n\n## Исходный запрос\nПродолжить по новому плану.`;
+    const seed = source.map((row, index) => JSON.stringify(index === compactIndex ? { ...row, summary: partial } : row)).join("\n") + "\n";
+    await start("resume-split", { seed, prompt: "Продолжай по плану." });
+    const resumed = requests("resume-split").find((request) => request.kind === "turn");
+    assert.ok(resumed, "после возобновления есть запрос к провайдеру");
+    assert.ok(resumed.window.includes(boundary), "пометка приоритета доходит до провайдера");
+    assert.ok(!resumed.window.includes("Старое поручение."));
+    assert.equal(count(resumed.window, "## Договорённость (редакция"), 1);
   });
 });
