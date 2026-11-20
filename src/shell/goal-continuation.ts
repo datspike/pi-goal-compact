@@ -91,7 +91,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     hidden.count++;
   };
 
-  const continuationText = (goal: ThreadGoal): string => compactContinuationPrompt(goal, session.continuationSnapshot());
+  const continuationText = (goal: ThreadGoal): string => compactContinuationPrompt(session.goalForDisplay() ?? goal, session.continuationSnapshot());
 
   /** Повод начать работу из простоя. Во время прогона и при сообщениях в очереди решит граница перед простоем. */
   const wake = (ctx: ExtensionContext): void => {

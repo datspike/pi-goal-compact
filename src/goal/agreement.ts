@@ -10,6 +10,7 @@ export interface GoalAgreement {
   ownerWants: string;
   /** Готово, когда: критерий готовности, включая условие отрицательного итога. */
   doneWhen: string;
+  minimumActiveSeconds?: number | null;
   /** Номер редакции; растёт с каждой правкой цели. */
   revision: number;
   /** Запись журнала с репликой владельца, по которой принята правка (Т7.1); ставит расширение. */
@@ -70,10 +71,15 @@ export function selfDecidedItemId(goalId: string, kind: SelfDecidedKind, text: s
   return `S-${createHash("sha256").update(`${goalId}\u0000${kind}\u0000${text.trim()}`).digest("hex").slice(0, 12)}`;
 }
 
+export function isMinimumActiveSeconds(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value > 0);
+}
+
 export function isGoalAgreement(value: unknown): value is GoalAgreement {
   if (!value || typeof value !== "object") return false;
   const candidate = value as GoalAgreement;
   return typeof candidate.ownerWants === "string" && typeof candidate.doneWhen === "string" && Number.isSafeInteger(candidate.revision) && candidate.revision >= 1 &&
+    (candidate.minimumActiveSeconds === undefined || isMinimumActiveSeconds(candidate.minimumActiveSeconds)) &&
     (candidate.ownerEntryId === undefined || typeof candidate.ownerEntryId === "string");
 }
 
@@ -114,6 +120,7 @@ export function renderAgreement(goal: AgreementSource): string {
     renderSelfDecided(goal.selfDecided ?? []),
     say("### Готово, когда", "### Done when"),
     goal.agreement.doneWhen,
+    ...(typeof goal.agreement.minimumActiveSeconds === "number" ? [say(`Минимум активной работы: ${goal.agreement.minimumActiveSeconds} с.`, `Minimum active work: ${goal.agreement.minimumActiveSeconds} s.`)] : []),
   ].join("\n\n");
 }
 

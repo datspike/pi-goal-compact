@@ -131,6 +131,11 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   let terminalFallbackHandled = false;
   let agentEndHandled = false;
   const activeToolCalls = new Map<string, string>();
+  // Не вычитаем ожидание, если в этом же интервале исполняется другой инструмент.
+  const refreshAccountingWait = (ctx: ExtensionContext): void => {
+    const names = [...activeToolCalls.values()];
+    session.accounting.setWaiting(ctx, names.length > 0 && names.every((name) => name === "bg_wait" || name === "ask_user"));
+  };
 
   const refreshToolActivity = (): void => {
     const name = [...activeToolCalls.values()].at(-1);
@@ -146,6 +151,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     await session.reloadFromSession(ctx);
     session.accountingState.activeGoalId = null;
     session.accountingState.lastAccountedAt = null;
+    session.accountingState.waiting = false;
     if (!ctx.isIdle()) session.accounting.beginAccounting();
   };
 
@@ -216,6 +222,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     terminalFallbackHandled = false;
     agentEndHandled = false;
     activeToolCalls.clear();
+    session.accountingState.waiting = false;
     session.accounting.beginAccounting();
     session.status.setActivity({ label: say("модель формирует ответ", "model is responding") });
     session.status.refreshUi(ctx);
@@ -225,6 +232,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     if (session.runIsForeign()) return;
     activeToolCalls.set(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`, event.toolName);
     refreshToolActivity();
+    refreshAccountingWait(ctx);
     session.status.refreshUi(ctx);
   });
 
@@ -235,6 +243,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     activeToolCalls.delete(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`);
     if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? say(`ошибка инструмента: ${event.toolName}`, `tool error: ${event.toolName}`) : say(`завершён инструмент: ${event.toolName}`, `tool finished: ${event.toolName}`) });
     else refreshToolActivity();
+    refreshAccountingWait(ctx);
     session.status.refreshUi(ctx);
     session.accounting.accountProgress(ctx, !session.isContinuationHeld(), 0, true);
     session.maybeFlushRuntime("runtime");
@@ -310,6 +319,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     }
     session.accountingState.activeGoalId = null;
     session.accountingState.lastAccountedAt = null;
+    session.accountingState.waiting = false;
     if (aborted.length > 0) session.pauseForAbort(ctx);
     session.endUserTurn();
   });

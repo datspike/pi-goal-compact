@@ -111,7 +111,7 @@ export function createGoalSession(pi: ExtensionAPI) {
   const features = (): GoalFeatures => goalFeatures(reports.getState().policy);
 
   const goalForDisplay = (): ThreadGoal | null =>
-    goalWithLiveUsage(persistence.getGoal(), accountingState.activeGoalId, accountingState.lastAccountedAt);
+    goalWithLiveUsage(persistence.getGoal(), accountingState.activeGoalId, accountingState.waiting ? null : accountingState.lastAccountedAt);
 
   const status = createGoalRuntimeStatus({
     getGoalForDisplay: goalForDisplay,

@@ -53,6 +53,7 @@ export interface GoalWorkingState {
   requiresUserDecision?: boolean;
   continuationHeld: boolean;
   usage: { tokensUsed: number; activeSeconds: number };
+  activeTimeEstimate?: ReturnType<typeof activeTimeEstimate>;
   projection: { stateSeq: number; currentProjectionSeq: number; fresh: boolean } | null;
   userAnswerReceived: boolean;
   artifactRefs: GoalArtifactRef[];
@@ -163,6 +164,21 @@ function commandHint(status: GoalStatus): string {
     return say("/gr (тихое возобновление), /gc", "/gr (silent resume), /gc");
   }
   return say("/gc; попроси агента создать или заменить цель", "/gc; ask the agent to create or replace a goal");
+}
+
+/** Остаток вычисляется из той же версии цели, которую видит потребитель. */
+export function activeTimeEstimate(goal: ThreadGoal | null) {
+  const minimum = goal?.agreement?.minimumActiveSeconds;
+  if (!goal || minimum === undefined) return undefined;
+  if (minimum === null) return { kind: "unavailable" as const };
+  const countedSeconds = goal.usage.activeSeconds;
+  return { kind: "approximate" as const, minimumSeconds: minimum, countedSeconds, remainingSeconds: Math.max(0, minimum - countedSeconds) };
+}
+
+export function formatActiveTimeEstimate(time: ReturnType<typeof activeTimeEstimate>): string | undefined {
+  if (!time) return undefined;
+  if (time.kind === "unavailable") return say("По учёту Pi: оценка оставшегося времени недоступна.", "Pi time estimate: remaining time is unavailable.");
+  return say(`По учёту Pi: около ${formatDuration(time.countedSeconds)} из ${formatDuration(time.minimumSeconds)}; осталось около ${formatDuration(time.remainingSeconds)}. Скрытое ожидание могло попасть в оценку.`, `Pi estimates ${formatDuration(time.countedSeconds)} counted out of ${formatDuration(time.minimumSeconds)}; approximately ${formatDuration(time.remainingSeconds)} remaining. Hidden waits may be included.`);
 }
 
 export function formatGoalSummary(goal: ThreadGoal | null): string {
@@ -327,6 +343,7 @@ export function goalWorkingState(
     awaitingUser: reportState?.awaitingUser ?? progress?.status === "awaiting_user",
     requiresUserDecision: reportState ? reportState.awaitingUser && (reportState.requiresUserDecision ?? true) : progress?.status === "awaiting_user",
     continuationHeld: reportState ? reportState.awaitingUser && !reportState.questionAnswerPending : false,
+    ...(goal?.agreement?.minimumActiveSeconds !== undefined ? { activeTimeEstimate: activeTimeEstimate(goal) } : {}),
     usage: goal?.usage ? { ...goal.usage } : { tokensUsed: 0, activeSeconds: 0 },
     projection: projection ? {
       stateSeq: projection.stateSeq,

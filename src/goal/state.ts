@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { isGoalAgreement, isSelfDecidedItem, selfDecidedItemId, validateAgreement, validateSelfDecidedText, MAX_SELF_DECIDED_ITEMS, type SelfDecidedKind } from "./agreement.js";
+import { isGoalAgreement, isMinimumActiveSeconds, isSelfDecidedItem, selfDecidedItemId, validateAgreement, validateSelfDecidedText, MAX_SELF_DECIDED_ITEMS, type SelfDecidedKind } from "./agreement.js";
 
 import {
   CUSTOM_ENTRY_TYPE,
@@ -97,12 +97,14 @@ export function statusAfterBudgetLimit(status: GoalStatus, tokensUsed: number, t
 export interface AgreementInput {
   ownerWants: string;
   doneWhen: string;
+  minimumActiveSeconds?: number | null;
   selfDecided?: readonly { kind: SelfDecidedKind; text: string }[];
 }
 
 export function validateAgreementInput(input: AgreementInput): string | null {
   const error = validateAgreement(input.ownerWants, input.doneWhen);
   if (error) return error;
+  if (input.minimumActiveSeconds !== undefined && !isMinimumActiveSeconds(input.minimumActiveSeconds)) return say("Минимум активной работы должен быть целым положительным числом секунд или null.", "Minimum active work must be a positive integer number of seconds or null.");
   if ((input.selfDecided?.length ?? 0) > MAX_SELF_DECIDED_ITEMS) return say(`В self_decided должно быть не больше ${MAX_SELF_DECIDED_ITEMS} пунктов.`, `self_decided must have ${MAX_SELF_DECIDED_ITEMS} items or fewer.`);
   for (const item of input.selfDecided ?? []) {
     const itemError = validateSelfDecidedText(item.text);
@@ -114,7 +116,7 @@ export function validateAgreementInput(input: AgreementInput): string | null {
 /** Ставит договорённость в цель; редакция растёт, прежние пункты списка сохраняются. */
 export function withAgreement(goal: ThreadGoal, input: AgreementInput, now = unixSeconds()): ThreadGoal {
   const next = cloneGoal(goal);
-  next.agreement = { ownerWants: input.ownerWants.trim(), doneWhen: input.doneWhen.trim(), revision: (goal.agreement?.revision ?? 0) + 1 };
+  next.agreement = { ownerWants: input.ownerWants.trim(), doneWhen: input.doneWhen.trim(), ...(input.minimumActiveSeconds !== undefined ? { minimumActiveSeconds: input.minimumActiveSeconds } : {}), revision: (goal.agreement?.revision ?? 0) + 1 };
   const items = [...(goal.selfDecided ?? [])];
   for (const item of input.selfDecided ?? []) {
     const id = selfDecidedItemId(goal.goalId, item.kind, item.text);

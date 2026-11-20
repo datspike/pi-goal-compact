@@ -7,9 +7,9 @@ import { retainedAgreementNotice } from "../../src/goal/window.js";
 
 // Отпечатки формы схем без описаний: поля, обязательность, enum и ограничения не сокращаются.
 const shapes: Record<string, string> = {
-  create_goal: "69fca4e584c7dc8e46919b2f3203cbf2bd8554724766644a7cb64e1690563847",
+  create_goal: "446fa6f465059872ca48e3208a60666f02eae0d2f2012ffe794230ba187c0b2e",
   update_goal_work: "eb3eadeac5715a8640d497aca9333da50e6037c13c1eff7035fa42b4a31f8436",
-  amend_goal: "40a34a268640630646dce815686c4a4c31c38336c978b2527ff57da929fe630a",
+  amend_goal: "29c72350ee8d57be6f106cc8dfc62dec4492959474cc1830792b38f3f6223b35",
   record_goal_note: "1b9b11cd336dcd593113a99373a6cd674be131baa82738a1dfe05f2e0a266ee9",
   report_goal_progress: "7e4e8dad497a646f31c86cb98df705ae16840bbf56ad9bc4114e546bb0ae9956",
   update_goal: "8a1df47dc12d5de0951fa190fb86e915e72cd54b5db44d4363265bc377509534",

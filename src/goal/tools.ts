@@ -35,9 +35,12 @@ const resumeGoalParams = () => Type.Object({
   })),
 }, { additionalProperties: false });
 
+const minimumActiveSecondsParam = () => Type.Optional(Type.Union([Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), Type.Null()], { description: say("Только при явно заданном минимуме активной работы: передай его в секундах, а согласованные исключения сохрани в done_when. Если минимум задан, но Pi не может надёжно учесть его условия, передай null и сохрани исходное условие целиком в done_when. Без заданного минимума пропусти поле.", "Only for an explicit minimum of active work: pass it in seconds and keep agreed exclusions in done_when. If the minimum was stated but Pi cannot estimate it reliably under the agreed conditions, pass null and keep the original condition in done_when. Omit this field when no minimum is set.") }));
+
 const agreementParam = () => Type.Object({
   owner_wants: Type.String({ minLength: 1, description: say("Чего хочет владелец: результат и важные ему качества; там, где важна сама формулировка, кратко процитируй владельца.", "What the owner wants: the outcome and the qualities that matter to them, briefly quoting the owner where the wording itself matters.") }),
-  done_when: Type.String({ minLength: 1, description: say("Готово, когда: критерий завершения, включая допустимый отрицательный итог. Если задан минимум активной работы, впиши сюда число, единицу и исключения (например: «Не меньше двух часов активной работы, не считая ожидания модельных проверок»). Исключения относятся к учёту, не к результату. owner_wants и done_when вместе не длиннее 2000 знаков.", "Done when: the completion criterion, including an acceptable negative result. If a minimum of active work was stated, put its amount, unit, and exclusions here (for example, ‘At least two hours of active work, excluding waits for model checks’). Exclusions apply to accounting, not the result. owner_wants and done_when together are at most 2000 characters.") }),
+  minimum_active_seconds: minimumActiveSecondsParam(),
+  done_when: Type.String({ minLength: 1, description: say("Готово, когда: критерий завершения, включая допустимый отрицательный итог. Минимум в секундах хранится отдельно. Исключения из учёта сохрани здесь; если оценка недоступна, сохрани всё условие. owner_wants и done_when вместе не длиннее 2000 знаков.", "Done when: the completion criterion, including an acceptable negative result. The numeric minimum is stored separately. Keep accounting exclusions here, or keep the whole condition if the estimate is unavailable. owner_wants and done_when together are at most 2000 characters.") }),
 }, { additionalProperties: false, description: say("Договорённость, которую расширение дословно показывает в начале каждого контекстного окна, пока цель не изменится.", "The agreement the extension keeps verbatim at the start of every context window until the goal changes.") });
 const selfDecidedParam = () => Type.Array(Type.Object({
   kind: stringEnum(SELF_DECIDED_KINDS, { description: say("assumption — твоё допущение; deferred_by_owner — владелец отложил вопрос; proposal — твоё собственное предложение.", "assumption — you assumed it; deferred_by_owner — the owner postponed the question; proposal — your own proposal.") }),
@@ -83,6 +86,7 @@ const amendGoalParams = () => Type.Object({
   agreement: Type.Optional(Type.Object({
     owner_wants: Type.String({ minLength: 1 }),
     done_when: Type.String({ minLength: 1 }),
+    minimum_active_seconds: minimumActiveSecondsParam(),
   }, { additionalProperties: false, description: say("Обязательно вместе с amendment, если у цели есть договорённость: полная новая редакция, а не разница.", "Required with amendment when the goal has an agreement: the complete new edition, not a diff.") })),
   self_decided: Type.Optional(selfDecidedParam()),
 }, { additionalProperties: false });
@@ -310,7 +314,7 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
     name: "get_goal",
     defaultActive: false,
     label: say("Прочитать цель", "Get Goal"),
-    description: say("Читает цель на текущей ветке сессии. Сохранённый договор — не дословная копия разговора: противоречия разрешай по фактическому запросу пользователя и одобренным уточнениям. Для сверки перед закрытием одного status мало.", "Read the Goal on the current session branch. The stored contract is not a verbatim copy of the conversation: resolve conflicts against the actual user request and approved clarifications. A status-only read is not enough for a completion audit."),
+    description: say("Читает цель на текущей ветке сессии. Сохранённый договор — не дословная копия разговора: противоречия разрешай по фактическому запросу пользователя и одобренным уточнениям. Для сверки перед закрытием одного status мало. view=status показывает оценку остатка времени; запрашивай её между подсказками, только если свежая оценка изменит следующий шаг.", "Read the Goal on the current session branch. The stored contract is not a verbatim copy of the conversation: resolve conflicts against the actual user request and approved clarifications. A status-only read is not enough for a completion audit. view=status shows the remaining time estimate; request it between prompts only if a fresh estimate changes the next step."),
     promptSnippet: say("Прочитать цель или её историю.", "Read the Goal or its history."),
     promptGuidelines: goalToolGuidelines("get_goal"),
     parameters: getGoalParams(),
@@ -377,7 +381,9 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
       }
       if (params.amendment_id !== undefined && (params.agreement || params.self_decided)) throwToolError(say("amendment_id исправляет уже применённое изменение; не передавай agreement и self_decided.", "amendment_id repairs an applied amendment; omit agreement and self_decided."));
       if (params.amendment !== undefined && host.getGoal()?.agreement && !params.agreement) throwToolError(say("У цели есть договорённость: вместе с amendment передай agreement с полными новыми owner_wants и done_when.", "This goal has an agreement: pass agreement with the complete new owner_wants and done_when together with amendment."));
-      const agreement: AgreementInput | undefined = params.agreement ? { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when, ...(params.self_decided ? { selfDecided: params.self_decided } : {}) } : undefined;
+      const agreement: AgreementInput | undefined = params.agreement ? { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
+        ...(params.agreement.minimum_active_seconds !== undefined ? { minimumActiveSeconds: params.agreement.minimum_active_seconds } : {}),
+        ...(params.self_decided ? { selfDecided: params.self_decided } : {}) } : undefined;
       const result = await host.amendGoal(params.amendment ?? "", "tool", ctx, params.amendment_id, agreement);
       const receipt = {
         operation: result.operation ?? "amend_goal", applied: result.applied === undefined ? result.ok : result.applied,
@@ -550,6 +556,7 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
       if (!params.agreement) throwToolError(say("create_goal требует agreement с owner_wants и done_when.", "create_goal requires agreement with owner_wants and done_when."));
       if (features.selfDecidedList && !params.self_decided) throwToolError(say("create_goal требует self_decided: перечисли, что решил сам; если владелец подтвердил всё, передай [].", "create_goal requires self_decided: list what you decided yourself; pass [] when the owner confirmed everything."));
       const agreement: AgreementInput = { ownerWants: params.agreement.owner_wants, doneWhen: params.agreement.done_when,
+        ...(params.agreement.minimum_active_seconds !== undefined ? { minimumActiveSeconds: params.agreement.minimum_active_seconds } : {}),
         ...(features.selfDecidedList && params.self_decided ? { selfDecided: params.self_decided } : {}) };
       const replacingNonCompleteGoal = params.replace_existing === true && current !== null && current.status !== "complete";
       const result = replacingNonCompleteGoal
