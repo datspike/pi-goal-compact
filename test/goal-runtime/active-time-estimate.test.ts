@@ -78,3 +78,35 @@ test("Недоступный остаток не превращается в н�
   await create(legacy);
   assert.equal((await status(legacy)).activeTimeEstimate, undefined);
 });
+
+for (const mode of [undefined, "outcome"] as const) {
+  for (const minimum of [120, null] as const) {
+    test(`Правила минимума действуют и после поправки: ${mode ?? "без режима"}, ${minimum}`, async () => {
+      const h = createRuntimeHarness();
+      const agreement = { owner_wants: "Сверить выгрузки", done_when: "Есть сравнение выгрузок." };
+      await h.runTool("create_goal", { objective: "Сверить выгрузки.", agreement, self_decided: [], ...(mode ? { mode } : {}) });
+      await h.runTool("amend_goal", { amendment: "Добавить согласованный минимум времени.",
+        agreement: { ...agreement, minimum_active_seconds: minimum } });
+      await h.reloadSession();
+      assert.equal((await status(h)).goal?.mode, mode);
+      h.setIdle(false);
+      await h.emit("agent_start", { type: "agent_start" });
+      const frame = (await settleRun(h)).entries.find(entry => String(entry.content).includes("pi_goal_active_time"));
+      assert.ok(frame && typeof frame.content === "string");
+      if (minimum === null) {
+        assert.match(frame.content, /Обязательный минимум времени не подтверждён/);
+        assert.match(frame.content, /цель оставь открытой/);
+      } else {
+        assert.match(frame.content, /Время считает Pi/);
+        assert.match(frame.content, /сразу начни его/);
+        assert.match(frame.content, /чем сделанное отвечает условиям договора/);
+      }
+      const prepared = { messagesToSummarize: [{ ...frame, role: "custom", timestamp: 1, display: false }], turnPrefixMessages: [] } as Parameters<typeof filterGoalCompactionInput>[0];
+      filterGoalCompactionInput(prepared);
+      assert.equal(prepared.messagesToSummarize.length, 1);
+      const projected = prepared.messagesToSummarize[0];
+      assert.ok(projected?.role === "custom");
+      assert.doesNotMatch(String(projected.content), /pi_goal_active_time/);
+    });
+  }
+}

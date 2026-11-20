@@ -59,7 +59,8 @@ function projectContinuation(message: PreparedMessage): PreparedMessage | null {
   };
   const sourceContent = message.content;
   const variants: ThreadGoal[] = [referenceGoal, { ...referenceGoal, mode: "outcome" }, { ...referenceGoal, mode: "research" },
-    ...([null, 1] as const).map((minimumActiveSeconds): ThreadGoal => ({ ...referenceGoal, mode: "research", agreement: { ownerWants: "", doneWhen: "", revision: 1, minimumActiveSeconds } }))];
+    ...([null, 1] as const).map((minimumActiveSeconds): ThreadGoal => ({ ...referenceGoal, mode: "research", agreement: { ownerWants: "", doneWhen: "", revision: 1, minimumActiveSeconds } })),
+    { ...referenceGoal, agreement: { ownerWants: "", doneWhen: "", revision: 1, minimumActiveSeconds: 1 } }];
   const frames = LANGUAGES.flatMap((target) => inLanguage(target, () => variants.map((variant) => ({
     compact: compactContinuationPrompt(variant),
     full: continuationPrompt(referenceGoal),

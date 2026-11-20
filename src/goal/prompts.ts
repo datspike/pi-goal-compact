@@ -252,17 +252,17 @@ export const avoidRepeatLine = (): string => say("Не повторяй уже �
 function modeStoppingLine(goal: ThreadGoal): string | undefined {
   const mode = goal.mode;
   const close = goalToolReference("update_goal");
-  if (mode === "outcome") return say(
-    `Сверься с «Готово, когда». Если результат не доказан, сделай следующий разрешённый шаг или назови подтверждённый блокер. Запасной путь достаточен только если это согласовано. Если критерий выполнен, закрой цель через ${close} со статусом "complete" и verification. Не жди отложенных дел и не начинай новый круг улучшений.`,
-    `Check Done when. If the result is not proven, take the next authorized step or state the confirmed blocker. A fallback is sufficient only if agreed. If the criterion is met, close via ${close} with status "complete" and verification. Do not wait for deferred work or start another round of improvements.`,
-  );
-  if (mode === "research" && goal.agreement?.minimumActiveSeconds === null) return say(
+  if (goal.agreement?.minimumActiveSeconds === null) return say(
     `Обязательный минимум времени не подтверждён: у Pi нет оценки. Не читай историю для подсчёта, не подставляй общие счётчики и не утверждай, что минимум набран или не набран. Пока подтверждения нет, цель оставь открытой: не вызывай ${close} со статусом "complete". Сделай полезный разрешённый шаг, если он ещё возможен. Иначе зафиксируй блокер и скажи, что уже проверено и чего не хватает. Не повторяй проверки ради времени.`,
     `The required time minimum is unverified: Pi has no estimate. Do not read history to calculate it, substitute general usage counters, or assert that the minimum was or was not met. Leave the goal open while evidence is missing: do not call ${close} with status "complete". Take a useful authorized step if one remains. Otherwise report the blocker and explain what is verified and what is missing. Do not repeat tests to fill time.`,
   );
-  if (mode === "research" && goal.agreement?.minimumActiveSeconds !== undefined) return say(
-    `Время считает Pi; используй оценку выше. Не вызывай инструменты для пересчёта или повторной сверки времени. Если по оценке минимум не набран и следующий полезный шаг известен, сразу начни его. Если минимум по оценке набран, отдельно проверь остальные условия «Готово, когда». Когда все условия выполнены и действующая договорённость уже в окне, переходи сразу к ${close} со статусом "complete" и verification: что проверено, что рекомендуешь и чего данные не доказывают. Не повторяй работу ради времени; если полезного шага нет, назови ограничение.`,
-    `Pi accounts for time; use the estimate above. Do not call tools to recalculate or recheck time. If below the estimated minimum and the useful next step is known, start it directly. If the estimated minimum is met, check the other Done when conditions separately. When all conditions are met and the current agreement is already in context, proceed directly to ${close} with status "complete" and verification: what was tested, your recommendation, and what the evidence does not establish. Do not repeat work to fill time; if no useful step remains, state the limitation.`,
+  if (goal.agreement?.minimumActiveSeconds !== undefined) return say(
+    `Время считает Pi; используй оценку выше. Не вызывай инструменты для пересчёта или повторной сверки времени. Если по оценке минимум не набран и следующий полезный шаг известен, сразу начни его. Если минимум по оценке набран, отдельно проверь остальные условия «Готово, когда». Когда все условия выполнены и действующая договорённость уже в окне, переходи сразу к ${close} со статусом "complete" и verification: ${mode === "research" ? "что проверено, что рекомендуешь и чего данные не доказывают" : "чем сделанное отвечает условиям договора"}. Не повторяй работу ради времени; если полезного шага нет, назови ограничение.`,
+    `Pi accounts for time; use the estimate above. Do not call tools to recalculate or recheck time. If below the estimated minimum and the useful next step is known, start it directly. If the estimated minimum is met, check the other Done when conditions separately. When all conditions are met and the current agreement is already in context, proceed directly to ${close} with status "complete" and verification: ${mode === "research" ? "what was tested, your recommendation, and what the evidence does not establish" : "how the work meets the agreement"}. Do not repeat work to fill time; if no useful step remains, state the limitation.`,
+  );
+  if (mode === "outcome") return say(
+    `Сверься с «Готово, когда». Если результат не доказан, сделай следующий разрешённый шаг или назови подтверждённый блокер. Запасной путь достаточен только если это согласовано. Если критерий выполнен, закрой цель через ${close} со статусом "complete" и verification. Не жди отложенных дел и не начинай новый круг улучшений.`,
+    `Check Done when. If the result is not proven, take the next authorized step or state the confirmed blocker. A fallback is sufficient only if agreed. If the criterion is met, close via ${close} with status "complete" and verification. Do not wait for deferred work or start another round of improvements.`,
   );
   if (mode === "research") return say(
     `Сверься с «Готово, когда». Если обязательный результат не доказан, продолжай с него. Если минимум задан, а оценки Pi нет, не пересчитывай время по журналу и не считай минимум подтверждённым. Если следующая проверка может изменить рекомендацию, сделай полезный разрешённый шаг. Не повторяй проверки ради счётчика. Если полезного пути нет, назови ограничение, а не выдумывай доказательство. Когда условия выполнены, закрой через ${close} со статусом "complete" и verification: что проверено, что рекомендуешь и чего данные не доказывают.`,
@@ -295,7 +295,7 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
   return [
     `${CONTINUATION_MARKER_PREFIX}${goal.goalId}\">`,
     continueLine(),
-    ...(goal.mode === undefined ? [
+    ...(goal.mode === undefined && !time ? [
       "",
       say(`При необходимости проверь текущую цель и статус через ${goalToolReference("get_goal")}.`, `Inspect the current objective and status with ${goalToolReference("get_goal")} if needed.`),
     ] : []),
