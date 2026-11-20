@@ -130,3 +130,22 @@ test("в запрос без цели после сжатия попадает �
     assert.ok(!request.window.includes("SERVICE_QUOTE_PROBE"));
   });
 });
+
+test("Исследовательская цель продолжается после сжатия и закрывается штатными двумя шагами", { timeout: 60_000 }, async () => {
+  const research: ProbeScript = {
+    ...script,
+    calls: {
+      ...script.calls,
+      1: ["create_goal", { objective: "Сравнить формы отчёта", mode: "research", agreement: AGREEMENT, self_decided: [] }],
+    },
+  };
+  await withProbe(research, async (start, requests) => {
+    const rows = await start("research");
+    assert.equal(rows.filter((row) => row.type === "compaction").length, 1);
+    assert.ok(rows.some((row) => row.customType === "goal-compact-goal" && row.data?.goal?.status === "complete"));
+    const after = requests("research").find((request) => request.kind === "turn" && request.step === 7);
+    assert.ok(after);
+    assert.ok(after.window.includes("следующая проверка может изменить рекомендацию"));
+    assert.equal(count(after.window, "## Договорённость (редакция"), 1);
+  });
+});

@@ -246,6 +246,20 @@ export const continueLine = (): string => say("Продолжай работу �
 /** Граница между данными и правилами продолжения; по ней сжатие отделяет кадр от фактов. */
 export const avoidRepeatLine = (): string => say("Не повторяй уже сделанную работу. Выбери следующее конкретное действие к цели.", "Avoid repeating work that is already done. Choose the next concrete action toward the objective.");
 
+/** Выбирает вопрос о завершении, не повторяя договорённость. */
+function modeStoppingLine(mode: ThreadGoal["mode"]): string | undefined {
+  const close = goalToolReference("update_goal");
+  if (mode === "outcome") return say(
+    `Сверься с «Готово, когда». Если результат не доказан, сделай следующий разрешённый шаг или назови подтверждённый блокер. Запасной путь достаточен только если это согласовано. Если критерий выполнен, закрой цель через ${close} со статусом "complete" и verification. Не жди отложенных дел и не начинай новый круг улучшений.`,
+    `Check Done when. If the result is not proven, take the next authorized step or state the confirmed blocker. A fallback is sufficient only if agreed. If the criterion is met, close via ${close} with status "complete" and verification. Do not wait for deferred work or start another round of improvements.`,
+  );
+  if (mode === "research") return say(
+    `Сверься с «Готово, когда». Если обязательный результат не доказан, продолжай с него. Если заданный минимум ещё не подтверждён или следующая проверка может изменить рекомендацию, сделай полезный разрешённый шаг. Не засчитывай ожидание вместо работы; не повторяй проверки ради счётчика. Если полезного пути нет, назови ограничение, а не выдумывай доказательство. Когда условия выполнены, закрой через ${close} со статусом "complete" и verification: что проверено, что рекомендуешь и чего данные не доказывают.`,
+    `Check Done when. If a required result is unproven, continue with it. If a stated minimum is not yet established or another test could change the recommendation, take a useful authorized step. Do not count waiting as work or repeat tests for the counter. If no useful path remains, state the limitation rather than invent evidence. Once conditions are met, close via ${close} with status "complete" and verification: what was tested, your recommendation, and what the evidence does not establish.`,
+  );
+  return undefined;
+}
+
 export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalContinuationSnapshot): string {
   const brief = (value: string): string => {
     const chars = [...value];
@@ -269,8 +283,10 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
   return [
     `${CONTINUATION_MARKER_PREFIX}${goal.goalId}\">`,
     continueLine(),
-    "",
-    say(`При необходимости проверь текущую цель и статус через ${goalToolReference("get_goal")}.`, `Inspect the current objective and status with ${goalToolReference("get_goal")} if needed.`),
+    ...(goal.mode === undefined ? [
+      "",
+      say(`При необходимости проверь текущую цель и статус через ${goalToolReference("get_goal")}.`, `Inspect the current objective and status with ${goalToolReference("get_goal")} if needed.`),
+    ] : []),
     "",
     ...budgetPromptLines(goal, true),
     "",
@@ -281,7 +297,7 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
     "",
     // Продолжение приходит, когда модель пытается закончить ход с открытой целью (решение 0017): развилка
     // «продолжить или закрыть с проверкой» ссылается на «Готово, когда», не повторяя текст договорённости.
-    say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
+    modeStoppingLine(goal.mode) ?? say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
       `The goal is not closed. Check the work against "Done when". If an item is not met, continue with it. If all are met, close the goal: call ${goalToolReference("update_goal")} with status \"complete\" and verification — how the work meets each item. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.`),
     "</pi_goal_continuation>",
   ].join("\n");

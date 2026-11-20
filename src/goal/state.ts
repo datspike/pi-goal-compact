@@ -51,6 +51,7 @@ export function goalsEquivalent(left: ThreadGoal, right: ThreadGoal): boolean {
   return (
     left.goalId === right.goalId &&
     left.objective === right.objective &&
+    left.mode === right.mode &&
     left.status === right.status &&
     JSON.stringify(left.pause) === JSON.stringify(right.pause) &&
     left.tokenBudget === right.tokenBudget &&
@@ -242,6 +243,7 @@ export function isThreadGoal(goal: unknown): goal is ThreadGoal {
   return (
     typeof candidate.goalId === "string" &&
     typeof candidate.objective === "string" &&
+    (candidate.mode === undefined || candidate.mode === "outcome" || candidate.mode === "research") &&
     isGoalStatus(candidate.status) &&
     (candidate.tokenBudget === null || typeof candidate.tokenBudget === "number") &&
     typeof candidate.createdAt === "number" &&

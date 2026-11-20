@@ -128,6 +128,7 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
   for (const key of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) delete env[key];
   const child: ChildProcess = spawn(process.execPath, args, { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
   let output = "";
+  let unparsed = "";
   let errors = "";
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -136,7 +137,11 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
       child.stderr?.on("data", (data) => { errors += String(data); });
       child.stdout?.on("data", (data) => {
         output += String(data);
-        if (output.includes(`"text":"${PROBE_DONE}"`)) done();
+        unparsed += String(data);
+        const lines = unparsed.split("\n");
+        unparsed = lines.pop()!;
+        // Pi публикует message_end до записи сообщения в журнал. agent_end приходит позже.
+        if (lines.some((line) => line.startsWith('{"type":"agent_end"') && line.includes(`"text":"${PROBE_DONE}"`))) done();
       });
       child.on("error", reject);
       child.on("exit", (code) => reject(new Error(`${name}: Pi завершился с кодом ${code}: ${errors.slice(-1200)}`)));

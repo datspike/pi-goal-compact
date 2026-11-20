@@ -37,6 +37,25 @@ test("only typed Goal continuations are removed from both summary regions", () =
   assert.deepEqual(preparation.turnPrefixMessages, [report]);
 });
 
+test("Подсказки двух режимов уходят из сводки, а свидетельства сохраняются", () => {
+  const { goal, snapshot, pure, mixed } = goalCompactionFixture();
+  for (const language of ["ru", "en"] as const) for (const mode of ["outcome", "research"] as const) {
+    inLanguage(language, () => {
+      const messagesToSummarize = [
+        { ...pure, content: compactContinuationPrompt({ ...goal, mode }) },
+        { ...mixed, content: compactContinuationPrompt({ ...goal, mode }, snapshot) },
+      ];
+      const input: Input = { messagesToSummarize, turnPrefixMessages: [] };
+      filterGoalCompactionInput(input);
+      assert.equal(input.messagesToSummarize.length, 1);
+      const retained = input.messagesToSummarize[0]!;
+      assert.equal(retained.role, "custom");
+      assert.match(String(retained.content), /KEEP_FULL_VERIFICATION/);
+      assert.doesNotMatch(String(retained.content), /verification: what was tested|verification: что проверено|Do not wait for deferred work|Не жди отложенных дел/);
+    });
+  }
+});
+
 test("filtering never edits the source arrays or retained messages", () => {
   const { messages } = fixture();
   const journalCopy = structuredClone(messages);

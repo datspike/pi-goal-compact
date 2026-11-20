@@ -20,6 +20,7 @@ export interface GoalToolRecord {
   pause?: ThreadGoal["pause"];
   goalId: string;
   objective: string;
+  mode?: ThreadGoal["mode"];
   status: GoalStatus;
   tokenBudget: number | null;
   tokensUsed: number;
@@ -244,6 +245,7 @@ export function toToolGoal(goal: ThreadGoal): GoalToolRecord {
     ...(goal.pause ? { pause: { ...goal.pause } } : {}),
     goalId: goal.goalId,
     objective: goal.objective,
+    ...(goal.mode === undefined ? {} : { mode: goal.mode }),
     status: goal.status,
     tokenBudget: goal.tokenBudget,
     tokensUsed: goal.usage.tokensUsed,

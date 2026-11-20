@@ -37,7 +37,7 @@ const resumeGoalParams = () => Type.Object({
 
 const agreementParam = () => Type.Object({
   owner_wants: Type.String({ minLength: 1, description: say("Чего хочет владелец: результат и важные ему качества; там, где важна сама формулировка, кратко процитируй владельца.", "What the owner wants: the outcome and the qualities that matter to them, briefly quoting the owner where the wording itself matters.") }),
-  done_when: Type.String({ minLength: 1, description: say("Готово, когда: критерий завершения, в том числе когда допустим отрицательный результат. owner_wants и done_when вместе не длиннее 2000 знаков.", "Done when: the completion criterion, including when a negative result is acceptable. owner_wants and done_when together are at most 2000 characters.") }),
+  done_when: Type.String({ minLength: 1, description: say("Готово, когда: критерий завершения, включая допустимый отрицательный итог. Если задан минимум активной работы, впиши сюда число, единицу и исключения (например: «Не меньше двух часов активной работы, не считая ожидания модельных проверок»). Исключения относятся к учёту, не к результату. owner_wants и done_when вместе не длиннее 2000 знаков.", "Done when: the completion criterion, including an acceptable negative result. If a minimum of active work was stated, put its amount, unit, and exclusions here (for example, ‘At least two hours of active work, excluding waits for model checks’). Exclusions apply to accounting, not the result. owner_wants and done_when together are at most 2000 characters.") }),
 }, { additionalProperties: false, description: say("Договорённость, которую расширение дословно показывает в начале каждого контекстного окна, пока цель не изменится.", "The agreement the extension keeps verbatim at the start of every context window until the goal changes.") });
 const selfDecidedParam = () => Type.Array(Type.Object({
   kind: stringEnum(SELF_DECIDED_KINDS, { description: say("assumption — твоё допущение; deferred_by_owner — владелец отложил вопрос; proposal — твоё собственное предложение.", "assumption — you assumed it; deferred_by_owner — the owner postponed the question; proposal — your own proposal.") }),
@@ -45,6 +45,10 @@ const selfDecidedParam = () => Type.Array(Type.Object({
 }, { additionalProperties: false }), { description: say("Решения, которые владелец не подтверждал: охват, архитектура или приёмка, выбранные тобой. Список может быть пустым, но должен быть передан.", "Decisions the owner has not confirmed: scope, architecture or acceptance you chose yourself. May be empty, must be present.") });
 
 const createGoalParams = () => Type.Object({
+  mode: Type.Optional(stringEnum(["outcome", "research"], { description: say(
+    "Выбери research, если владелец поручил выбирать, что исследовать дальше. Заданный минимум активной работы над исследованиями означает research, даже если в той же цели обязателен конкретный результат. В «Готово, когда» сохрани обязательный результат и проверяемое сравнение с рекомендацией. Иначе выбери outcome: в «Готово, когда» запиши только запрошенный итог и его проверку. Не требуй сравнения или выигрыша, если их не просили. Отложенное передай дальше и не жди.",
+    "Choose research when the owner delegates what to investigate next. A stated minimum of active research means research even when the same goal also requires a concrete result. Keep the required result and a verified comparison with a recommendation in Done when. Otherwise choose outcome: in Done when include only the requested result and its verification. Do not require a comparison or improvement unless requested. Hand deferred work off without waiting.",
+  ) })),
   objective: Type.String({
     description: `${say("Сохрани исходный запрос пользователя, одобренные результат и доказательства, то, что не входит, простейший путь, пределы сложности, критерий готовности и точки решений.", "Preserve the original user request, approved outcome and evidence, non-goals, simplest path, complexity bounds, done criterion and decision gates.")} ${doneCriterionGuidance()}`,
   }),
@@ -536,7 +540,7 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
   pi.registerTool({
     name: "create_goal",
     label: say("Создать цель", "Create Goal"),
-    description: `${say("Создаёт долгую цель только после явной просьбы. Сохрани замысел пользователя и согласованные границы; не придумывай более строгих условий приёмки. Разговор автоматически не копируется.", "Create a durable Goal only after an explicit request. Preserve the user's intent and agreed boundaries; do not invent stricter acceptance gates. This does not copy the conversation automatically.")}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
+    description: `${say("Создаёт долгую цель только после явной просьбы запустить работу. Если просят показать промпт цели, дай черновик и не запускай её. Сохрани замысел и согласованные границы; не добавляй условий приёмки. При автономной работе обращайся к прошлым решениям, когда от них зависит выбор; они не дают новых полномочий.", "Create a durable goal only on an explicit request to start. If asked to show a goal prompt, give a draft without starting. Preserve intent and agreed boundaries; do not add acceptance gates. When working autonomously, consult past decisions when they affect the choice; they grant no new authority.")}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
     promptSnippet: say("Создать долгую цель.", "Create a durable Goal."),
     promptGuidelines: goalToolGuidelines("create_goal"),
     parameters: createGoalParams(),
@@ -554,6 +558,7 @@ export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: 
       if (!result.ok || !result.goal) {
         throwToolError(result.message);
       }
+      if (params.mode !== undefined) result.goal.mode = params.mode;
       let acknowledged = false;
       try {
         host.setGoal(result.goal, "tool", ctx);

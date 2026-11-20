@@ -51,12 +51,13 @@ function projectContinuation(message: PreparedMessage): PreparedMessage | null {
     usage: { tokensUsed: 0, activeSeconds: 0 }, createdAt: 0, updatedAt: 0,
   };
   const sourceContent = message.content;
-  const frames = LANGUAGES.map((target) => inLanguage(target, () => ({
-    compact: compactContinuationPrompt(referenceGoal),
+  const modes = [undefined, "outcome", "research"] as const;
+  const frames = LANGUAGES.flatMap((target) => inLanguage(target, () => modes.map((mode) => ({
+    compact: compactContinuationPrompt(mode === undefined ? referenceGoal : { ...referenceGoal, mode }),
     full: continuationPrompt(referenceGoal),
     boundary: `\n${avoidRepeatLine()}`,
     budget: target === "ru" ? "\nБюджет:\n" : "\nBudget:\n",
-  })));
+  }))));
   if (frames.some(({ compact }) => withoutBudgetCounters(sourceContent) === withoutBudgetCounters(compact))) return null;
 
   // Use the actual producers as the frame contract, not a second copy of their instructions.

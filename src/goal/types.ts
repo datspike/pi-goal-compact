@@ -6,6 +6,8 @@ export const MAX_OBJECTIVE_CHARS = 8000;
 
 export type GoalStatus = "active" | "paused" | "budgetLimited" | "complete";
 
+export type GoalMode = "outcome" | "research";
+
 export interface GoalUsage {
 	tokensUsed: number;
 	activeSeconds: number;
@@ -14,6 +16,8 @@ export interface GoalUsage {
 export interface ThreadGoal {
   goalId: string;
   objective: string;
+  /** Отсутствует у целей, поставленных по прежнему договору. */
+  mode?: GoalMode;
   status: GoalStatus;
   tokenBudget: number | null;
   usage: GoalUsage;
