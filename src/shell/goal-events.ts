@@ -21,6 +21,7 @@ import {
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
 import { isAssistantContextOverflow, isErrorAssistantMessage, reasonFromRecoveryPendingAttention } from "../goal/recovery.js";
 import { goalToolLoadout, registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goal/tools.js";
+import { isAutonomousResearch, researchModelInput, researchQuestionBlocked, RESEARCH_QUESTION_TOOL } from "../goal/research-autonomy.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
@@ -205,6 +206,18 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     });
     if (assembled) return { messages: assembled };
     return changed ? { messages } : undefined;
+  });
+
+  pi.on("context_with_system", event => {
+    const current = session.getGoal();
+    if (!isAutonomousResearch(current)) return undefined;
+    return { messages: researchModelInput(event.messages, current) };
+  });
+  pi.on("tool_call", event => {
+    if (event.toolName === RESEARCH_QUESTION_TOOL && isAutonomousResearch(session.getGoal())) {
+      return { block: true, reason: researchQuestionBlocked() };
+    }
+    return undefined;
   });
 
   pi.on("agent_start", async () => {

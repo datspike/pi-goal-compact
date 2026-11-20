@@ -43,7 +43,7 @@ function fixtureSource(script: ProbeScript, extensions: readonly string[]): stri
   return `
 ${extensions.map((path, index) => `import extension${index} from ${JSON.stringify(path)};`).join("\n")}
 import { Type } from "typebox";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentTools } from "@earendil-works/pi-ai";
 import { appendFileSync } from "node:fs";
 const script = ${JSON.stringify(script)};
 const usage = (input) => ({ input, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: input + 1, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
@@ -61,14 +61,15 @@ export default function(pi) {
   pi.on("session_start", (_event, ctx) => {
     step = Math.max(0, ...ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "probe-step").map(e => e.data.step));
   });
-  pi.registerTool({ name: "ask_user", label: "Fixture question", description: "Return a deterministic UI answer", parameters: Type.Object({}),
+  pi.registerTool({ name: "ask_user", defaultActive: process.env.PROBE_QUESTION_DISABLED !== "1", label: "Fixture question", description: "Return a deterministic UI answer", parameters: Type.Object({}),
     async execute() { return { content: [{ type: "text", text: "User answered: A" }], details: { mode: "single", cancelled: false, response: { kind: "selection", selections: ["A"] } } }; }
   });
   pi.registerProvider("probe", { api: "probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: [{ id: "offline", name: "Offline", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 }],
     streamSimple(model, context) {
+      const tools = getCurrentTools(context.messages).map(tool => tool.name);
       const base = { role: "assistant", api: model.api, provider: model.provider, model: model.id, timestamp: Date.now() };
       const window = JSON.stringify(context.messages);
-      const log = (kind) => appendFileSync(process.env.PROBE_LOG, JSON.stringify({ kind, step, window }) + "\\n");
+      const log = (kind) => appendFileSync(process.env.PROBE_LOG, JSON.stringify({ kind, step, window, tools }) + "\\n");
       // Ход может быть разрезан сжатием, поэтому сводка годится и для истории («Цель»), и для начала хода («Исходный запрос»).
       if (window.includes("context summarization assistant")) {
         log("summary");
@@ -90,7 +91,7 @@ export default function(pi) {
 
 /** Каталог прогона. `SMOKE_KEEP=1` оставляет профили и журналы в `.runtime/` для разбора. */
 /** Запрос к провайдеру: ход стенда или сводка при сжатии, с сообщениями окна в JSON. */
-export type ProbeRequest = { kind: "turn" | "summary"; step: number; window: string };
+export type ProbeRequest = { kind: "turn" | "summary"; step: number; window: string; tools: string[] };
 
 /** Как запустить Pi: с засеянным журналом и с перезагрузкой расширения вместо первой реплики. */
 type StartOptions = {
@@ -98,6 +99,10 @@ type StartOptions = {
   reload?: boolean;
   /** Первая реплика; без засева по умолчанию «Run offline probe.», с засевом — никакой. */
   prompt?: string;
+  /** Команда перед первым сообщением; ответ RPC ждём до отправки реплики. */
+  command?: string;
+  /** Начальный выбор инструментов владельца до появления цели. */
+  questionDisabled?: boolean;
   /** Загружаемые расширения вместо собранного — например, прежняя пара для проверки совместимости. */
   extensions?: readonly string[];
 };
@@ -113,7 +118,7 @@ export async function withProbe(script: ProbeScript, run: (start: (name: string,
   }
 }
 
-async function startPi(root: string, script: ProbeScript, name: string, { seed, reload = false, prompt, extensions = [EXTENSION] }: StartOptions): Promise<Row[]> {
+async function startPi(root: string, script: ProbeScript, name: string, { seed, reload = false, prompt, command, questionDisabled = false, extensions = [EXTENSION] }: StartOptions): Promise<Row[]> {
   const home = join(root, name);
   mkdirSync(home);
   const fixture = join(home, "fixture.ts");
@@ -124,7 +129,7 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
   const session = join(home, "probe", "session.jsonl");
   if (seed) writeFileSync(session, seed);
   const args = [cli, "--mode", "rpc", "--offline", "--no-extensions", "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-builtin-tools", "--system-prompt", "Offline deterministic probe.", "-e", fixture, "--session", session];
-  const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: home, PI_OFFLINE: "1", PROBE_LOG: join(home, "requests.jsonl"), PROBE_RELOAD: reload ? "1" : "0" };
+  const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: home, PI_OFFLINE: "1", PROBE_LOG: join(home, "requests.jsonl"), PROBE_RELOAD: reload ? "1" : "0", PROBE_QUESTION_DISABLED: questionDisabled ? "1" : "0" };
   for (const key of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) delete env[key];
   const child: ChildProcess = spawn(process.execPath, args, { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
   let output = "";
@@ -133,6 +138,8 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
   let timer: NodeJS.Timeout | undefined;
   try {
     await new Promise<void>((done, reject) => {
+      const message = reload ? "/probe-reload" : prompt ?? (seed ? undefined : "Run offline probe.");
+      const send = (text: string, id?: string) => child.stdin?.write(JSON.stringify({ id, type: "prompt", message: text }) + "\n");
       timer = setTimeout(() => reject(new Error(`${name}: нет ответа за 20 с: ${errors.slice(-1200)} ${output.slice(-1500)}`)), 20_000);
       child.stderr?.on("data", (data) => { errors += String(data); });
       child.stdout?.on("data", (data) => {
@@ -141,12 +148,17 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
         const lines = unparsed.split("\n");
         unparsed = lines.pop()!;
         // Pi публикует message_end до записи сообщения в журнал. agent_end приходит позже.
+        if (command && message && lines.some((line) => {
+          if (!line.includes("probe-command")) return false;
+          const event = JSON.parse(line);
+          return event.type === "response" && event.id === "probe-command" && event.success;
+        })) send(message);
         if (lines.some((line) => line.startsWith('{"type":"agent_end"') && line.includes(`"text":"${PROBE_DONE}"`))) done();
       });
       child.on("error", reject);
       child.on("exit", (code) => reject(new Error(`${name}: Pi завершился с кодом ${code}: ${errors.slice(-1200)}`)));
-      const message = reload ? "/probe-reload" : prompt ?? (seed ? undefined : "Run offline probe.");
-      if (message) child.stdin?.write(JSON.stringify({ type: "prompt", message }) + "\n");
+      if (command) send(command, "probe-command");
+      else if (message) send(message);
     });
     return readFileSync(session, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Row);
   } finally {

@@ -8,6 +8,7 @@ import { goalActionWorkingState, goalStatusWorkingState, goalToolResponse, toToo
 import { type GoalReportAction, type GoalReportState } from "./goal-reports.js";
 import { MAX_REPORT_CHANGED_CHARS, MAX_REPORT_COMPLETED_CHARS, MAX_REPORT_NEED_USER_CHARS, MAX_REPORT_NEXT_STEP_CHARS, MAX_REPORT_PHASE_CHARS, MAX_REPORT_PROBLEM_CHARS, MAX_REPORT_RISK_CHARS, MAX_REPORT_SUMMARY_CHARS, MAX_REPORT_VERIFICATION_CHARS, type GoalProgressReport, type GoalProgressEventKind, type GoalProgressStatus, validateNewGoalProgressReport } from "./report-schema.js";
 import { createGoal, replaceGoal, type AgreementInput } from "./state.js";
+import { researchStartRule } from "./research-autonomy.js";
 import { SELF_DECIDED_KINDS, renderAgreement, renderSelfDecided, unconfirmedSelfDecided, type SelfDecidedKind } from "./agreement.js";
 import { DEFAULT_GOAL_FEATURES, type GoalFeatures } from "./goal-report-config.js";
 import { amendedAfterCompactionNotice, goalAtCompaction, retainedAgreementNotice } from "./window.js";
@@ -539,14 +540,14 @@ export function registerGoalTools(pi: ExtensionAPI, host: ToolHost): void {
 }
 
 /** Д5: вопросы до цели. Выключенная доработка возвращает прежнее описание `create_goal`. */
-export const askBeforeGoalRule = (): string => say("Перед create_goal спроси владельца одним пакетом ask_user обо всём, что меняет охват, архитектуру или приёмку и ещё не решено в разговоре, файлах или памяти. Если владелец сказал работать без вопросов, не спрашивай, а запиши свои допущения в self_decided.", "Before create_goal, ask the owner in one ask_user batch everything that changes scope, architecture or acceptance and is not already settled in the conversation, files or memory. If the owner said to work without questions, do not ask; record your assumptions in self_decided instead.");
+export const askBeforeGoalRule = (): string => say("Кроме явной постановки research, перед create_goal спроси владельца одним пакетом ask_user обо всём, что меняет охват, архитектуру или приёмку и ещё не решено в разговоре, файлах или памяти. Если владелец сказал работать без вопросов, не спрашивай, а запиши свои допущения в self_decided.", "Except when explicitly starting research, before create_goal ask the owner in one ask_user batch everything that changes scope, architecture or acceptance and is not already settled in the conversation, files or memory. If the owner said to work without questions, do not ask; record your assumptions in self_decided instead.");
 
 /** Регистрирует `create_goal`; повторная регистрация после загрузки настроек меняет описание в той же сессии. */
 export function registerCreateGoalTool(pi: ExtensionAPI, host: ToolHost, rules: Pick<GoalFeatures, "askBeforeGoal">): void {
   pi.registerTool({
     name: "create_goal",
     label: say("Создать цель", "Create Goal"),
-    description: `${say("Создаёт долгую цель только после явной просьбы запустить работу. Если просят показать промпт цели, дай черновик и не запускай её. Сохрани замысел и согласованные границы; не добавляй условий приёмки. При автономной работе обращайся к прошлым решениям, когда от них зависит выбор; они не дают новых полномочий.", "Create a durable goal only on an explicit request to start. If asked to show a goal prompt, give a draft without starting. Preserve intent and agreed boundaries; do not add acceptance gates. When working autonomously, consult past decisions when they affect the choice; they grant no new authority.")}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
+    description: `${say("Создаёт долгую цель только после явной просьбы запустить работу. Если просят показать промпт цели, дай черновик и не запускай её. Сохрани замысел и согласованные границы; не добавляй условий приёмки. При автономной работе обращайся к прошлым решениям, когда от них зависит выбор; они не дают новых полномочий.", "Create a durable goal only on an explicit request to start. If asked to show a goal prompt, give a draft without starting. Preserve intent and agreed boundaries; do not add acceptance gates. When working autonomously, consult past decisions when they affect the choice; they grant no new authority.")} ${researchStartRule()}${rules.askBeforeGoal ? ` ${askBeforeGoalRule()}` : ""}`,
     promptSnippet: say("Создать долгую цель.", "Create a durable Goal."),
     promptGuidelines: goalToolGuidelines("create_goal"),
     parameters: createGoalParams(),
