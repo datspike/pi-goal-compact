@@ -26,7 +26,7 @@ TLC закреплён: `tla2tools.jar` релиза v1.8.0, контрольн�
 
 ## Проверка
 
-`npm run check:formal`: 2 исправные модели и 12 поломок.
+`npm run check:formal`: полный список моделей и поломок — `formal/README.md`.
 
 ## Статус
 

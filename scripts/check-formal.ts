@@ -20,7 +20,7 @@ const JAR_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla
 const JAR_SHA256 = "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f";
 
 interface Run {
-  model: "Continuation" | "Agreement" | "ModelTransfer" | "ProviderRetry";
+  model: "Continuation" | "Agreement" | "ModelTransfer" | "ProviderRetry" | "Recovery";
   bug: string;
   /** Имя нарушенного свойства или null для исправной модели. */
   expect: string | null;
@@ -57,6 +57,11 @@ export const RUNS: readonly Run[] = [
   { model: "ProviderRetry", bug: "doubleOwner", expect: "RetryOneOwner", meaning: "продолжение доступно одновременно со штатным повтором" },
   { model: "ProviderRetry", bug: "ignoreDeadline", expect: "RetryDeadline", meaning: "просроченная попытка по-прежнему разрешена на Astra" },
   { model: "ProviderRetry", bug: "doubleSwitch", expect: "RetryOnlyOneSwitch", meaning: "в одной цепочке разрешён второй переход" },
+  { model: "Recovery", bug: "none", expect: null, meaning: "исправная модель переполнения" },
+  { model: "Recovery", bug: "lengthResets", expect: "P19_LengthKeepsAttempts", meaning: "обычный обрыв по length обнуляет попытки сжатия" },
+  { model: "Recovery", bug: "lengthIsSuccess", expect: "P19_LengthKeepsAttempts", meaning: "пустой обрыв по length считается успешным ходом" },
+  { model: "Recovery", bug: "noPauseAfterCap", expect: "P20_RecoveryCapped", meaning: "после лимита попыток паузы нет" },
+  { model: "Recovery", bug: "continueWhileRecovering", expect: "P18_NoContinueWhileRecovering", meaning: "скрытое продолжение во время восстановления" },
 ];
 
 function sha256(path: string): string {
