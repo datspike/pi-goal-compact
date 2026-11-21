@@ -62,6 +62,7 @@ export const RUNS: readonly Run[] = [
   { model: "Recovery", bug: "lengthIsSuccess", expect: "P19_LengthKeepsAttempts", meaning: "пустой обрыв по length считается успешным ходом" },
   { model: "Recovery", bug: "noPauseAfterCap", expect: "P20_RecoveryCapped", meaning: "после лимита попыток паузы нет" },
   { model: "Recovery", bug: "continueWhileRecovering", expect: "P18_NoContinueWhileRecovering", meaning: "скрытое продолжение во время восстановления" },
+  { model: "Recovery", bug: "continueWhilePaused", expect: "P21_NoContinueWhilePaused", meaning: "реплика владельца снимает паузу цели без возобновления" },
 ];
 
 function sha256(path: string): string {

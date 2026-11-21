@@ -196,8 +196,8 @@ An empty response, including reasoning without an answer, can be retried once. A
 ## How it is verified
 
 - `npm run verify` checks types, layers, dead code, tests, privacy boundaries, and the TLA+ models.
-- The TLA+ models check goal continuation, the agreement, model transfer, and request retry. Correct models pass; deliberate faults produce counterexamples. See the [formal checks](formal/README.md) and [decision 0008](docs/adr/0008-formalnaya-proverka.md) (in Russian).
-- Smoke runs on real Pi without network: an answer to a question survives compaction and restart, a session of the earlier pair continues under the new version, a goal change without an owner message is rejected.
+- The TLA+ models check goal continuation, the agreement, model transfer, request retry, and recovery after context overflow. Correct models pass; deliberate faults produce counterexamples. See the [formal checks](formal/README.md) and [decision 0008](docs/adr/0008-formalnaya-proverka.md) (in Russian).
+- Smoke runs on real Pi without network: an answer to a question survives compaction and restart, a session of the earlier pair continues under the new version, a goal change without an owner message is rejected, the context window is restored after the host rebuilds the model, and overflow followed by a `length` reply ends in a paused goal.
 - Model scenarios that used to catch failures: verification loops instead of closing, four merge requests lost after compaction, a decision accepted without consent, closing on counters instead of the result. The new version passes them no worse than the earlier pair.
 
 ## Development

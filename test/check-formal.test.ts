@@ -17,6 +17,12 @@ test("разбор вывода TLC: ошибка разбора модели н
   assert.notEqual(parseTlcOutput("Fatal error during parsing").error, null);
 });
 
+test("переполнение окна проверяется своим набором прогонов и свойств", () => {
+  const runs = RUNS.filter((run) => run.model === "Recovery");
+  assert.deepEqual(runs.map((run) => run.bug), ["none", "lengthResets", "lengthIsSuccess", "noPauseAfterCap", "continueWhileRecovering", "continueWhilePaused"]);
+  assert.deepEqual(runs.map((run) => run.expect), [null, "P19_LengthKeepsAttempts", "P19_LengthKeepsAttempts", "P20_RecoveryCapped", "P18_NoContinueWhileRecovering", "P21_NoContinueWhilePaused"]);
+});
+
 test("свойства продолжения и договорённости имеют намеренные поломки", () => {
   const broken = new Set(RUNS.map((run) => run.expect).filter((name) => name !== null));
   for (const name of ["P1_OneContinuation", "P2_HoldHolds", "P3_NoRevival", "P4_NoUnknownWrite", "P5_NoStaleTicket", "P6_NoSilentStall", "P7_OneCurrentAgreement", "P8_NoStaleClose", "P9_OwnerOnlyEdits", "P17_NoDeferredWakeDuringSwitch"]) {
