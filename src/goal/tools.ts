@@ -97,7 +97,7 @@ const updateGoalParams = () => Type.Object({
     description: say("Принимается только complete. Не вызывай, пока остаётся обязательная работа.", "Only complete is accepted. Do not call this until no required work remains."),
   }),
   // Длина не ограничена схемой: отказ за лишние знаки стоил бы отдельного вызова, запись обрезает текст сама.
-  verification: Type.Optional(Type.String({ minLength: 1, description: say("Чем сделанное отвечает каждому пункту «Готово, когда», кратко; засчитывается как отчёт verifying для текущих договорённости и плана. После возврата договорённости повторять не нужно.", "Briefly, how the work meets each \"Done when\" item; recorded as the verifying report for the current agreement and plan. No need to repeat it after the agreement is returned.") })),
+  verification: Type.Optional(Type.String({ minLength: 1, description: say("Чем сделанное отвечает каждому пункту «Готово, когда». По каждому обещанному поведению назови наблюдение, которое его показывает, либо прямо запиши, что оно не наблюдалось; наблюдение другого поведения его не заменяет. Засчитывается как отчёт verifying для текущих договорённости и плана; после возврата договорённости повторять не нужно.", "How the work meets each \"Done when\" item. For every promised behaviour, name the observation that shows it, or state plainly that it was not observed; an observation of another behaviour does not replace it. Recorded as the verifying report for the current agreement and plan; no need to repeat it after the agreement is returned.") })),
 });
 
 const recordGoalNoteParams = () => Type.Object({
@@ -150,7 +150,7 @@ const goalWorkParams = () => Type.Object({
     summary: Type.String({ description: say("Текущее положение всей задачи, а не только последнее изменение.", "Current whole-task position, not just the latest delta.") }),
     items: Type.Array(Type.Object({
       id: Type.String({ minLength: 1 }),
-      title: Type.String(),
+      title: Type.String({ description: say("Назови состояние, которое можно увидеть: «после повторной петли обработчик сдаёт проверенное», а не «проверить сдачу». Закрывать пункт можно, только когда это состояние уже верно.", "Name an observable state: ‘after a second loop the handler delivers what it checked’, not ‘check delivery’. Close the item only when that state already holds.") }),
       status: stringEnum(["planned", "active", "blocked", "done", "cancelled"] as const),
       source: stringEnum(["user", "agent"] as const),
       result: Type.Optional(Type.String()),
