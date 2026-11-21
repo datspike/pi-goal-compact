@@ -226,3 +226,31 @@ test("successful non-toolUse turns reset recovery counters and continue the goal
   assert.equal(harness.continueCount, 1);
   assert.equal(harness.recoveryState.counters.transientAttempts, 0);
 });
+
+test("length между переполнениями не сбрасывает recovery и второе переполнение ставит паузу", () => {
+  const harness = createRecoveryTestRuntime();
+
+  harness.runtime.handlePersistentAssistantError(
+    { role: "assistant", stopReason: "error", errorMessage: "context_length_exceeded" },
+    harness.ctx,
+  );
+  harness.runtime.onSessionCompact();
+  harness.runtime.finishSuccessfulAssistantTurn(
+    { role: "assistant", stopReason: "length" },
+    harness.ctx,
+    { continueGoal: false },
+  );
+
+  assert.equal(harness.recoveryState.counters.compactionAttempts, 1);
+  const second = harness.runtime.handlePersistentAssistantError(
+    { role: "assistant", stopReason: "error", errorMessage: "context_length_exceeded" },
+    harness.ctx,
+  );
+
+  assert.equal(second, undefined);
+  assert.equal(harness.recoveryState.counters.compactionAttempts, 2);
+  assert.deepEqual(harness.recoveryState.attention, {
+    kind: "paused",
+    reason: "context window recovery failed after repeated compaction attempts",
+  });
+});

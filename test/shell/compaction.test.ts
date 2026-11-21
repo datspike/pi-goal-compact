@@ -340,6 +340,35 @@ describe("режимы окна", () => {
     expect(runtime.notices.some((entry) => entry.text.includes("context: economy") && entry.text.includes("600000") && entry.text.includes("source=fallback"))).toBe(true);
   });
 
+  test("потерянное окно режима возвращается перед запросом хода", async () => {
+    const runtime = fakePi();
+    // Хост мог пересобрать модель из реестра без model_select: окно снова полное.
+    runtime.ctx.model = { ...runtime.ctx.model, contextWindow: 600_000 };
+    await runtime.event("before_agent_start", { type: "before_agent_start", prompt: "x", systemPrompt: "" });
+    expect(runtime.ctx.model.contextWindow).toBe(272_000);
+    expect(runtime.setModelCalls.map((model) => model.contextWindow)).toEqual([272_000]);
+  });
+
+  test("повторный сбой окна перед ходом не повторяет то же сообщение", async () => {
+    const runtime = fakePi({ setModelResult: false });
+    const turn = () => runtime.event("before_agent_start", { type: "before_agent_start", prompt: "x", systemPrompt: "" });
+    const errors = () => runtime.notices.filter((entry) => entry.level === "error" && entry.text.includes("Не удалось применить окно контекста"));
+    runtime.ctx.model = { ...runtime.ctx.model, contextWindow: 600_000 };
+    await turn();
+    await turn();
+    expect(errors()).toHaveLength(1);
+    // Успешная проверка снимает запомненный сбой: следующий такой же сообщается снова.
+    runtime.ctx.model = { ...runtime.ctx.model, contextWindow: 272_000 };
+    await turn();
+    runtime.ctx.model = { ...runtime.ctx.model, contextWindow: 600_000 };
+    await turn();
+    expect(errors()).toHaveLength(2);
+    // Другой маршрут той же модели — тоже новый сбой.
+    runtime.ctx.model = { ...runtime.ctx.model, baseUrl: "http://other" };
+    await turn();
+    expect(errors()).toHaveLength(3);
+  });
+
   test("режим восстанавливается из журнала прежнего расширения, старый порог молча игнорируется (К7)", async () => {
     const branch = [
       { id: "m", type: "custom", customType: "context-compaction-mode", data: { mode: "long-chat" } },

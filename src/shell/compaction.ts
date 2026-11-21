@@ -252,6 +252,9 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		stage.observe("before_agent_start", event, ctx);
 		// Pi дожидается этого обработчика до первого запроса хода и берёт модель и окно уже после него.
 		if (manualCompaction && await manualCompaction.done) cancelWaitingRun = true;
+		// Окно режима могло тихо потеряться без model_select (хост пересобрал модель);
+		// перед запросом сверяем его с режимом, иначе контекст растёт до предела модели.
+		await window.modelChanged(ctx);
 	});
 	pi.on("agent_start", (event, ctx) => {
 		stage.observe("agent_start", event, ctx);

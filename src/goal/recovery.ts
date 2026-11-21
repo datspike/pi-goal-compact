@@ -48,7 +48,8 @@ export function isSuccessfulAssistantTurn(message: AssistantErrorMessage): boole
   if (message.role !== "assistant") {
     return false;
   }
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
+  // `length` означает оборванный ответ; он не подтверждает, что recovery завершился.
+  return message.stopReason !== "error" && message.stopReason !== "aborted" && message.stopReason !== "length";
 }
 
 export function isAssistantContextOverflow(

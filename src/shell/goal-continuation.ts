@@ -292,7 +292,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
         recordOverflow(lastError, ctx);
         const failureId = providerRetry?.active() ? ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id : undefined;
         if (!isContextOverflowError(lastError.errorMessage) && !providerRetry?.owns(failureId)) recoveryRuntime.handlePersistentAssistantError(lastError, ctx);
-      } else if (!lastAssistant || !recordOverflow(lastAssistant, ctx)) {
+      } else if (!lastAssistant || (!recordOverflow(lastAssistant, ctx) && lastAssistant.stopReason !== "length")) {
         session.resetRecovery();
       }
     }
