@@ -28,6 +28,8 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 In a native subagent fork, the parent's Goal remains history: it neither starts a turn nor controls the child's completion. The child can create its own Goal, which survives restarts and `/reload`. Interactive forks keep their previous continuation behavior.
 
+**Honest completion.** The goal does not close while the plan has a live item — `planned`, `active` or `blocked`: the agent gets a refusal listing those items and keeps working. A blocker does not switch the whole goal off: it explains itself in `result` (what was tried and which resource is missing) and shows up in `get_goal`, while continuation stops only when no available step remains without the owner. A closed item names its observation in `result` or `evidence`, an open item never disappears from the plan: it is removed through `cancelled` with a reason. Decision — [0026](docs/adr/0026-chestnoe-zakrytie-i-zarabotannoe-prepyatstvie.md).
+
 **Lean protocol.** Without a goal the model sees a single goal tool, `create_goal`. The others appear once a goal is set and leave at the next window boundary after it closes: removing them at once would reset the cache. Smooth work needs no service calls on the way: coherent chat text counts as a report, the plan and the report for the same milestone go into one `update_goal_work`, and every goal tool response carries the fresh plan revision. Language remarks about a report arrive in the response as `languageNotes` and block nothing.
 
 **A controlled window.** Context window modes: an economy mode by default, an enlarged window for one compaction or for the whole conversation. The footer shows how full the window is, the compaction threshold and the goal state.

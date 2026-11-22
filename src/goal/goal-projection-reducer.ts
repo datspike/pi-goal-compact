@@ -207,6 +207,8 @@ export function reduceGoalProjection(state: GoalProjectionState, event: GoalProj
           throw new Error(say("Незавершённый пункт пользователя не может исчезнуть; оставь его или запиши, что с ним стало.", "Unfinished user work cannot disappear; retain it or record its disposition."));
         }
       }
+      // Договор плана (решение 0026) проверяет слой инструмента: журнал обязан остаться
+      // читаемым для прежних записей, где пункт закрывался без текста наблюдения.
       const result = nextState(state, event);
       result.workState = cloneGoalWorkState(event.workState);
       result.workRevision = state.workRevision + 1;

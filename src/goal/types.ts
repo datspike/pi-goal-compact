@@ -101,8 +101,8 @@ export interface GoalResult {
   operation?: "amend_goal" | "update_goal" | "resume_goal";
   /** null means the canonical write was not acknowledged; reconcile before retry. */
   applied?: boolean | null;
-  /** `agreement_check` — первая попытка закрытия вернула договорённость для сверки (Д3). */
-  stage?: "canonical" | "projection" | "complete" | "agreement_check";
+  /** `agreement_check` — первая попытка закрытия вернула договорённость для сверки (Д3). `open_items` — в плане остались живые пункты (решение 0026). */
+  stage?: "canonical" | "projection" | "complete" | "agreement_check" | "open_items";
   retryable?: boolean;
   remediation?: string;
   amendmentId?: string;

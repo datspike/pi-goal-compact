@@ -14,7 +14,7 @@ import { completionFingerprint, completionReturnMessage, selfDecidedItemId, vali
 import { createGoalReports, holdsContinuation, latestOwnerEntryId, type GoalReportAction, type GoalReportState } from "../goal/goal-reports.js";
 import { createGoalRuntimeStatus, type GoalRuntimeActivity } from "../goal/goal-runtime-status.js";
 import { applyGoalTransitionEffects, planGoalTransition, reloadGoalRuntimeEffects, type GoalTransitionEffectHandlers, type GoalTransitionRequest } from "../goal/goal-transition.js";
-import type { GoalWorkState, GoalWorkUpdateResult } from "../goal/goal-work-state.js";
+import { actionableGoalWorkItems, checkGoalWorkRules, liveGoalWorkItems, type GoalWorkState, type GoalWorkUpdateResult } from "../goal/goal-work-state.js";
 import { applyHostOverflowUserResetPersistence, beginHostOverflowRecovery, clearActiveHostOverflowRecovery, createGoalRecoveryMachine, requireHostOverflowUserReset, recoveryPhaseBlocksContinuation, resetRecoveryMachine, setRecoveryPausedAttention, syncHostOverflowUserResetFromSession } from "../goal/recovery-machine.js";
 import { MAX_REPORT_SUMMARY_CHARS, MAX_REPORT_VERIFICATION_CHARS, type GoalProgressReport } from "../goal/report-schema.js";
 import { amendGoal as appendAmendment, type AgreementInput, cloneGoal, goalsEquivalent, goalWithLiveUsage, hostOverflowCapResetEntry, nonDecreasingUpdatedAt, reconstructGoal, reconstructHostOverflowCapNeedsUserReset, updateGoalStatus } from "../goal/state.js";
@@ -261,7 +261,7 @@ export function createGoalSession(pi: ExtensionAPI) {
   const canRecover = (allowAnsweredUserHold = false, lifecycleOnly = false): boolean => {
     const state = reports.getState();
     return !unconfirmedWrite() &&
-      (!reports.isContinuationHeld() || state.hasUserDecisionSinceAwaiting || allowAnsweredUserHold) &&
+      (!continuationHeld() || state.hasUserDecisionSinceAwaiting || allowAnsweredUserHold) &&
       !amendmentProjectionPending &&
       (lifecycleOnly || !recoveryPhaseBlocksContinuation(recovery.phase));
   };
@@ -348,7 +348,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     if (recoveryId === undefined && features().amendNeedsOwner && ownerReplySeq <= ownerReplySeqAtGoalChange) {
       return { ok: false, message: say("amend_goal нужен настоящий ответ владельца после создания цели или прошлого изменения. Спроси владельца; не меняй цель сам.", "amend_goal needs a real owner reply after the goal was created or last amended. Ask the owner; do not change the goal on your own."), goal: current };
     }
-    if (current.status === "paused" && reports.isContinuationHeld()) {
+    if (current.status === "paused" && continuationHeld()) {
       return { ok: false, message: say("Цель ждёт обычного решения пользователя и без него не продолжится.", "Goal is awaiting an ordinary user decision before it can continue."), goal: current };
     }
     let text = amendment.trim();
@@ -458,6 +458,21 @@ export function createGoalSession(pi: ExtensionAPI) {
       }
     }
     const goal = getGoal();
+    // Договор закрытия (решение 0026): живой пункт плана не даёт закрыть цель. Препятствие —
+    // тоже живой пункт: сначала оно должно быть снято или отменено, либо вся доступная работа
+    // кончилась, и тогда цель идёт обычным путём блокировки, а не тихого complete.
+    const current = projections.current();
+    const plan = current && goal && current.goalId === goal.goalId ? current.workState : null;
+    const live = goal && goal.status !== "complete" ? liveGoalWorkItems(plan) : [];
+    if (live.length > 0) {
+      const listed = live.map((item) => `${item.id}: ${item.title}`).join("; ");
+      const actionable = live.filter((item) => item.status !== "blocked");
+      return { ok: false, operation: "update_goal", applied: false, stage: "open_items", retryable: false,
+        message: say(`В плане есть живые пункты (${listed}); цель не закрывается, пока они не закрыты или не отменены.`, `The plan still has live items (${listed}); the goal cannot be closed until they are done or cancelled.`), goal,
+        remediation: actionable.length > 0
+          ? say("Продолжай работу над живыми пунктами. Препятствие в одном пункте не останавливает остальные; закрывай или отменяй каждый пункт по своему наблюдению.", "Keep working on the live items. A blocker in one item does not stop the others; close or cancel each item by its own observation.")
+          : say("Все доступные шаги упираются в препятствия. Опубликуй report_goal_progress со статусом blocked, eventKind blocker_opened и needUser — это удержит продолжение до решения владельца; не закрывай цель через complete.", "Every available step is stuck. Publish report_goal_progress with blocked status, eventKind blocker_opened and needUser — that holds continuation until the owner decides; do not close the goal through complete.") };
+    }
     if (initialGoal?.goalId !== goal?.goalId) return { ok: false, operation: "update_goal", applied: false, stage: "canonical", retryable: false,
       message: "Goal changed while waiting for completion.", goal, remediation: say("Прочитай текущий контракт; не завершай другую цель по старому запросу.", "Read the current contract; do not complete a different goal from an old request.") };
     if (goal && goal.status !== "complete" && amendmentProjectionPending) {
@@ -561,7 +576,7 @@ export function createGoalSession(pi: ExtensionAPI) {
       if (projection.eventApplied === false) return { reportId: null, state: reports.getState(), projection };
       if (holdsContinuation(report.status)) awaitingInputGeneration = publicationInputGeneration;
       const entry = reports.publish(goal, report, currentTurnIndex, [], reportId, { canonical: true, createdAt: projection.state.progressEvents.at(-1)!.createdAt });
-      if (reports.isContinuationHeld()) hooks.clearContinuation();
+      if (continuationHeld()) hooks.clearContinuation();
       return { reportId: entry.reportId, state: reports.getState(), projection };
     } catch (error) {
       if (error instanceof GoalCanonicalWriteError) throw new Error(JSON.stringify({ ...error.details, operation: "report_goal_progress" }));
@@ -571,7 +586,7 @@ export function createGoalSession(pi: ExtensionAPI) {
         // Хронология берётся из журнала: повторная публикация приняла бы новый ответ владельца за разрешение старого отчёта.
         reports.reload(goalContext(ctx).sessionManager.getBranch(), goal.goalId);
         if (reports.getState().lastReportId === reportId && holdsContinuation(report.status)) awaitingInputGeneration = publicationInputGeneration;
-        if (reports.isContinuationHeld()) hooks.clearContinuation();
+        if (continuationHeld()) hooks.clearContinuation();
       }
       throw new Error(JSON.stringify({
         operation: "report_goal_progress", goalId: goal.goalId,
@@ -586,13 +601,24 @@ export function createGoalSession(pi: ExtensionAPI) {
     }
   };
 
+  // Препятствие в одном пункте не останавливает цель, пока в плане есть доступная работа
+  // (решение 0026): удержание продолжения остаётся только для случая, когда без владельца
+  // шагов не осталось. Вопрос владельцу (`awaiting_user`) держит как прежде.
+  const blockedWorkStillMovable = (): boolean => {
+    if (reports.getState().lastReport?.status !== "blocked") return false;
+    const current = projections.current();
+    const goal = getGoal();
+    return Boolean(current && goal && current.goalId === goal.goalId && actionableGoalWorkItems(current.workState).length > 0);
+  };
+  const continuationHeld = (): boolean => reports.isContinuationHeld() && !blockedWorkStillMovable();
+
   const getGoalWorkingState = (ctx: ExtensionContext): GoalWorkingState => {
     const goal = goalForDisplay();
     const current = projections.current();
     const projection = goal && current?.goalId === goal.goalId ? current : null;
     const view = goalContext(ctx);
     const refs = goal && projection ? artifacts.managedRefs(goal, view, view.sessionManager.getBranch()) : [];
-    return goalWorkingState(goal, projection, reports.getState(), refs);
+    return goalWorkingState(goal, projection, reports.getState(), refs, continuationHeld());
   };
 
   const announceAgreement = (goal: ThreadGoal, ctx: ExtensionContext): void => {
@@ -807,7 +833,7 @@ export function createGoalSession(pi: ExtensionAPI) {
         workState: working.workState, workRevision: working.workRevision, workStateStale: working.workStateStale, activeDecisions: working.activeDecisions,
         openPaperCuts: projection?.paperCuts.filter((item) => item.status === "open").length ?? 0,
         awaitingUser: reportState.awaitingUser,
-        continuationHeld: reports.isContinuationHeld() || hooks.isLimitHeld(), userAnswerReceived: reportState.hasUserDecisionSinceAwaiting,
+        continuationHeld: continuationHeld() || hooks.isLimitHeld(), userAnswerReceived: reportState.hasUserDecisionSinceAwaiting,
         // Пока договорённость стоит в окне, продолжение не повторяет её результат и критерий.
         agreementOwnsContract: features().singleFactOwner && features().agreementInWindow,
       };
@@ -815,7 +841,7 @@ export function createGoalSession(pi: ExtensionAPI) {
     resumePausedGoal,
     resumeGateFailure,
     canRecover,
-    isContinuationHeld: () => reports.isContinuationHeld(),
+    isContinuationHeld: continuationHeld,
     noteInput,
     isSlashWorkflow,
     /** Владелец остановил работу или сменил контекст: прежнее слово о возобновлении больше не действует. */
@@ -850,6 +876,17 @@ export function createGoalSession(pi: ExtensionAPI) {
         if (!goal || goal.goalId !== goalId) throw error;
         bootstrap = initializeDocument(goal, ctx);
         await bootstrap;
+      }
+      // Отказ проверяется до записи: журнал не получает заведомо нарушающий план, а модель
+      // видит стадию и следующий шаг вместо голого исключения (решение 0026).
+      const current = projections.current();
+      if (current && current.goalId === goalId) {
+        const violation = checkGoalWorkRules(current.workState, workState);
+        if (violation) return {
+          applied: false, goalId, workRevision: current.workRevision, workStateStale: current.workStateStale,
+          projectionFresh: true, stage: violation.stage, retryable: false, error: null,
+          message: violation.message, remediation: violation.remediation,
+        };
       }
       return projections.updateWork(goalId, workState, expectedRevision, goalContext(ctx), callId);
     },

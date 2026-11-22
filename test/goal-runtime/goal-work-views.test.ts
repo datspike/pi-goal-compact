@@ -120,10 +120,13 @@ test("old decisions stay historical while only current decision IDs reach contin
 
 test("verification belongs to its work revision and old evidence cannot complete a changed plan", async () => {
   const { harness, goalId } = await setup();
+  // Договор закрытия (решение 0026): закрывать можно только план без живых пунктов,
+  // поэтому сценарий проверки свежести отчёта держит план уже закрытым.
+  const closed = (summary: string) => ({ ...plan(), summary, items: plan().items.map((entry) => entry.status === "cancelled" ? entry : { ...entry, status: "done" as const, result: `Наблюдение по пункту ${entry.id}` }) });
   const verify = (verification = "Тесты проходят.") => harness.runTool("report_goal_progress", { action: "publish", status: "verifying", phase: "Проверяю результат", verification, nextStep: "Завершить цель" });
   await verify();
   assert.equal((await current(harness)).latestUsefulVerification, "Тесты проходят.");
-  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), summary: "Добавлена новая работа" } });
+  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: closed("Добавлена новая работа") });
   assert.equal((await current(harness)).latestUsefulVerification, null);
   await assert.rejects(() => harness.runTool("update_goal", { status: "complete" }), /свежий отчёт/);
   await harness.reloadSession("reload");
@@ -139,7 +142,8 @@ test("verification belongs to its work revision and old evidence cannot complete
 
 test("empty and stale plans are explicit, rather than evidence that nothing remains", async () => {
   const { harness, goalId } = await setup();
-  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), items: plan().items.map((entry) => ({ ...entry, status: "done" })) } });
+  // Закрытый пункт называет наблюдение (решение 0026): иначе план не принимается.
+  await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), items: plan().items.map((entry) => ({ ...entry, status: "done", result: `Наблюдение по пункту ${entry.id}` })) } });
   await harness.runSlashCommand("gw");
   assert.match(snapshot(harness), /полноту результата ещё нужно проверить/);
   await harness.runTool("amend_goal", { amendment: "Также проверить частично заполненные планы" });
@@ -180,7 +184,8 @@ test("user provenance cannot be downgraded to erase work from any consumer", asy
   const { harness, goalId } = await setup();
   const before = await readFile(goalFilePath(harnessCwd, goalId), "utf8");
   for (const status of ["planned", "active", "blocked", "done", "cancelled"] as const) {
-    const downgraded = { ...plan(), items: plan().items.map((item) => item.id === "live" ? { ...item, status, source: "agent" as const } : item) };
+    const observed = status === "done" || status === "blocked" ? { result: "Наблюдение для проверки источника" } : {};
+    const downgraded = { ...plan(), items: plan().items.map((item) => item.id === "live" ? { ...item, status, source: "agent" as const, ...observed } : item) };
     await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: downgraded }), /Пункт пользователя нельзя переписать/);
   }
   await assert.rejects(() => harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 1, state: { ...plan(), items: plan().items.filter((item) => item.id !== "live") } }), /Незавершённый пункт пользователя/);

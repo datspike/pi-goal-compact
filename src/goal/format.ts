@@ -317,6 +317,8 @@ export function goalWorkingState(
   projection: GoalProjectionState | null,
   reportState: GoalReportState | null,
   artifactRefs: GoalArtifactRef[] = [],
+  /** Фактическое удержание продолжения: отчёт `blocked` не держит цель, пока есть доступная работа (0026). */
+  continuationHeld: boolean | null = null,
 ): GoalWorkingState {
   const workingProgress = goalWorkingProgress(projection, reportState);
   const progress = workingProgress.progress;
@@ -342,7 +344,7 @@ export function goalWorkingState(
     needUser: progress?.needUser ?? null,
     awaitingUser: reportState?.awaitingUser ?? progress?.status === "awaiting_user",
     requiresUserDecision: reportState ? reportState.awaitingUser && (reportState.requiresUserDecision ?? true) : progress?.status === "awaiting_user",
-    continuationHeld: reportState ? reportState.awaitingUser && !reportState.questionAnswerPending : false,
+    continuationHeld: continuationHeld ?? (reportState ? reportState.awaitingUser && !reportState.questionAnswerPending : false),
     ...(goal?.agreement?.minimumActiveSeconds !== undefined ? { activeTimeEstimate: activeTimeEstimate(goal) } : {}),
     usage: goal?.usage ? { ...goal.usage } : { tokensUsed: 0, activeSeconds: 0 },
     projection: projection ? {
