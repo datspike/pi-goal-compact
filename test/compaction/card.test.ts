@@ -63,3 +63,16 @@ test("удачный append показывает своё время и не в�
 	expect(card.details.some((detail) => detail.includes("append стоимость"))).toBe(false);
 	expect(card.details).toContain("append время: 19.1 s · cache hit");
 });
+
+test("доля кэша считается по принятой попытке, а стоимость — по всем", () => {
+	const card = formatCompactCard({
+		version: 2, kind: "append", appendCacheStatus: "hit", tokensBefore: 40_901, summaryTokens: 606, appendDurationMs: 4_170, appendAttempts: 2,
+		usage: { input: 84_567, cacheRead: 2_304, cost: { total: 0.018 } },
+		appendUsage: { input: 40_916, cacheRead: 2_304, cost: { total: 0.0084 } },
+	}, "ru");
+	// 2.3k кэша из 43.2k принятой попытки — 5%, а не 3% от суммы двух запросов.
+	expect(card.line).toContain("cache hit 5%");
+	expect(card.line).toContain("$0.0180");
+	expect(card.details).toContain("попытки append: 2");
+	expect(card.details).toContain("cache: read 2.3k / input 43.2k (5%)");
+});

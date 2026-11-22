@@ -23,6 +23,11 @@ export interface CompactMetrics {
 	cost?: number;
 	appendCost?: number;
 	repairAttempts?: number;
+	/** Сколько попыток append ушло в модель: повтор тоже расходует бюджет. */
+	appendAttempts?: number;
+	/** Попадание в кэш по принятой попытке: доля в карточке считается от неё. */
+	cacheRead?: number;
+	cacheInput?: number;
 	/** Отмена владельцем или смена контекста: сжатия не было, но попытка видна. */
 	outcome?: "saved" | "failed";
 	sessionId: string;
@@ -34,6 +39,8 @@ export function appendMetrics(pi: { appendEntry(type: string, data: CompactMetri
 
 /** Собирает запись метрик из тех же полей, что уходят в карточку. */
 export function metricsFromCard(card: Omit<CompactCardData, "version">, sessionId: string, outcome: "saved" | "failed"): CompactMetrics {
+	// При удачном append кэш виден по принятой попытке, иначе по общему расходу.
+	const cacheSource = card.kind === "append" && card.appendUsage ? card.appendUsage : card.usage;
 	return {
 		version: 1,
 		kind: card.kind,
@@ -49,6 +56,9 @@ export function metricsFromCard(card: Omit<CompactCardData, "version">, sessionI
 		...(card.usage?.cost?.total === undefined ? {} : { cost: card.usage.cost.total }),
 		...(card.appendUsage?.cost?.total === undefined ? {} : { appendCost: card.appendUsage.cost.total }),
 		...(card.repairAttempts === undefined ? {} : { repairAttempts: card.repairAttempts }),
+		...(card.appendAttempts === undefined ? {} : { appendAttempts: card.appendAttempts }),
+		...(cacheSource?.cacheRead === undefined ? {} : { cacheRead: cacheSource.cacheRead }),
+		...((cacheSource?.input ?? 0) > 0 ? { cacheInput: (cacheSource?.input ?? 0) + (cacheSource?.cacheRead ?? 0) } : {}),
 		outcome,
 		sessionId,
 	};

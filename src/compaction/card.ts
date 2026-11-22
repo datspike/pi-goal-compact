@@ -27,8 +27,11 @@ export interface CompactCardData {
     durationMs?: number;
     appendDurationMs?: number;
     appendUsage?: CompactCardUsage;
+    /** Сколько всего попыток append ушло в модель: повтор тоже тратит бюджет и его видно в карточке. */
+    appendAttempts?: number;
     appendCacheStatus?: string;
     repairAttempts?: number;
+    /** Общий расход сжатия, включая отвергнутые попытки. */
     usage?: CompactCardUsage;
 }
 
@@ -54,10 +57,12 @@ export function formatCompactCard(data: CompactCardData, language: "ru" | "en"):
     const ru = language === "ru";
     const usage = data.usage;
     const appendUsage = data.appendUsage;
-    const cacheRead = usage?.cacheRead;
+    // Доля кэша считается по принятой попытке: сумма попыток занижала бы её только из-за повтора.
+    const cacheSource = data.kind === "append" && appendUsage ? appendUsage : usage;
+    const cacheRead = cacheSource?.cacheRead;
     const numericCacheRead = typeof cacheRead === "number";
-    const input = (usage?.input ?? 0) + (numericCacheRead ? cacheRead : 0);
-    const hasUsage = Boolean(usage) && input > 0;
+    const input = (cacheSource?.input ?? 0) + (numericCacheRead ? cacheRead : 0);
+    const hasUsage = Boolean(cacheSource) && input > 0;
     const cacheShare = hasUsage && numericCacheRead ? Math.round((cacheRead / input) * 100) : undefined;
     const derivedAppendCacheStatus = data.kind === "append" && numericCacheRead ? (cacheRead > 0 ? "hit" : "miss") : undefined;
     const appendCacheStatus = data.appendCacheStatus ?? derivedAppendCacheStatus;
@@ -87,6 +92,7 @@ export function formatCompactCard(data: CompactCardData, language: "ru" | "en"):
     else if (data.kind === "append" && appendCacheStatus && appendCacheStatus !== "not-attempted") details.push(`cache: ${appendCacheStatus}`);
     if (duration) details.push(`${ru ? "время" : "time"}: ${duration}${data.repairAttempts ? ` · repair ${data.repairAttempts}` : ""}`);
     if (typeof data.appendDurationMs === "number") details.push(`${ru ? "append время" : "append time"}: ${(data.appendDurationMs / 1000).toFixed(1)} s${appendCacheStatus ? ` · cache ${appendCacheStatus}` : ""}`);
+    if ((data.appendAttempts ?? 0) > 1) details.push(`${ru ? "попытки append" : "append attempts"}: ${data.appendAttempts}`);
     if (appendCostText) details.push(`${ru ? "append стоимость" : "append cost"}: ${appendCostText}`);
     if (cost) details.push(`${ru ? "стоимость" : "cost"}: ${cost}`);
     const tone = fallback || (data.kind === "append" && appendCacheStatus === "miss") ? "warning" : "normal";

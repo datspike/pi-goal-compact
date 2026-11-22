@@ -2,6 +2,7 @@ import { COMPACT_WINDOW_MARGIN } from "../compaction/compact-budget.js";
 import { estimateTokens, convertToLlm, sessionEntryToContextMessages, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { Provider, Message, Usage } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "../compaction/file-hints.js";
+import { createHash } from "node:crypto";
 import type { SummaryTransport } from "../compaction/summary.js";
 import { inLanguage, type Language } from "../language.js";
 
@@ -11,7 +12,7 @@ type RequestOptions = Args[2] | Parameters<Provider["stream"]>[2];
 function dispatch(base: Provider, method: "stream" | "streamSimple", model: Args[0], context: Args[1], options: RequestOptions) {
     return method === "stream" ? base.stream(model, context, options as Parameters<Provider["stream"]>[2]) : base.streamSimple(model, context, options as Args[2]);
 }
-type Capture = { method: "stream" | "streamSimple"; model: Args[0]; context: Args[1]; options: RequestOptions; payload: unknown; branch: string[]; session: string; settled: boolean };
+type Capture = { method: "stream" | "streamSimple"; model: Args[0]; context: Args[1]; options: RequestOptions; payload: unknown; branch: string[]; session: string; settled: boolean; at: number };
 const MAX_CAPTURE_CHARS = 16 * 1024 * 1024;
 
 function source(message: AgentMessage): AgentMessage {
@@ -70,6 +71,17 @@ export function prefixMatches(previous: unknown, next: unknown): boolean {
     return false;
 }
 
+/**
+ * Отпечаток запроса для разбора промаха кэша: сравнивать нужно с тем запросом,
+ * который действительно ушёл провайдеру, а не с самим append до и после обработчиков.
+ */
+function fingerprint(payload: unknown): { hash: string; items: number } {
+    if (!payload || typeof payload !== "object") return { hash: "", items: 0 };
+    const record = payload as Record<string, unknown>;
+    const turns = Array.isArray(record.input) ? record.input : Array.isArray(record.messages) ? record.messages : [];
+    return { hash: createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 16), items: turns.length };
+}
+
 /** Максимум ответа в готовом запросе: имя поля зависит от формата провайдера. */
 function outputLimit(payload: Record<string, unknown>, api: string): unknown {
     return api === "openai-completions" ? payload.max_completion_tokens ?? payload.max_tokens : payload.max_output_tokens;
@@ -117,7 +129,7 @@ export class AppendRoute {
         if (!manager || options?.sessionId !== manager.getSessionId() || !options.onPayload) return dispatch(base, method, model, context, options);
         // Любая новая попытка должна либо получить новый снимок, либо оставить append недоступным.
         this.capture = undefined;
-        const capture: Capture = { method, model: structuredClone(model), context: structuredClone(context), options, payload: undefined, branch: manager.getBranch().map(entry => entry.id), session: manager.getSessionId(), settled: false };
+        const capture: Capture = { method, model: structuredClone(model), context: structuredClone(context), options, payload: undefined, branch: manager.getBranch().map(entry => entry.id), session: manager.getSessionId(), settled: false, at: Date.now() };
         const result = dispatch(base, method, model, context, { ...options, onPayload: async (payload, payloadModel) => {
             const final = (await options.onPayload!(payload, payloadModel)) ?? payload;
             if (JSON.stringify(final).length <= MAX_CAPTURE_CHARS) { capture.payload = structuredClone(final); this.capture = capture; }
@@ -185,7 +197,9 @@ export class AppendRoute {
                             const fields = model.api === "openai-completions"
                                 ? ["model", "messages", "tools", "tool_choice", "max_tokens", "max_completion_tokens"]
                                 : ["model", "input", "instructions", "tools", "tool_choice", "prompt_cache_key", "reasoning", "max_output_tokens"];
-                            this.record({ phase: "request", payload: Object.fromEntries(fields.map(key => [key, (checked as Record<string, unknown>)[key]])) });
+                            // Совпадение отпечатков при короткой паузе означает: запрос тот же, а кэш не дал попадания.
+                            const captured = fingerprint(capture.payload);
+                            this.record({ phase: "request", payload: Object.fromEntries(fields.map(key => [key, (checked as Record<string, unknown>)[key]])) , capture: captured, request: fingerprint(checked), sinceCaptureMs: Date.now() - capture.at, promptCacheKey: (checked as Record<string, unknown>).prompt_cache_key });
                             return checked;
                         } catch (error) { rejected = error; throw error; }
                     },

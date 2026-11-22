@@ -62,6 +62,14 @@ test("append продолжает окончательный запрос и н�
     assert.match(task, /ordinal/);
     assert.match(task, /Инструкции сводки/);
     assert.equal(f.records.length, 2);
+    // Разбор промаха кэша: видно, совпал ли запрос с последним рабочим и сколько прошло времени.
+    const request = f.records[0] as { phase: string; capture?: { hash: string; items: number }; request?: { hash: string; items: number }; sinceCaptureMs?: number; promptCacheKey?: string };
+    assert.equal(request.phase, "request");
+    assert.equal(request.capture?.items, 2);
+    assert.equal(request.request?.items, 4);
+    assert.notEqual(request.capture?.hash, request.request?.hash);
+    assert.equal(typeof request.sinceCaptureMs, "number");
+    assert.equal("promptCacheKey" in request, true);
     f.route.dispose();
 });
 

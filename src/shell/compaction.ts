@@ -83,7 +83,7 @@ function routeOf(ctx: ExtensionContext): string {
 	return JSON.stringify(model ? [model.provider, model.id, model.api, model.baseUrl ?? ""] : null);
 }
 
-type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "appendDurationMs" | "repairAttempts" | "fallbackReason" | "appendCacheStatus" | "appendUsage"> & { sessionId: string };
+type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "appendDurationMs" | "repairAttempts" | "fallbackReason" | "appendCacheStatus" | "appendUsage" | "appendAttempts"> & { sessionId: string };
 
 /**
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
@@ -95,12 +95,20 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
 	const transfer = registerModelTransfer(pi, driver, gate);
 	const stage = createRequestStage();
+	// Принятая попытка: по ней видно попадание в кэш, потому что префикс у неё уже совпал с прежним запросом.
 	let appendUsage: Usage | undefined;
+	// Все попытки вместе: столько на самом деле стоил append, включая отвергнутые ответы.
+	let appendSpent: Usage | undefined;
+	let appendAttempts = 0;
 	// Настройка разрешает append, а включает его владелец только на текущее окно: без его слова режим выключен.
 	const appendAllowed = settings.appendCompaction;
 	let appendEnabled = false;
 	const append = new AppendRoute(value => {
-		if (value.usage) appendUsage = combineUsage(appendUsage, value.usage);
+		if (value.phase === "response" && value.usage) {
+			appendUsage = value.usage;
+			appendSpent = combineUsage(appendSpent, value.usage);
+			appendAttempts += 1;
+		}
 		pi.appendEntry(RECORD.appendAttempt, value);
 	});
 	let summarySequence = 0;
@@ -155,6 +163,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		lastFailureAborted = false;
 		const started = Date.now();
 		appendUsage = undefined;
+		appendSpent = undefined;
+		appendAttempts = 0;
 		// Отказ append виден в карточке и в рабочей строке до того, как началась сводка.
 		let fallbackReason: string | undefined;
 		let appendCacheStatus: string | undefined;
@@ -203,7 +213,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 			}
 			if ("compaction" in compact) {
 				// В сводке учитываются и отвергнутые ответы: они тоже расходуют модельный бюджет.
-				const usage = usedAppend ? appendUsage : combineUsage(compact.compaction.usage, appendUsage);
+				const usage = usedAppend ? appendSpent : combineUsage(compact.compaction.usage, appendSpent);
 				if (usage) compact.compaction.usage = usage;
 				pendingCard = {
 					kind: usedAppend ? "append" : "standard", sessionId: ctx.sessionManager.getSessionId(),
@@ -211,7 +221,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 					...(usedAppend ? { ...(cacheStatus(appendUsage) ? { appendCacheStatus: cacheStatus(appendUsage)! } : {}) } : appendCacheStatus ? { appendCacheStatus } : {}),
 					...(!usedAppend ? { durationMs: Date.now() - standardStarted } : {}),
 					...(appendDurationMs !== undefined ? { appendDurationMs } : {}),
-					...(!usedAppend && appendUsage ? { appendUsage } : {}),
+					...(appendAttempts ? { appendAttempts } : {}),
+					...(!usedAppend && appendSpent ? { appendUsage: appendSpent } : {}),
 					...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : {}),
 				};
 			}
