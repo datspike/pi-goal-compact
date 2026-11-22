@@ -39,13 +39,40 @@ function references(context: Message[], messages: AgentMessage[]): string {
     return JSON.stringify({ ordinals: refs.map(ref => ref.ordinal), boundaries: refs.length ? [refs[0], refs.at(-1)] : [], projections: refs.filter(ref => ref.projection).map(ref => ({ ordinal: ref.ordinal, projection: ref.projection })) });
 }
 
-function prefixMatches(previous: unknown, next: unknown): boolean {
+/** Поля продолжения, которые обязаны совпасть с прежним запросом дословно; меняться могут только добавленные в конец сообщения. */
+const RESPONSES_FIELDS = ["instructions", "tools", "model", "prompt_cache_key"] as const;
+const COMPLETIONS_FIELDS = ["model", "tools", "tool_choice", "chat_template", "chat_template_kwargs", "add_generation_prompt", "continue_final_message", "reasoning_effort", "documents", "add_special_tokens"] as const;
+const SUPPORTED_APIS = ["openai-responses", "openai-codex-responses", "openai-completions"] as const;
+
+function sameFields(left: Record<string, unknown>, right: Record<string, unknown>, fields: readonly string[]): boolean {
+    return fields.every(key => JSON.stringify(left[key]) === JSON.stringify(right[key]));
+}
+
+function isPrefix(previous: unknown[], next: unknown[]): boolean {
+    return next.length > previous.length && previous.every((item, index) => JSON.stringify(item) === JSON.stringify(next[index]));
+}
+
+/**
+ * Продолжение обязано содержать весь прежний запрос дословно.
+ * Формат задаёт провайдер: Responses передаёт turns в `input`, chat completions — в `messages`.
+ */
+export function prefixMatches(previous: unknown, next: unknown): boolean {
     if (!previous || !next || typeof previous !== "object" || typeof next !== "object") return false;
     const left = previous as Record<string, unknown>, right = next as Record<string, unknown>;
-    if (!Array.isArray(left.input) || !Array.isArray(right.input) || right.input.length <= left.input.length) return false;
-    // Параметры генерации могут отличаться; контекст, инструменты и ключ кэша — нет.
-    return ["instructions", "tools", "model", "prompt_cache_key"].every(key => JSON.stringify(left[key]) === JSON.stringify(right[key]))
-        && left.input.every((item, index) => JSON.stringify(item) === JSON.stringify((right.input as unknown[])[index]));
+    if (Array.isArray(left.input) || Array.isArray(right.input)) {
+        if (!Array.isArray(left.input) || !Array.isArray(right.input)) return false;
+        return sameFields(left, right, RESPONSES_FIELDS) && isPrefix(left.input, right.input);
+    }
+    if (Array.isArray(left.messages) || Array.isArray(right.messages)) {
+        if (!Array.isArray(left.messages) || !Array.isArray(right.messages)) return false;
+        return sameFields(left, right, COMPLETIONS_FIELDS) && isPrefix(left.messages, right.messages);
+    }
+    return false;
+}
+
+/** Максимум ответа в готовом запросе: имя поля зависит от формата провайдера. */
+function outputLimit(payload: Record<string, unknown>, api: string): unknown {
+    return api === "openai-completions" ? payload.max_completion_tokens ?? payload.max_tokens : payload.max_output_tokens;
 }
 
 /** Захватывает рабочий запрос после последнего обработчика; не хранит состояние цели и не запускает рабочие ходы. */
@@ -57,7 +84,7 @@ export class AppendRoute {
 
     install(ctx: ExtensionContext): void {
         this.manager = ctx.sessionManager;
-        if (!ctx.model || !["openai-responses", "openai-codex-responses"].includes(ctx.model.api)) return;
+        if (!ctx.model || !SUPPORTED_APIS.some(api => api === ctx.model!.api)) return;
         const registry = ctx.modelRegistry;
         if (this.registration?.registry === registry && registry.getRegisteredNativeProvider(ctx.model.provider) === this.registration.proxy) return;
         this.dispose();
@@ -104,6 +131,8 @@ export class AppendRoute {
     prepare(ctx: ExtensionContext, event: SessionBeforeCompactEvent, language: Language, serviceWindow: number): SummaryTransport {
         const capture = this.capture, registration = this.registration;
         if (!capture?.payload || !capture.settled || !registration) throw Error("APPEND_CAPTURE_UNAVAILABLE");
+        // Сводка уже применена: append продолжил бы новый запрос, но не сумеет переписать прежнюю сводку.
+        if (event.preparation?.previousSummary) throw Error("APPEND_PREVIOUS_SUMMARY");
         if (capture.session !== ctx.sessionManager.getSessionId() || registration.registry !== ctx.modelRegistry
             || ctx.modelRegistry.getRegisteredNativeProvider(capture.model.provider) !== registration.proxy
             || (["provider", "id", "api", "baseUrl"] as const).some(key => capture.model[key] !== ctx.model?.[key])) throw Error("APPEND_ROUTE_CHANGED");
@@ -149,9 +178,13 @@ export class AppendRoute {
                             if (!prefixMatches(capture.payload, final)) throw Error("APPEND_PAYLOAD_MISMATCH");
                             const checked = (await options.onPayload?.(final, payloadModel)) ?? final;
                             if (!prefixMatches(capture.payload, checked)) throw Error("APPEND_PAYLOAD_MISMATCH");
-                            const limit = (checked as { max_output_tokens?: number }).max_output_tokens;
-                            if (model.api === "openai-responses" && (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > (options.maxTokens ?? 0))) throw Error("APPEND_OUTPUT_LIMIT_MISMATCH");
-                            const fields = ["model", "input", "instructions", "tools", "tool_choice", "prompt_cache_key", "reasoning", "max_output_tokens"];
+                            const limit = outputLimit(checked as Record<string, unknown>, model.api);
+                            if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > (options.maxTokens ?? 0)) throw Error("APPEND_OUTPUT_LIMIT_MISMATCH");
+                            // Служебный запрос не должен превышать то, что можно было отправить рабочим ходом.
+                            if (JSON.stringify(checked).length > MAX_CAPTURE_CHARS) throw Error("APPEND_PAYLOAD_TOO_LARGE");
+                            const fields = model.api === "openai-completions"
+                                ? ["model", "messages", "tools", "tool_choice", "max_tokens", "max_completion_tokens"]
+                                : ["model", "input", "instructions", "tools", "tool_choice", "prompt_cache_key", "reasoning", "max_output_tokens"];
                             this.record({ phase: "request", payload: Object.fromEntries(fields.map(key => [key, (checked as Record<string, unknown>)[key]])) });
                             return checked;
                         } catch (error) { rejected = error; throw error; }

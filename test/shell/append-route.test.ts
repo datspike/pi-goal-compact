@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, normalizeContext, type AssistantMessage, type Provider, type Context } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionContext, type SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
-import { AppendRoute } from "../../src/shell/append-route.js";
+import { AppendRoute, prefixMatches } from "../../src/shell/append-route.js";
 import { asPi } from "../support/as-pi.js";
 
 function fixture(long = false) {
@@ -139,4 +139,23 @@ test("append резервирует ответ по служебному окн�
     assert.equal(limit, 8192);
     await transport.request(f.model, task, { maxTokens: limit });
     assert.equal(f.sent.length, 2);
+});
+
+test("уже применённая сводка отправляет сжатие на обычный путь", async () => {
+    const f = fixture(); await f.warm();
+    const event = asPi<SessionBeforeCompactEvent>({ signal: f.controller.signal, preparation: { previousSummary: "## Цель\nПрежняя сводка" } });
+    assert.throws(() => f.route.prepare(f.ctx, event, "ru", f.model.contextWindow), /APPEND_PREVIOUS_SUMMARY/);
+    assert.equal(f.sent.length, 1);
+});
+
+test("продолжение проверяется по форме провайдера: turns Responses и messages chat completions", () => {
+    const responses = { model: "m", instructions: "i", tools: [{ name: "read" }], input: [{ role: "user", content: "a" }] };
+    assert.equal(prefixMatches(responses, { ...responses, input: [...responses.input, { role: "user", content: "b" }] }), true);
+    assert.equal(prefixMatches(responses, { ...responses, instructions: "other", input: [...responses.input, { role: "user", content: "b" }] }), false);
+    const completions = { model: "m", tools: [{ type: "function", function: { name: "read" } }], messages: [{ role: "system", content: "s" }, { role: "user", content: "a" }] };
+    const continued = { ...completions, messages: [...completions.messages, { role: "user", content: "summary task" }] };
+    assert.equal(prefixMatches(completions, continued), true);
+    assert.equal(prefixMatches(completions, { ...continued, tool_choice: "none" }), false);
+    assert.equal(prefixMatches(completions, { ...continued, messages: [{ role: "system", content: "s" }] }), false);
+    assert.equal(prefixMatches(completions, responses), false);
 });

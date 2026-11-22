@@ -56,3 +56,10 @@ test("estimates summary tokens only from text", () => {
 	expect(estimateSummaryTokens("x".repeat(40))).toBe(10);
 	expect(estimateSummaryTokens(undefined)).toBeUndefined();
 });
+
+test("удачный append показывает своё время и не выдумывает отдельный расход", () => {
+	const card = formatCompactCard({ version: 2, kind: "append", appendCacheStatus: "hit", tokensBefore: 40_901, summaryTokens: 606, appendDurationMs: 19_100, usage: { input: 84_600, cacheRead: 2_300, cost: { total: 0.018 } } }, "ru");
+	expect(card.line).toBe("◆ append compact · cache hit 3% · 40.9k → summary ~606 · 19.1 s · $0.0180");
+	expect(card.details.some((detail) => detail.includes("append стоимость"))).toBe(false);
+	expect(card.details).toContain("append время: 19.1 s · cache hit");
+});

@@ -62,11 +62,18 @@ export function formatCompactCard(data: CompactCardData, language: "ru" | "en"):
     const derivedAppendCacheStatus = data.kind === "append" && numericCacheRead ? (cacheRead > 0 ? "hit" : "miss") : undefined;
     const appendCacheStatus = data.appendCacheStatus ?? derivedAppendCacheStatus;
     const cache = data.kind === "append" && appendCacheStatus && appendCacheStatus !== "not-attempted" ? appendCacheStatus === "hit" && cacheShare !== undefined ? `cache hit ${cacheShare}%` : `cache ${appendCacheStatus}` : undefined;
-    const duration = typeof data.durationMs === "number" ? `${(data.durationMs / 1000).toFixed(1)} s` : undefined;
+    // У удачного append своего общего времени нет: в строке показываем время самой append-сводки.
+    const elapsedMs = typeof data.durationMs === "number" ? data.durationMs : data.appendDurationMs;
+    const duration = typeof elapsedMs === "number" ? `${(elapsedMs / 1000).toFixed(1)} s` : undefined;
     const costValue = usage?.cost?.total;
     const cost = typeof costValue === "number" ? `$${costValue.toFixed(4)}` : undefined;
     const appendCost = appendUsage?.cost?.total;
-    const appendCostText = typeof appendCost === "number" ? `append $${appendCost.toFixed(4)}` : appendCacheStatus === "not-attempted" ? "append $0.0000" : appendCacheStatus ? "append unknown" : undefined;
+    // Отдельный расход append нужен только там, где он не стал итоговым: при удачном append это и есть общая стоимость.
+    const appendCostText = typeof appendCost === "number"
+        ? `append $${appendCost.toFixed(4)}`
+        : data.kind === "append"
+            ? undefined
+            : appendCacheStatus === "not-attempted" ? "append $0.0000" : appendCacheStatus ? "append unknown" : undefined;
     const fallback = data.fallbackReason !== undefined;
     const label = data.kind === "append" ? "append compact" : fallback ? `standard compact · append fallback (${data.fallbackReason})` : "standard compact";
     const size = `${tokens(data.tokensBefore)} → summary ${tokens(data.summaryTokens, true)}`;

@@ -6,7 +6,7 @@ A [Pi](https://github.com/badlogic/pi-mono) extension for long-running agent wor
 
 One extension replaces two earlier ones: [pi-codex-goal](https://github.com/datspike/pi-codex-goal) (long-running goals) and [context-compaction](https://github.com/datspike/context-compaction) (context window and compaction summaries). Sessions started with them open and continue as they are.
 
-> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction from `context-compaction` has not been carried over yet: for now compaction always produces a regular summary.
+> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction lives in an experimental branch: it is off by default, turns on for the current window with `/context append on`, and falls back to a standard summary with a visible reason whenever it cannot apply.
 
 ## Why
 
@@ -60,7 +60,7 @@ From there the agent works on its own. It reports progress briefly in chat; a se
 | `/gp` | Pause the active goal |
 | `/gr` | Resume a paused goal without a new model request |
 | `/gc` | Clear the current goal |
-| `/context [status\|economy\|long-once\|long-chat\|off]` | Show or change the context window mode |
+| `/context [status\|append on\|append off\|economy\|long-once\|long-chat\|off]` | Show or change the context window mode |
 
 ### Model tools
 
@@ -99,6 +99,14 @@ If compaction is saved but the new model cannot be applied or the compacted cont
 
 Enlarged modes turn on only if the model's entry in Pi's registry declares such a window and a pricing tier for it. The extension does not edit `models.json`: the window is overridden for the current session only.
 
+### Append compaction for the current window
+
+`/context append on` enables continuing the last working request to produce the summary; `/context append off` turns it off. The choice lasts until `/new`, and a new window starts with the mode off. The state is shown by `/context status`: `append=on`, `append=off`, or `append=forbidden` when settings do not allow it.
+
+While the summary runs, the working line says `Compact: append on the last request cache` or `Compact: standard summary`, not generation. After compaction the feed keeps a card: `◆ append compact · cache hit 92% · 258.8k → summary ~4.1k · 12.3 s · $0.0208`, and expanding it shows the separate append time, its cost and the model. If append did not apply, the owner sees `◆ standard compact · append fallback (<reason>)` in the warning colour, and the same reason stays in the expanded card instead of only flashing by as a notice.
+
+Every compaction result is also recorded machine-readably in `goal-compact-compact-metrics`: the kind of compaction, the cache outcome, sizes before and after, time, cost and the fallback reason. That record is what makes the mode reviewable after the session, not only in the moment.
+
 ## Settings
 
 Language and the compaction window are set in Pi's `settings.json`:
@@ -114,7 +122,7 @@ Language and the compaction window are set in Pi's `settings.json`:
 
 - `language` — `ru` (the default) or `en`: the language of goal prompts, summaries and notifications. The older `summaryLanguage` key is also read.
 - `compactCapabilities` — verified windows of the summary request for exact provider routes. Use it when a route actually accepts more than the registry declares.
-- `appendCompaction` has no effect without an additional flag. In this experimental branch only, `appendCompaction: true` together with `PI_APPEND_PILOT=1` enables continuing the last working request to generate a summary. Technical failures fall back to standard compaction; cancellation or a context change does not continue. This mode has not been deployed to the working installation.
+- `appendCompaction` permits append but does not enable it: `false` and `true` both leave the mode off until the owner turns it on in the window with `/context append on`. This extension does not change the working installation or its settings.
 
 Goal behavior is configured in `goal-reports.json`: globally in Pi's agent directory and per project in `.pi/goal-reports.json`. The project file overrides only the fields it names; feature switches are merged one by one.
 
@@ -164,7 +172,9 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 ## Limitations
 
-- Cache-preserving append compaction has not been carried over yet.
+- Append compaction exists only in this experimental branch; it is not deployed to the working installation or Pi settings.
+- Append does not promise a provider cache hit: with a short prefix or after a route change the miss shows up in the card as a warning.
+- With an already applied summary (`previousSummary`) append always yields to a standard summary and leaves the `previous-summary` reason in the card.
 - The model writes the agreement in its own words. The extension stores it unchanged, but how faithful the retelling is depends on the model.
 - With `language: "en"` the summary instruction does not name a language explicitly: over a Russian conversation the summary comes out in Russian.
 - An RPC `compact` command in the middle of a turn aborts the turn, and the goal pauses. A manual `/compact` while idle does not.

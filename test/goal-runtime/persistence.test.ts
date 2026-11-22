@@ -23,7 +23,7 @@ import {
   sessionCompactEvent,
   sessionShutdownEvent } from "../support/runtime-harness.js";
 
-const COMPACTION_RECORDS = new Set<string>([RECORD.audit, RECORD.standard, RECORD.card]);
+const COMPACTION_RECORDS = new Set<string>([RECORD.audit, RECORD.standard, RECORD.card, RECORD.metrics]);
 
 /** Число записей без журнала и карточек сжатия: их пишет часть сжатия того же расширения. */
 function goalEntryCount(harness: ReturnType<typeof createRuntimeHarness>): number {

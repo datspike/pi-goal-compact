@@ -24,3 +24,24 @@ export function restoreMode(entries: readonly any[]): ContextMode {
 export function appendMode(pi: { appendEntry(type: string, data: ModeEntry): void }, mode: ContextMode): void {
 	pi.appendEntry(MODE_ENTRY, { mode });
 }
+
+export const APPEND_SWITCH_ENTRY = RECORD.appendSwitch;
+
+export interface AppendSwitchEntry {
+	enabled: boolean;
+}
+
+/** Восстанавливает переключатель append текущего окна: без записи режим выключен. */
+export function restoreAppendSwitch(entries: readonly any[]): boolean {
+	let enabled = false;
+	for (const entry of entries) {
+		if (entry?.type !== "custom" || entry.customType !== APPEND_SWITCH_ENTRY) continue;
+		if (typeof entry.data?.enabled === "boolean") enabled = entry.data.enabled;
+	}
+	return enabled;
+}
+
+/** Сохраняет выбор владельца новой записью журнала: он действует, пока открыто это окно. */
+export function recordAppendSwitch(pi: { appendEntry(type: string, data: AppendSwitchEntry): void }, enabled: boolean): void {
+	pi.appendEntry(APPEND_SWITCH_ENTRY, { enabled });
+}

@@ -15,6 +15,8 @@ import {
 	withoutLegacyServiceTurns,
 } from "../compaction/checkpoint.js";
 import type { SummarySettings } from "../compaction/language.js";
+import { appendMetrics, metricsFromCard } from "../compaction/metrics.js";
+import { recordAppendSwitch, restoreAppendSwitch, restoreMode } from "../compaction/session-mode.js";
 import type { ContextMode } from "../compaction/policy.js";
 import type { Usage } from "@earendil-works/pi-ai";
 import { combineUsage, summarizeCompaction, summarizeTree } from "../compaction/summary.js";
@@ -28,6 +30,19 @@ import { notice } from "./notice.js";
 import { createWindowMode } from "./window-mode.js";
 
 const workingStandard = (): string => say("Compact: стандартная сводка", "Compact: standard summary");
+const workingAppend = (): string => say("Compact: append по кэшу последнего запроса", "Compact: append on the last request cache");
+/** Коды отказа маршрута append в слова владельцу: причина видна в карточке и в журнале. */
+const APPEND_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+	APPEND_PREVIOUS_SUMMARY: "previous-summary",
+	APPEND_CAPTURE_UNAVAILABLE: "no-captured-request",
+	APPEND_ROUTE_CHANGED: "route-changed",
+	APPEND_BRANCH_CHANGED: "branch-changed",
+	APPEND_CONTEXT_CHANGED: "context-changed",
+	APPEND_SOURCE_UNAVAILABLE: "sources-unavailable",
+	APPEND_PAYLOAD_MISMATCH: "payload-mismatch",
+	APPEND_PAYLOAD_TOO_LARGE: "request-too-large",
+	APPEND_OUTPUT_LIMIT_MISMATCH: "output-limit-mismatch",
+};
 /** Паузы перед повторами запроса сводки: разовый сбой сети или провайдера не должен срывать сжатие. */
 const SUMMARY_RETRY_DELAYS_MS: readonly number[] = [1000, 4000];
 /** Сколько слов провайдера о сбое сохранять в журнале и уведомлении. */
@@ -42,6 +57,8 @@ const CONTEXT_COMPLETIONS: readonly ContextCompletion[] = [
 	{ value: "long-once", label: "long-once", description: "Увеличенное окно по declared capability до следующего compact" },
 	{ value: "long-chat", label: "long-chat", description: "Постоянное увеличенное окно по declared capability" },
 	{ value: "off", label: "off", description: "Вернуть declared registry-окно без extension soft cap" },
+	{ value: "append on", label: "append on", description: "Включить append-сводку на это окно до /new" },
+	{ value: "append off", label: "append off", description: "Выключить append-сводку в этом окне" },
 ];
 const ENGLISH_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	status: "Show the current mode, window and threshold",
@@ -49,6 +66,8 @@ const ENGLISH_DESCRIPTIONS: Readonly<Record<string, string>> = {
 	"long-once": "Extended window until the next compaction",
 	"long-chat": "Persistent extended window within model capability",
 	off: "Restore the declared registry window without the extension soft cap",
+	"append on": "Enable append summaries for this window until /new",
+	"append off": "Disable append summaries in this window",
 };
 
 export function getContextArgumentCompletions(prefix: string, language: "ru" | "en" = "ru"): ContextCompletion[] | null {
@@ -64,7 +83,7 @@ function routeOf(ctx: ExtensionContext): string {
 	return JSON.stringify(model ? [model.provider, model.id, model.api, model.baseUrl ?? ""] : null);
 }
 
-type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "appendDurationMs" | "repairAttempts"> & { sessionId: string };
+type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durationMs" | "appendDurationMs" | "repairAttempts" | "fallbackReason" | "appendCacheStatus" | "appendUsage"> & { sessionId: string };
 
 /**
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
@@ -77,10 +96,13 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	const transfer = registerModelTransfer(pi, driver, gate);
 	const stage = createRequestStage();
 	let appendUsage: Usage | undefined;
-	const append = process.env.PI_APPEND_PILOT === "1" && settings.appendCompaction ? new AppendRoute(value => {
+	// Настройка разрешает append, а включает его владелец только на текущее окно: без его слова режим выключен.
+	const appendAllowed = settings.appendCompaction;
+	let appendEnabled = false;
+	const append = new AppendRoute(value => {
 		if (value.usage) appendUsage = combineUsage(appendUsage, value.usage);
-		pi.appendEntry("append-pilot-attempt", value);
-	}) : undefined;
+		pi.appendEntry(RECORD.appendAttempt, value);
+	});
 	let summarySequence = 0;
 	// Причина последней отменённой сводки: Pi сообщает о сбое без неё, а владельцу нужна конкретика.
 	let lastFailure: string | undefined;
@@ -116,21 +138,40 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		if (manualCorrelation) audit(ctx, "manual-tool", manualCorrelation, phase, "manual");
 	};
 
+	const refusalReason = (error: unknown): string => {
+		const message = error instanceof Error ? error.message : String(error);
+		return APPEND_REFUSAL_REASONS[message] ?? "unsupported-route";
+	};
+	/** Кэш append виден только по расходу ответа: без usage состояние неизвестно, а не промах. */
+	const cacheStatus = (usage: Usage | undefined): string | undefined => {
+		if (!usage) return undefined;
+		if (typeof usage.cacheRead !== "number") return "unknown";
+		return usage.cacheRead > 0 ? "hit" : "miss";
+	};
+
 	const summarize = async (event: SessionBeforeCompactEvent, ctx: ExtensionContext) => {
 		const generation = ++summarySequence;
 		lastFailure = undefined;
 		lastFailureAborted = false;
 		const started = Date.now();
 		appendUsage = undefined;
-		stage.beginCompaction(ctx, workingStandard());
-		try {
-			const capability = window.capability(ctx);
-			const model = ctx.model ? { ...ctx.model, contextWindow: capability.window } : undefined;
-			let transport: import("../compaction/summary.js").SummaryTransport | undefined;
-			if (append) {
-				try { transport = append.prepare(ctx, event, language, capability.window); }
-				catch (error) { pi.appendEntry("append-pilot-attempt", { phase: "preflight-refusal", reason: error instanceof Error ? error.message : String(error) }); }
+		// Отказ append виден в карточке и в рабочей строке до того, как началась сводка.
+		let fallbackReason: string | undefined;
+		let appendCacheStatus: string | undefined;
+		let transport: import("../compaction/summary.js").SummaryTransport | undefined;
+		const capability = window.capability(ctx);
+		if (appendEnabled) {
+			try { transport = append.prepare(ctx, event, language, capability.window); }
+			catch (error) {
+				fallbackReason = refusalReason(error);
+				appendCacheStatus = "not-attempted";
+				pi.appendEntry(RECORD.appendAttempt, { phase: "preflight-refusal", reason: fallbackReason });
+				notice(ctx, `Compact: ${say("append не применился", "append was not applied")} (${fallbackReason}); ${say("идёт обычная сводка", "standard summary runs")}`, "warning");
 			}
+		}
+		stage.beginCompaction(ctx, transport ? workingAppend() : workingStandard());
+		try {
+			const model = ctx.model ? { ...ctx.model, contextWindow: capability.window } : undefined;
 			const run = (useAppend: boolean) => summarizeCompaction(event, ctx, {
 				...(model ? { model } : {}),
 				...(useAppend && transport ? { transport } : {}),
@@ -153,7 +194,9 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 			const appendDurationMs = transport ? Date.now() - started : undefined;
 			let standardStarted = started;
 			if (transport && "cancel" in compact && !event.signal.aborted && !lastFailureAborted && lastFailure !== "context-changed") {
-				pi.appendEntry("append-pilot-attempt", { phase: "fallback", reason: lastFailure });
+				fallbackReason = lastFailure ?? "summary-failed";
+				appendCacheStatus = cacheStatus(appendUsage) ?? "unknown";
+				pi.appendEntry(RECORD.appendAttempt, { phase: "fallback", reason: fallbackReason });
 				usedAppend = false;
 				standardStarted = Date.now();
 				compact = await run(false);
@@ -164,8 +207,11 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 				if (usage) compact.compaction.usage = usage;
 				pendingCard = {
 					kind: usedAppend ? "append" : "standard", sessionId: ctx.sessionManager.getSessionId(),
+					...(fallbackReason ? { fallbackReason } : {}),
+					...(usedAppend ? { ...(cacheStatus(appendUsage) ? { appendCacheStatus: cacheStatus(appendUsage)! } : {}) } : appendCacheStatus ? { appendCacheStatus } : {}),
 					...(!usedAppend ? { durationMs: Date.now() - standardStarted } : {}),
 					...(appendDurationMs !== undefined ? { appendDurationMs } : {}),
+					...(!usedAppend && appendUsage ? { appendUsage } : {}),
 					...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : {}),
 				};
 			}
@@ -247,15 +293,28 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.registerCommand("context", {
 		description: say("Показывает или меняет именованный режим context compaction.", "Show or change the named context compaction mode."),
 		getArgumentCompletions: (prefix) => getContextArgumentCompletions(prefix, language),
-		handler: async (args, ctx) => {
+			handler: async (args, ctx) => {
 			const command = args.trim().replace(/\s+/g, " ") || "status";
-			if (command !== "status" && !MODES.includes(command as ContextMode)) {
-				notice(ctx, say("Использование: /context [status|economy|long-once|long-chat|off]", "Usage: /context [status|economy|long-once|long-chat|off]"), "error");
+			const appendCommand = /^append(?: (on|off))?$/.exec(command);
+			if (appendCommand) {
+				const next = appendCommand[1];
+				if (next === "on" && !appendAllowed) {
+					notice(ctx, say("Append выключен настройкой contextCompaction.appendCompaction.", "Append is disabled by contextCompaction.appendCompaction."), "error");
+					return;
+				}
+				if (next) {
+					appendEnabled = next === "on";
+					recordAppendSwitch(pi, appendEnabled);
+					if (appendEnabled) append.install(ctx); else append.dispose();
+				}
+			} else if (command !== "status" && !MODES.includes(command as ContextMode)) {
+				notice(ctx, say("Использование: /context [status|append on|append off|economy|long-once|long-chat|off]", "Usage: /context [status|append on|append off|economy|long-once|long-chat|off]"), "error");
 				return;
-			}
-			if (command !== "status") await window.select(ctx, command as ContextMode);
+			} else if (command !== "status") await window.select(ctx, command as ContextMode);
 			const policy = window.policy(ctx);
-			notice(ctx, `context: ${window.mode()}; model=${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : say("модель не выбрана", "no model selected")}; ${say("окно", "window")}=${policy.window}; compact@${policy.threshold ?? "native"}; source=${policy.source}`);
+			const appendState = appendAllowed ? (appendEnabled ? "on" : "off") : "forbidden";
+			notice(ctx, `${say("context", "context")}: ${window.mode()}; append=${appendState}; model=${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : say("модель не выбрана", "no model selected")}; ${say("окно", "window")}=${policy.window}; compact@${policy.threshold ?? "native"}; source=${policy.source}`);
+			if (appendAllowed && appendEnabled) notice(ctx, say("Append включён на это окно до /new; при отказе будет обычная сводка с причиной.", "Append is on for this window until /new; on refusal a standard summary runs and names the reason."));
 			window.updateFooter(ctx);
 		},
 	});
@@ -305,10 +364,12 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		driver.dispatch({ type: "context_switched" }, ctx);
 		await window.restore(ctx);
 		transfer.restore(ctx);
-		append?.reset();
+		appendEnabled = appendAllowed && restoreAppendSwitch(ctx.sessionManager.getBranch());
+		append.reset();
+		if (appendEnabled) append.install(ctx); else append.dispose();
 	});
 	const switched = (ctx: ExtensionContext): void => {
-		append?.reset();
+		append.reset();
 		++summarySequence;
 		transfer.cancel(ctx);
 		driver.dispatch({ type: "context_switched" }, ctx);
@@ -322,8 +383,9 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		// Своя смена окна меняет только contextWindow; другая модель, API или адрес — смена контекста даже во время неё.
 		const next = routeOf(ctx);
 		if (next !== route) {
-			append?.reset();
+			append.reset();
 			route = next;
+			if (appendEnabled) append.install(ctx);
 			if (!transfer.ownsModelChange(ctx)) { transfer.cancel(ctx); driver.dispatch({ type: "context_switched" }, ctx); }
 		}
 		if (window.isInternalTransition()) { window.updateFooter(ctx); return; }
@@ -347,7 +409,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		return summarize(event, ctx);
 	});
 	pi.on("context", (event, ctx) => {
-		append?.install(ctx);
+		if (appendEnabled) append.install(ctx);
 		const messages = withoutLegacyServiceTurns(event.messages, ctx.sessionManager.getBranch());
 		if (cancelWaitingRun) { cancelWaitingRun = false; ctx.abort(); }
 		transfer.blocked(ctx);
@@ -358,22 +420,23 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		return summarizeTree(event, ctx);
 	});
 	pi.on("session_compact", async (event, ctx) => {
-		append?.reset();
+		append.reset();
 		stage.observe("session_compact", event, ctx);
 		const pending = pendingCard?.sessionId === ctx.sessionManager.getSessionId() ? pendingCard : undefined;
 		pendingCard = undefined;
-		const { sessionId: _sessionId, ...card } = pending ?? { sessionId: "" };
+		const { sessionId: _sessionId, ...card } = pending ?? { sessionId: "", kind: "standard" as const };
 		const entry = event.compactionEntry;
 		const summaryTokens = estimateSummaryTokens(entry.summary);
-		pi.appendEntry<CompactCardData>(COMPACT_CARD_TYPE, {
-			version: 2,
-			kind: "standard",
+		const cardData: Omit<CompactCardData, "version"> = {
 			...card,
 			trigger: event.reason,
 			tokensBefore: entry.tokensBefore,
 			...(summaryTokens === undefined ? {} : { summaryTokens }),
 			...(entry.usage ? { usage: entry.usage } : {}),
-		});
+		};
+		pi.appendEntry<CompactCardData>(COMPACT_CARD_TYPE, { version: 2, ...cardData });
+		// Те же числа, но машинно: по ним режим и fallback разбираются после сессии.
+		appendMetrics(pi, metricsFromCard(cardData, ctx.sessionManager.getSessionId(), "saved"));
 		const reason = event.reason as CompactionReason;
 		const manualRun = reason === "manual" && manualCorrelation !== undefined;
 		await transfer.afterSaved(ctx, entry.id);
@@ -387,6 +450,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_compact_failed", (event, ctx) => {
 		stage.observe("session_compact_failed", event, ctx);
 		pendingCard = undefined;
+		const failure = lastFailure ?? event.errorMessage;
+		appendMetrics(pi, { version: 1, kind: "standard", outcome: "failed", ...(failure ? { fallbackReason: failure } : {}), sessionId: ctx.sessionManager.getSessionId() });
 		// Pi помечает aborted и отказ самого расширения; отмену владельцем отличает причина сводки или отсутствие ошибки.
 		const cancelled = lastFailure === undefined ? event.aborted === true && !event.errorMessage : lastFailureAborted;
 		transfer.compactFailed(ctx, lastFailure ?? event.errorMessage, cancelled);
@@ -401,7 +466,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	pi.on("session_shutdown", (event, ctx) => {
 		stage.observe("session_shutdown", event, ctx);
 		++summarySequence;
-		append?.dispose();
+		append.dispose();
 		finishManualCompaction(false);
 	});
 

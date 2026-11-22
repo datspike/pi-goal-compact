@@ -31,6 +31,8 @@ export interface FakeOptions {
   hasAuth?: boolean;
   contextTokens?: number | null;
   projectionText?: string;
+  /** Ответ сводчика в подделке: без него сжатие в fake всегда завершается ошибкой модели. */
+  complete?: (model: unknown, context: unknown, requestOptions?: unknown) => Promise<unknown>;
 }
 
 let sequence = 0;
@@ -58,12 +60,14 @@ export function fakePi(options: FakeOptions = {}) {
   const sent: Array<{ message: Parameters<ExtensionAPI["sendMessage"]>[0]; options: Parameters<ExtensionAPI["sendMessage"]>[1] }> = [];
   const setModelCalls: Array<Model<Api>> = [];
   const notices: Array<{ text: string; level: string }> = [];
+  // Рабочая строка Pi: по ней видно, что идёт сжатие, а не обычная генерация.
+  const workingMessages: string[] = [];
   const footers: string[] = [];
   let aborts = 0;
   const provider = options.modelProvider ?? "openai";
   const id = options.modelId ?? "gpt-5.6-sol";
   const registryEntry = { provider, id, contextWindow: options.registryContextWindow ?? 600_000, cost: { tiers: options.registryTiers ?? [{ inputTokensAbove: options.registryContextWindow ?? 600_000 }] } };
-  const initialModel: FakeModel = { provider, id, api: "openai-responses", contextWindow: 272_000, maxTokens: 128_000 };
+  const initialModel: FakeModel = { provider, id, api: "openai-responses", baseUrl: "http://127.0.0.1:1", contextWindow: 272_000, maxTokens: 128_000 };
   const noSignal = (): AbortSignal | undefined => undefined;
   const ctx = {
     cwd: "/tmp/goal-compact-test",
@@ -71,13 +75,27 @@ export function fakePi(options: FakeOptions = {}) {
     hasUI: true,
     mode: "tui",
     scopedModels: [],
-    ui: { notify(text: string, level: string) { notices.push({ text, level }); }, setStatus(_key: string, value?: string) { footers.push(value ?? ""); }, onTerminalInput: () => () => {} },
+    ui: { notify(text: string, level: string) { notices.push({ text, level }); }, setStatus(_key: string, value?: string) { footers.push(value ?? ""); }, setWorkingMessage(text?: string) { if (text) workingMessages.push(text); }, setWorkingVisible() {}, onTerminalInput: () => () => {} },
     model: initialModel,
     modelRegistry: {
       getAll: () => [registryEntry, ...(options.models ?? [])],
       getAvailable: () => options.models ?? [],
       hasConfiguredAuth: () => options.hasAuth !== false,
       find: (p: string, m: string) => options.models?.find(model => model.provider === p && model.id === m) ?? (p === provider && m === id ? registryEntry : undefined),
+      // Захват запроса append в подделке недоступен: маршрута нет, и сжатие честно отказывается.
+      getProvider: () => undefined,
+      getRegisteredNativeProvider: () => undefined,
+      getRegisteredProviderConfig: () => undefined,
+      registerProvider: () => {},
+      unregisterProvider: () => {},
+      // Сводку в подделке пишет тот же ответ, что и в настоящем Pi: расширение берёт его через complete.
+      complete: async (model: unknown, context: unknown, requestOptions: unknown) => options.complete
+        ? options.complete(model, context, requestOptions)
+        : {
+            role: "assistant", content: [{ type: "text", text: "## Цель\nДовести проверку\n\n## Исходный запрос\nПродолжить проверку." }],
+            stopReason: "stop",
+            usage: { input: 250_000, output: 1_200, cacheRead: 200_000, cacheWrite: 0, totalTokens: 251_200, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.02 } },
+          },
     },
     sessionManager: { getEntries: () => branch, getBranch: () => branch, getSessionId: () => sessionId, getSessionFile: () => undefined,
       buildSessionProjection: () => ({ messages: [{ role: "user", content: options.projectionText ?? "fixture", timestamp: 0 }] }),
@@ -171,6 +189,7 @@ export function fakePi(options: FakeOptions = {}) {
       return { text, details: isRecord(result.details) ? result.details : {}, result };
     },
     get aborts() { return aborts; },
+    get workingMessages() { return workingMessages; },
     get thinkingLevel() { return thinkingLevel; },
     tool(name: string) {
       const tool = tools.get(name);

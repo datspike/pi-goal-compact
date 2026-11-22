@@ -33,7 +33,7 @@ export type Row = {
   type?: string;
   customType?: string;
   content?: unknown;
-  data?: { step?: number; kind?: string; goal?: { status?: string } };
+  data?: { step?: number; kind?: string; enabled?: boolean; goal?: { status?: string } };
   message?: { role?: string; stopReason?: string; toolName?: string; isError?: boolean; content?: unknown };
 };
 
@@ -112,6 +112,8 @@ type StartOptions = {
   reload?: boolean;
   /** Первая реплика; без засева по умолчанию «Run offline probe.», с засевом — никакой. */
   prompt?: string;
+  /** Команды Pi до первой реплики, например `/context append on`. */
+  commands?: readonly string[];
   /** Загружаемые расширения вместо собранного — например, прежняя пара для проверки совместимости. */
   extensions?: readonly string[];
 };
@@ -127,7 +129,7 @@ export async function withProbe(script: ProbeScript, run: (start: (name: string,
   }
 }
 
-async function startPi(root: string, script: ProbeScript, name: string, { seed, reload = false, prompt, extensions = [EXTENSION] }: StartOptions): Promise<Row[]> {
+async function startPi(root: string, script: ProbeScript, name: string, { seed, reload = false, prompt, commands = [], extensions = [EXTENSION] }: StartOptions): Promise<Row[]> {
   const home = join(root, name);
   mkdirSync(home);
   const fixture = join(home, "fixture.ts");
@@ -154,6 +156,7 @@ async function startPi(root: string, script: ProbeScript, name: string, { seed, 
       });
       child.on("error", reject);
       child.on("exit", (code) => reject(new Error(`${name}: Pi завершился с кодом ${code}: ${errors.slice(-1200)}`)));
+      for (const command of commands) child.stdin?.write(JSON.stringify({ type: "prompt", message: command }) + "\n");
       const message = reload ? "/probe-reload" : prompt ?? (seed ? undefined : "Run offline probe.");
       if (message) child.stdin?.write(JSON.stringify({ type: "prompt", message }) + "\n");
     });

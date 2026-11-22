@@ -18,6 +18,12 @@ export const RECORD = {
   audit: "goal-compact-audit",
   standard: "goal-compact-standard",
   card: "goal-compact-card",
+  /** Переключатель append на текущее окно: живёт до /new, по умолчанию выключен. */
+  appendSwitch: "goal-compact-append",
+  /** Машинный итог сжатия для разбора после сессии. */
+  metrics: "goal-compact-compact-metrics",
+  /** Ход попытки append: отказ до сети, отправка, ответ. */
+  appendAttempt: "goal-compact-append-attempt",
   ticket: "goal-compact-ticket",
   transfer: "goal-compact-model-transfer",
   /** Сообщения начала окна; в журнал не пишутся, собираются заново при каждом запросе (решение 0004). */
@@ -35,6 +41,8 @@ export const LEGACY_RECORD_NAMES: Readonly<Record<string, string>> = {
   "pi-codex-goal-progress-due": RECORD.progressDue,
   "context-compaction-mode": RECORD.mode,
   "context-compaction-card": RECORD.card,
+  // Имя, под которым экспериментальная ветка append писала шаги попытки до появления решения 0021.
+  "append-pilot-attempt": RECORD.appendAttempt,
 };
 
 interface NamedEntry { readonly type?: string; readonly customType?: string }

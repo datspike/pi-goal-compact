@@ -261,6 +261,62 @@ test("карточка сжатия пишется после session_compact и
   }
 });
 
+describe("append на текущее окно", () => {
+  test("по умолчанию выключен и виден в /context status", async () => {
+    const runtime = fakePi({ language: "en" });
+    expect(runtime.entries.some((entry) => entry.type === "goal-compact-append")).toBe(false);
+    await runtime.command("status");
+    expect(runtime.notices.at(-1)!.text).toContain("append=off");
+    expect(runtime.entries.some((entry) => entry.type === "goal-compact-append")).toBe(false);
+  });
+
+  test("включение и выключение пишется в журнал окна и видно в статусе", async () => {
+    const runtime = fakePi({ language: "en" });
+    await runtime.command("append on");
+    expect(runtime.entries.find((entry) => entry.type === "goal-compact-append")!.data).toEqual({ enabled: true });
+    expect(runtime.notices.at(-2)!.text).toContain("append=on");
+    await runtime.command("append off");
+    expect(runtime.entries.filter((entry) => entry.type === "goal-compact-append").at(-1)!.data).toEqual({ enabled: false });
+    expect(runtime.notices.at(-1)!.text).toContain("append=off");
+  });
+
+  test("новое окно начинает с выключенного append, а старое восстанавливает выбор", async () => {
+    const runtime = fakePi({ language: "en", branch: [{ id: "a", type: "custom", customType: "goal-compact-append", data: { enabled: true } }] });
+    await runtime.event("session_start", { reason: "startup" });
+    await runtime.command("status");
+    expect(runtime.notices.some((entry) => entry.text.includes("append=on"))).toBe(true);
+    const fresh = fakePi({ language: "en" });
+    await fresh.event("session_start", { reason: "startup" });
+    await fresh.command("status");
+    expect(fresh.notices.some((entry) => entry.text.includes("append=off"))).toBe(true);
+  });
+
+  const preparation = { tokensBefore: 258_796, messagesToSummarize: [{ role: "user", content: "Начать работу", timestamp: 1 }], turnPrefixMessages: [], isSplitTurn: false, settings: { reserveTokens: 16_384, keepRecentTokens: 100 } };
+
+  test("рабочая строка говорит о сжатии, а отказ append виден в карточке и в метриках", async () => {
+    const runtime = fakePi({ language: "en" });
+    await runtime.command("append on");
+    await runtime.event("session_before_compact", { reason: "threshold", willRetry: false, preparation, branchEntries: [] });
+    expect(runtime.workingMessages.some((text) => text.includes("Compact: standard summary"))).toBe(true);
+    expect(runtime.notices.some((entry) => entry.level === "warning" && entry.text.includes("append was not applied") && entry.text.includes("no-captured-request"))).toBe(true);
+    await runtime.event("session_compact", { reason: "threshold", willRetry: false, compactionEntry: { tokensBefore: 258_796, summary: "x".repeat(400) } });
+    const card = runtime.entries.find((entry) => entry.type === "goal-compact-card")!.data;
+    expect(card).toMatchObject({ kind: "standard", fallbackReason: "no-captured-request", appendCacheStatus: "not-attempted" });
+    const metrics = runtime.entries.find((entry) => entry.type === "goal-compact-compact-metrics")!.data;
+    expect(metrics).toMatchObject({ kind: "standard", fallbackReason: "no-captured-request", outcome: "saved", tokensBefore: 258_796 });
+  });
+
+  test("без включённого append обычная сводка не называет причину отказа", async () => {
+    const runtime = fakePi({ language: "en" });
+    await runtime.event("session_before_compact", { reason: "threshold", willRetry: false, preparation, branchEntries: [] });
+    await runtime.event("session_compact", { reason: "threshold", willRetry: false, compactionEntry: { tokensBefore: 258_796, summary: "x".repeat(400) } });
+    const card = runtime.entries.find((entry) => entry.type === "goal-compact-card")!.data;
+    expect(card).toMatchObject({ kind: "standard" });
+    expect((card as { fallbackReason?: string }).fallbackReason).toBeUndefined();
+    expect(runtime.entries.some((entry) => entry.type === "goal-compact-append-attempt")).toBe(false);
+  });
+});
+
 describe("режимы окна", () => {
   test("economy, long-once, long-chat и off меняют только окно модели и сохраняют thinking", async () => {
     const runtime = fakePi({ thinkingLevel: "max", modelSwitchThinkingLevel: "low" });
