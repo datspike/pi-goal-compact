@@ -42,11 +42,24 @@ function references(context: Message[], messages: AgentMessage[]): string {
 
 /** Поля продолжения, которые обязаны совпасть с прежним запросом дословно; меняться могут только добавленные в конец сообщения. */
 const RESPONSES_FIELDS = ["instructions", "tools", "model", "prompt_cache_key"] as const;
-const COMPLETIONS_FIELDS = ["model", "tools", "tool_choice", "chat_template", "chat_template_kwargs", "add_generation_prompt", "continue_final_message", "reasoning_effort", "documents", "add_special_tokens"] as const;
+// tool_choice не входит в промпт: служебный запрос сознательно просит не вызывать инструменты.
+const COMPLETIONS_FIELDS = ["model", "tools", "chat_template", "chat_template_kwargs", "add_generation_prompt", "continue_final_message", "reasoning_effort", "documents", "add_special_tokens"] as const;
 const SUPPORTED_APIS = ["openai-responses", "openai-codex-responses", "openai-completions"] as const;
 
 function sameFields(left: Record<string, unknown>, right: Record<string, unknown>, fields: readonly string[]): boolean {
     return fields.every(key => JSON.stringify(left[key]) === JSON.stringify(right[key]));
+}
+
+/** Что именно разошлось: без этого промах маршрута виден только как «не совпало». */
+function diff(previous: unknown, next: unknown, fields: readonly string[]): Record<string, unknown> {
+    if (!previous || typeof previous !== "object" || !next || typeof next !== "object") return { shape: true };
+    const left = previous as Record<string, unknown>, right = next as Record<string, unknown>;
+    const changed = fields.filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key]));
+    const previousTurns = Array.isArray(left.input) ? left.input : Array.isArray(left.messages) ? left.messages : [];
+    const nextTurns = Array.isArray(right.input) ? right.input : Array.isArray(right.messages) ? right.messages : [];
+    let index = 0;
+    while (index < previousTurns.length && JSON.stringify(previousTurns[index]) === JSON.stringify(nextTurns[index])) index += 1;
+    return { fields: changed, turns: { previous: previousTurns.length, next: nextTurns.length, firstDiff: index < previousTurns.length ? index : null } };
 }
 
 function isPrefix(previous: unknown[], next: unknown[]): boolean {
@@ -177,17 +190,19 @@ export class AppendRoute {
                 let rejected: unknown;
                 const user = { role: "user" as const, content: [{ type: "text" as const, text: task }], timestamp: Date.now() };
                 const started = Date.now();
+                // Настройки рассуждения остаются прежними: провайдер пишет их в тело запроса,
+                // и любое отличие ломает продолжение прежнего префикса.
                 const inherited = { ...capture.options };
-                if ("reasoning" in inherited) delete inherited.reasoning;
-                if ("thinkingBudgets" in inherited) delete inherited.thinkingBudgets;
-                if ("reasoningEffort" in inherited) delete inherited.reasoningEffort;
                 const result = await dispatch(registration.base, capture.method, model, { ...capture.context, messages: [...messages, user] }, {
                     ...inherited, ...options, toolChoice: "none", cacheRetention: capture.options?.cacheRetention ?? "short",
                     onPayload: async (payload, payloadModel) => {
                         try {
                             const final = (await capture.options?.onPayload?.(payload, payloadModel)) ?? payload;
                             validate();
-                            if (!prefixMatches(capture.payload, final)) throw Error("APPEND_PAYLOAD_MISMATCH");
+                            if (!prefixMatches(capture.payload, final)) {
+                                this.record({ phase: "mismatch", ...diff(capture.payload, final, model.api === "openai-completions" ? COMPLETIONS_FIELDS : RESPONSES_FIELDS) });
+                                throw Error("APPEND_PAYLOAD_MISMATCH");
+                            }
                             const checked = (await options.onPayload?.(final, payloadModel)) ?? final;
                             if (!prefixMatches(capture.payload, checked)) throw Error("APPEND_PAYLOAD_MISMATCH");
                             const limit = outputLimit(checked as Record<string, unknown>, model.api);

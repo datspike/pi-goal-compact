@@ -163,7 +163,10 @@ test("продолжение проверяется по форме провай
     const completions = { model: "m", tools: [{ type: "function", function: { name: "read" } }], messages: [{ role: "system", content: "s" }, { role: "user", content: "a" }] };
     const continued = { ...completions, messages: [...completions.messages, { role: "user", content: "summary task" }] };
     assert.equal(prefixMatches(completions, continued), true);
-    assert.equal(prefixMatches(completions, { ...continued, tool_choice: "none" }), false);
+    // tool_choice не часть промпта: сводка просит не вызывать инструменты, и это не ломает продолжение.
+    assert.equal(prefixMatches(completions, { ...continued, tool_choice: "none" }), true);
+    assert.equal(prefixMatches(completions, { ...continued, tools: [] }), false);
+    assert.equal(prefixMatches(completions, { ...continued, chat_template_kwargs: { enable_thinking: false } }), false);
     assert.equal(prefixMatches(completions, { ...continued, messages: [{ role: "system", content: "s" }] }), false);
     assert.equal(prefixMatches(completions, responses), false);
 });

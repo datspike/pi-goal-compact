@@ -92,6 +92,8 @@ export function formatCompactCard(data: CompactCardData, language: "ru" | "en"):
     else if (data.kind === "append" && appendCacheStatus && appendCacheStatus !== "not-attempted") details.push(`cache: ${appendCacheStatus}`);
     if (duration) details.push(`${ru ? "время" : "time"}: ${duration}${data.repairAttempts ? ` · repair ${data.repairAttempts}` : ""}`);
     if (typeof data.appendDurationMs === "number") details.push(`${ru ? "append время" : "append time"}: ${(data.appendDurationMs / 1000).toFixed(1)} s${appendCacheStatus ? ` · cache ${appendCacheStatus}` : ""}`);
+    // Нулевой кэш может значить и промах, и то, что провайдер его не сообщает: второй случай не промах.
+    if (data.kind === "append" && appendCacheStatus === "miss") details.push(ru ? "кэш: провайдер не сообщил попадания (промах или нет данных)" : "cache: provider reported no hit (miss or no data)");
     if ((data.appendAttempts ?? 0) > 1) details.push(`${ru ? "попытки append" : "append attempts"}: ${data.appendAttempts}`);
     if (appendCostText) details.push(`${ru ? "append стоимость" : "append cost"}: ${appendCostText}`);
     if (cost) details.push(`${ru ? "стоимость" : "cost"}: ${cost}`);
