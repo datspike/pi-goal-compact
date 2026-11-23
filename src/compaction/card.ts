@@ -35,6 +35,16 @@ export interface CompactCardData {
     usage?: CompactCardUsage;
 }
 
+/**
+ * Какие usage попадают в карточку.
+ * Стоимость всегда считается по всем попыткам, а доля кэша при удачном append — по принятой:
+ * после повтора это разные числа, и по общей сумме кэш выглядел бы хуже, чем он есть.
+ */
+export function cardUsage(input: { usedAppend: boolean; accepted?: CompactCardUsage; spent?: CompactCardUsage }): { appendUsage?: CompactCardUsage } {
+	if (input.usedAppend) return input.accepted ? { appendUsage: input.accepted } : {};
+	return input.spent ? { appendUsage: input.spent } : {};
+}
+
 export interface CompactCardText {
 	line: string;
 	details: string[];

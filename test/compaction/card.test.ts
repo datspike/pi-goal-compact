@@ -1,5 +1,5 @@
 import { expect, test } from "../support/expect.js";
-import { estimateSummaryTokens, formatCompactCard, renderCompactCard } from "../../src/compaction/card.js";
+import { cardUsage, estimateSummaryTokens, formatCompactCard, renderCompactCard } from "../../src/compaction/card.js";
 
 const theme = { fg: (_color: string, text: string) => text };
 
@@ -55,6 +55,18 @@ test("renderer shows details only when expanded", () => {
 test("estimates summary tokens only from text", () => {
 	expect(estimateSummaryTokens("x".repeat(40))).toBe(10);
 	expect(estimateSummaryTokens(undefined)).toBeUndefined();
+});
+
+test("после повтора карточка берёт кэш от принятой попытки, а стоимость от всех", () => {
+	// Тот же случай, что и в отрисовке ниже, но через выбор usage: без принятой попытки доля считалась бы по сумме.
+	const spent = { input: 84_567, cacheRead: 2_304, cost: { total: 0.018 } };
+	const accepted = { input: 40_916, cacheRead: 2_304, cost: { total: 0.0084 } };
+	expect(cardUsage({ usedAppend: true, accepted, spent })).toEqual({ appendUsage: accepted });
+	expect(cardUsage({ usedAppend: true, spent })).toEqual({});
+	expect(cardUsage({ usedAppend: false, accepted, spent })).toEqual({ appendUsage: spent });
+	const card = formatCompactCard({ version: 2, kind: "append", appendCacheStatus: "hit", tokensBefore: 40_901, summaryTokens: 606, appendDurationMs: 4_170, appendAttempts: 2, usage: spent, ...cardUsage({ usedAppend: true, accepted, spent }) }, "ru");
+	expect(card.line).toContain("cache hit 5%");
+	expect(card.line).toContain("$0.0180");
 });
 
 test("удачный append показывает своё время и не выдумывает отдельный расход", () => {

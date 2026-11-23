@@ -5,7 +5,7 @@ import type { GoalGate } from "../core/model.js";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext, SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import { appendAudit, type AuditEntry, type AuditOrigin, type AuditReason } from "../compaction/audit.js";
-import { COMPACT_CARD_TYPE, estimateSummaryTokens, renderCompactCard, type CompactCardData } from "../compaction/card.js";
+import { COMPACT_CARD_TYPE, cardUsage, estimateSummaryTokens, renderCompactCard, type CompactCardData } from "../compaction/card.js";
 import {
 	buildInstructions,
 	buildLedger,
@@ -222,7 +222,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 					...(!usedAppend ? { durationMs: Date.now() - standardStarted } : {}),
 					...(appendDurationMs !== undefined ? { appendDurationMs } : {}),
 					...(appendAttempts ? { appendAttempts } : {}),
-					...(!usedAppend && appendSpent ? { appendUsage: appendSpent } : {}),
+					...cardUsage({ usedAppend, ...(appendUsage ? { accepted: appendUsage } : {}), ...(appendSpent ? { spent: appendSpent } : {}) }),
 					...(ctx.model ? { provider: ctx.model.provider, model: ctx.model.id } : {}),
 				};
 			}
