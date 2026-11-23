@@ -160,6 +160,11 @@ test("продолжение проверяется по форме провай
     const responses = { model: "m", instructions: "i", tools: [{ name: "read" }], input: [{ role: "user", content: "a" }] };
     assert.equal(prefixMatches(responses, { ...responses, input: [...responses.input, { role: "user", content: "b" }] }), true);
     assert.equal(prefixMatches(responses, { ...responses, instructions: "other", input: [...responses.input, { role: "user", content: "b" }] }), false);
+    // Responses кладёт режим рассуждения в тело: другой effort — уже не продолжение прежнего запроса.
+    const reasoning = { ...responses, reasoning: { effort: "high" } };
+    assert.equal(prefixMatches(reasoning, { ...reasoning, input: [...reasoning.input, { role: "user", content: "b" }] }), true);
+    assert.equal(prefixMatches(reasoning, { ...reasoning, reasoning: { effort: "low" }, input: [...reasoning.input, { role: "user", content: "b" }] }), false);
+    assert.equal(prefixMatches({ ...responses, input: [...responses.input, { role: "user", content: "b" }] }, reasoning), false);
     const completions = { model: "m", tools: [{ type: "function", function: { name: "read" } }], messages: [{ role: "system", content: "s" }, { role: "user", content: "a" }] };
     const continued = { ...completions, messages: [...completions.messages, { role: "user", content: "summary task" }] };
     assert.equal(prefixMatches(completions, continued), true);

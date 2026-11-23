@@ -41,7 +41,9 @@ function references(context: Message[], messages: AgentMessage[]): string {
 }
 
 /** Поля продолжения, которые обязаны совпасть с прежним запросом дословно; меняться могут только добавленные в конец сообщения. */
-const RESPONSES_FIELDS = ["instructions", "tools", "model", "prompt_cache_key"] as const;
+// reasoning входит в тело запроса Responses так же, как reasoning_effort в chat completions:
+// другой режим рассуждения — уже не продолжение прежнего запроса, и кэш префикса не совпадёт.
+const RESPONSES_FIELDS = ["instructions", "tools", "model", "prompt_cache_key", "reasoning"] as const;
 // tool_choice не входит в промпт: служебный запрос сознательно просит не вызывать инструменты.
 const COMPLETIONS_FIELDS = ["model", "tools", "chat_template", "chat_template_kwargs", "add_generation_prompt", "continue_final_message", "reasoning_effort", "documents", "add_special_tokens"] as const;
 const SUPPORTED_APIS = ["openai-responses", "openai-codex-responses", "openai-completions"] as const;
