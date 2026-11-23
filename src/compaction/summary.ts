@@ -310,7 +310,8 @@ type SummaryResponse = {
     usage?: Usage | undefined;
 };
 
-export type CompactionFailureReason = "aborted" | "context-changed" | "invalid-response" | "request-failed" | "insufficient-window" | "unsupported" | "request-too-large";
+// truncated отделён от invalid-response: ответ оборван пределом вывода, и это лечится окном, а не форматом сводки.
+export type CompactionFailureReason = "aborted" | "context-changed" | "invalid-response" | "truncated" | "request-failed" | "insufficient-window" | "unsupported" | "request-too-large";
 
 /** Отдельный способ отправки сводки; проверки ответа и принадлежности операции остаются общими. */
 export type SummaryTransport = {
@@ -660,7 +661,12 @@ async function requestSummary(ctx: ExtensionContext, prompt: string, maxTokens: 
             throw new SummaryFailure("request-failed", response.errorMessage);
         throw new Error(response.errorMessage ?? "Summary generation failed");
     }
-    if (response?.stopReason === "length" || !Array.isArray(response?.content)) {
+    if (response?.stopReason === "length") {
+        if (guard)
+            throw new SummaryFailure("truncated");
+        throw new Error("Summary was cut by the output limit");
+    }
+    if (!Array.isArray(response?.content)) {
         if (guard)
             throw new SummaryFailure("invalid-response");
         throw new Error("Summary generation failed");

@@ -339,6 +339,12 @@ test("standard compact classifies invalid responses and request failures separat
 	const invalidReasons: string[] = [];
 	expect(await compactWith(invalid.event, invalid.ctx, { onFailure: (reason) => invalidReasons.push(reason) })).toEqual({ cancel: true });
 	expect(invalidReasons).toEqual(["invalid-response"]);
+	// Оборванный пределом вывода ответ называется своим именем: причина видна в карточке.
+	const truncated = guardedFixture();
+	truncated.response = { stopReason: "length", content: [{ type: "text", text: "## Goal\nОборвано" }] };
+	const truncatedReasons: string[] = [];
+	expect(await compactWith(truncated.event, truncated.ctx, { onFailure: (reason) => truncatedReasons.push(reason) })).toEqual({ cancel: true });
+	expect(truncatedReasons).toEqual(["truncated"]);
 	const failed = guardedFixture();
 	failed.ctx.modelRegistry.complete = async (...args) => { failed.calls.push(args); throw new Error("network unavailable"); };
 	const failedReasons: string[] = [];
