@@ -41,7 +41,15 @@ export interface CompactCardData {
  * после повтора это разные числа, и по общей сумме кэш выглядел бы хуже, чем он есть.
  */
 export function cardUsage(input: { usedAppend: boolean; accepted?: CompactCardUsage; spent?: CompactCardUsage }): { appendUsage?: CompactCardUsage } {
-	if (input.usedAppend) return input.accepted ? { appendUsage: input.accepted } : {};
+	if (input.usedAppend) {
+		const accepted = input.accepted;
+		if (!accepted) return {};
+		// Отдельное поле нужно только тогда, когда принятая попытка дешевле общих попыток:
+		// иначе карточка показала бы одну и ту же сумму дважды как расход и как расход append.
+		const spent = input.spent;
+		const same = spent !== undefined && spent.input === accepted.input && (spent.cacheRead ?? 0) === (accepted.cacheRead ?? 0) && (spent.cost?.total ?? 0) === (accepted.cost?.total ?? 0);
+		return same ? {} : { appendUsage: accepted };
+	}
 	return input.spent ? { appendUsage: input.spent } : {};
 }
 

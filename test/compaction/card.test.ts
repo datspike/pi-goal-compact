@@ -62,6 +62,9 @@ test("после повтора карточка берёт кэш от прин
 	const spent = { input: 84_567, cacheRead: 2_304, cost: { total: 0.018 } };
 	const accepted = { input: 40_916, cacheRead: 2_304, cost: { total: 0.0084 } };
 	expect(cardUsage({ usedAppend: true, accepted, spent })).toEqual({ appendUsage: accepted });
+	// Отвергнутая попытка без расхода: суммы совпадают, и отдельное поле показало бы ту же стоимость дважды.
+	expect(cardUsage({ usedAppend: true, accepted, spent: accepted })).toEqual({});
+	expect(cardUsage({ usedAppend: true, accepted })).toEqual({ appendUsage: accepted });
 	expect(cardUsage({ usedAppend: true, spent })).toEqual({});
 	expect(cardUsage({ usedAppend: false, accepted, spent })).toEqual({ appendUsage: spent });
 	const card = formatCompactCard({ version: 2, kind: "append", appendCacheStatus: "hit", tokensBefore: 40_901, summaryTokens: 606, appendDurationMs: 4_170, appendAttempts: 2, usage: spent, ...cardUsage({ usedAppend: true, accepted, spent }) }, "ru");
