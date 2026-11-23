@@ -90,6 +90,22 @@ export function collectFileLists(fileOps: FileOps | undefined, entries: readonly
 	return { readFiles: [...read].filter((path) => !modified.has(path)).sort(), modifiedFiles: [...modified].sort() };
 }
 
+/** Сохраняет готовые наводки при переносе сводки, если полный учёт остался прежним. */
+export function carryFileHints(previous: string, body: string, files: FileLists, entries: readonly unknown[]): string | undefined {
+	if (!previous.startsWith(body)) return undefined;
+	const suffix = previous.slice(body.length);
+	const close = "\n</file-hints>";
+	if (!suffix.startsWith("\n\n<file-hints>\n") || suffix.length > FILE_HINTS_MAX_CHARS
+		|| !suffix.endsWith(close) || suffix.indexOf(close) !== suffix.length - close.length) return undefined;
+	const entry = entries.findLast((entry) => isRecord(entry) && entry.type === "compaction");
+	if (!isRecord(entry) || entry.summary !== previous || !isRecord(entry.details)) return undefined;
+	const details = entry.details;
+	return (["readFiles", "modifiedFiles"] as const).every((key) => {
+		const paths = details[key];
+		return Array.isArray(paths) && paths.length === files[key].length && files[key].every((path, i) => path === paths[i]);
+	}) ? suffix : undefined;
+}
+
 /** Copies only summary messages; user/tool text is not ours to sanitize. */
 export function withoutMessageFileTracking(messages: readonly AgentMessage[], sources: readonly unknown[] = []): AgentMessage[] {
 	return messages.map((message) => (message.role === "compactionSummary" || message.role === "branchSummary") && typeof message.summary === "string"
@@ -129,8 +145,9 @@ export function formatFileHints(files: FileLists, messages: readonly AgentMessag
 	const known = new Set(all);
 	const modified = new Set(files.modifiedFiles);
 	const candidates = [...new Set([
-		...all.filter((path) => path.length > 0 && body.includes(path)),
+		// Свежих путей может не быть в тексте; упомянутые там уже доступны модели.
 		...recentPaths(messages).filter((path) => known.has(path)),
+		...all.filter((path) => path.length > 0 && body.includes(path)),
 	])];
 	const groups = new Map<string, string[]>();
 	let selected = 0;

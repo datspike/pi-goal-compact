@@ -12,6 +12,7 @@ import type { SessionEntryLike, ThreadGoal } from "./types.js";
 export interface GoalRuntimeActivity {
   label: string;
   detail?: string;
+  kind?: "provider-retry";
 }
 
 export interface StatusContext {
@@ -33,6 +34,7 @@ interface GoalRuntimeStatusDeps {
   isProviderLimitAutoResumeScheduled: (goalId: string) => boolean;
   getReportState: () => GoalReportState;
   getAgentRunSequence?: () => number;
+  getActivity?: () => GoalRuntimeActivity | null;
   getArtifactRefs?: (goal: ThreadGoal, ctx: StatusContext) => GoalWidgetLink[];
   setActivity: (activity: GoalRuntimeActivity | null) => void;
 }
@@ -107,6 +109,8 @@ function formatLiveStatus(deps: GoalRuntimeStatusDeps, resumedBlocker: boolean):
   const reportState = deps.getReportState();
   const reportStatus = (reportState.lastReport ?? reportState.recentReports.at(-1)?.report)?.status;
   const attention = deps.getRecoveryAttention();
+  const activity = deps.getActivity?.();
+  if (goal.status === "active" && activity?.kind === "provider-retry") return activity.label;
   const heading = goal.status === "complete" ? say("✓ Завершена", "✓ Complete")
     : goal.status === "paused" ? say("На паузе", "Paused")
     : goal.status === "budgetLimited" ? say("Лимит бюджета", "Budget limit")

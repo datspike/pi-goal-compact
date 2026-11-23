@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { GoalGate } from "./core/model.js";
 import { loadSummarySettings } from "./compaction/language.js";
+import { loadProviderRetryConfig, type ProviderRetryConfig } from "./goal/provider-retry-config.js";
 import { setLanguage } from "./language.js";
 import { registerCompaction } from "./shell/compaction.js";
 import { CoreDriver } from "./shell/driver.js";
@@ -14,7 +15,7 @@ import { registerTickets } from "./shell/tickets.js";
  * Возвращает модуль цели, чтобы тесты проверяли собранное расширение, а не его части.
  * Поведение описано решениями в docs/adr/.
  */
-export function compose(pi: ExtensionAPI) {
+export function compose(pi: ExtensionAPI, retryConfig: ProviderRetryConfig = loadProviderRetryConfig()) {
 	const settings = loadSummarySettings();
 	setLanguage(settings.summaryLanguage);
 	// Цель регистрируется первой: перед сводкой она убирает свои служебные записи из входа сжатия.
@@ -25,9 +26,11 @@ export function compose(pi: ExtensionAPI) {
 	// восстановленную цель и новую эпоху ядра.
 	let gate = (): GoalGate => "absent";
 	const tickets = registerTickets(pi, driver, () => gate());
-	const compaction = registerCompaction(pi, settings, driver, tickets, () => gate());
-	const continuation = registerGoalContinuation(pi, goal, driver, tickets);
+	let cancelDeferredWakes = (): void => {};
+	const compaction = registerCompaction(pi, settings, driver, tickets, () => gate(), () => cancelDeferredWakes());
+	const continuation = registerGoalContinuation(pi, goal, driver, tickets, retryConfig);
 	gate = continuation.gate;
+	cancelDeferredWakes = continuation.cancelDeferredWakes;
 	goal.bindRunHooks(continuation.hooks);
 	driver.bind((effect, ctx) => {
 		tickets.execute(effect);
@@ -37,6 +40,17 @@ export function compose(pi: ExtensionAPI) {
 	return { goal };
 }
 
+const duplicateProbe = "pi-goal-compact:loaded";
+
 export default function goalCompact(pi: ExtensionAPI): void {
+	// Отдельные копии не делят память модуля, но Pi вызывает подписчиков общей шины
+	// синхронно при emit и снимает подписки при выгрузке расширений.
+	let occupied = false;
+	pi.events.emit(duplicateProbe, () => { occupied = true; });
+	if (occupied) return;
+
 	compose(pi);
+	pi.events.on(duplicateProbe, (answer) => {
+		if (typeof answer === "function") answer();
+	});
 }

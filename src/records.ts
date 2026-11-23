@@ -25,6 +25,8 @@ export const RECORD = {
   /** Ход попытки append: отказ до сети, отправка, ответ. */
   appendAttempt: "goal-compact-append-attempt",
   ticket: "goal-compact-ticket",
+  manualProviderRetry: "pi-goal-provider-retry-request",
+  providerOutputContinuation: "pi-goal-provider-output-continuation",
   transfer: "goal-compact-model-transfer",
   /** Сообщения начала окна; в журнал не пишутся, собираются заново при каждом запросе (решение 0004). */
   agreement: "goal-compact-agreement",
@@ -41,7 +43,7 @@ export const LEGACY_RECORD_NAMES: Readonly<Record<string, string>> = {
   "pi-codex-goal-progress-due": RECORD.progressDue,
   "context-compaction-mode": RECORD.mode,
   "context-compaction-card": RECORD.card,
-  // Имя, под которым экспериментальная ветка append писала шаги попытки до появления решения 0021.
+  // Имя, под которым экспериментальная ветка append писала шаги попытки до появления решения 0028.
   "append-pilot-attempt": RECORD.appendAttempt,
 };
 

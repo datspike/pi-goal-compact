@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { RECORD } from "../records.js";
 import { renderAgreement } from "./agreement.js";
 import { createGoalProgressEntryComponent } from "./goal-reports.js";
-import { formatDuration } from "./format.js";
+import { formatActiveTimeEstimate, formatDuration } from "./format.js";
 import type { GoalWorkingState } from "./format.js";
 import type { SessionEntryLike, ThreadGoal } from "./types.js";
 
@@ -47,6 +47,8 @@ function addOptional(lines: string[], label: string, value: string | null | unde
 export function formatGoalSnapshot(state: GoalWorkingState, mode: SnapshotMode): string[] {
   if (!state.goal) return [say("Цель: нет активной цели", "Goal: no active goal")];
   const lines = [say(`Цель: ${statusLabel(state)} · ${formatDuration(state.usage.activeSeconds)}`, `Goal: ${statusLabel(state)} · ${formatDuration(state.usage.activeSeconds)}`)];
+  const time = formatActiveTimeEstimate(state.activeTimeEstimate);
+  if (time) lines.push(time);
   if (mode === "status") {
     addOptional(lines, say("Сейчас", "Now"), state.currentStep);
     addOptional(lines, say("Дальше", "Next"), state.nextStep);
@@ -116,8 +118,10 @@ export function appendGoalSnapshot(
   ctx: ExtensionCommandContext,
   state: GoalWorkingState,
   mode: SnapshotMode,
+  providerRetryStatus?: string,
 ): void {
   const lines = formatGoalSnapshot(state, mode);
+  if (providerRetryStatus && state.goal?.status === "active") lines.unshift(providerRetryStatus);
   const goalId = state.goal?.goalId;
   const key = snapshotKey(goalId, mode, lines);
   if (hasSnapshot(ctx.sessionManager.getBranch(), key)) return;

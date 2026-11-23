@@ -20,7 +20,7 @@ const JAR_URL = "https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla
 const JAR_SHA256 = "e1f11b75c4b5bc4478ba0ac5cb6ae28e40a01b0016bc33e0aa97da22dfdbcd7f";
 
 interface Run {
-  model: "Continuation" | "Agreement" | "ModelTransfer";
+  model: "Continuation" | "Agreement" | "ModelTransfer" | "ProviderRetry" | "Recovery";
   bug: string;
   /** Имя нарушенного свойства или null для исправной модели. */
   expect: string | null;
@@ -36,6 +36,7 @@ export const RUNS: readonly Run[] = [
   { model: "Continuation", bug: "noFreshGuard", expect: "P5_NoStaleTicket", meaning: "билет не сверяется с эпохой" },
   { model: "Continuation", bug: "noNotice", expect: "P6_NoSilentStall", meaning: "остановка из-за записи не объясняется владельцу" },
   { model: "Continuation", bug: "noGoalCheckOnTicket", expect: "P2_HoldHolds", meaning: "билет после сжатия не сверяется с состоянием цели" },
+  { model: "Continuation", bug: "noDeferredWakeCancel", expect: "P17_NoDeferredWakeDuringSwitch", meaning: "старый таймер выдаёт билет после начала переключения" },
   { model: "Agreement", bug: "none", expect: null, meaning: "исправная модель договорённости" },
   { model: "Agreement", bug: "noStrip", expect: "P7_OneCurrentAgreement", meaning: "раздел «Цель» сводки не заменяется" },
   { model: "Agreement", bug: "liveHead", expect: "P14_StableHead", meaning: "начало окна следует за каждой правкой цели" },
@@ -51,6 +52,17 @@ export const RUNS: readonly Run[] = [
   { model: "ModelTransfer", bug: "doubleResume", expect: "P12_OneTransferContinuation", meaning: "повтор Pi и своё продолжение одновременно" },
   { model: "ModelTransfer", bug: "noHold", expect: "P13_TransferRespectsHold", meaning: "передача обходит удержание цели" },
   { model: "ModelTransfer", bug: "failOnCompact", expect: "P16_FailureOnlyAfterSaved", meaning: "сбой сжатия ломает ожидающую передачу" },
+  { model: "ProviderRetry", bug: "none", expect: null, meaning: "исправная модель повтора запроса" },
+  { model: "ProviderRetry", bug: "raceEsc", expect: "RetryCancellation", meaning: "отмена между выбором модели и отправкой игнорируется" },
+  { model: "ProviderRetry", bug: "doubleOwner", expect: "RetryOneOwner", meaning: "продолжение доступно одновременно со штатным повтором" },
+  { model: "ProviderRetry", bug: "ignoreDeadline", expect: "RetryDeadline", meaning: "просроченная попытка по-прежнему разрешена на Astra" },
+  { model: "ProviderRetry", bug: "doubleSwitch", expect: "RetryOnlyOneSwitch", meaning: "в одной цепочке разрешён второй переход" },
+  { model: "Recovery", bug: "none", expect: null, meaning: "исправная модель переполнения" },
+  { model: "Recovery", bug: "lengthResets", expect: "P19_LengthKeepsAttempts", meaning: "обычный обрыв по length обнуляет попытки сжатия" },
+  { model: "Recovery", bug: "lengthIsSuccess", expect: "P19_LengthKeepsAttempts", meaning: "пустой обрыв по length считается успешным ходом" },
+  { model: "Recovery", bug: "noPauseAfterCap", expect: "P20_RecoveryCapped", meaning: "после лимита попыток паузы нет" },
+  { model: "Recovery", bug: "continueWhileRecovering", expect: "P18_NoContinueWhileRecovering", meaning: "скрытое продолжение во время восстановления" },
+  { model: "Recovery", bug: "continueWhilePaused", expect: "P21_NoContinueWhilePaused", meaning: "реплика владельца снимает паузу цели без возобновления" },
 ];
 
 function sha256(path: string): string {

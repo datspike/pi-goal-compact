@@ -48,7 +48,8 @@ export function isSuccessfulAssistantTurn(message: AssistantErrorMessage): boole
   if (message.role !== "assistant") {
     return false;
   }
-  return message.stopReason !== "error" && message.stopReason !== "aborted";
+  // `length` означает оборванный ответ; он не подтверждает, что recovery завершился.
+  return message.stopReason !== "error" && message.stopReason !== "aborted" && message.stopReason !== "length";
 }
 
 export function isAssistantContextOverflow(
@@ -84,7 +85,7 @@ function isNonRetryableProviderLimitError(errorMessage: string): boolean {
 }
 
 /**
- * Mirrors the current Pi host AgentSession retryable-error classification for transient provider failures.
+ * Распознаёт временные сбои Pi и провайдеров, включая досрочное закрытие потока.
  * Context overflow is not transient retryable because host compaction handles that path.
  * Terminal quota, billing, and provider-limit errors are not retryable even when they contain 429 or rate-limit wording.
  */
@@ -98,7 +99,7 @@ export function isRetryableTransientError(errorMessage: string | undefined): boo
   if (isNonRetryableProviderLimitError(errorMessage)) {
     return false;
   }
-  return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|retrying upstream|request buffer limit|reset before headers|socket hang up|ended without|stream ended before message_stop|stream disconnected before completion|stream closed before response\.completed|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
+  return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|retrying upstream|request buffer limit|reset before headers|socket hang up|ended without|stream ended before message_stop|stream disconnected before completion|provider event stream closed unexpectedly|stream closed before response\.completed|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
     errorMessage,
   );
 }

@@ -43,6 +43,7 @@ export function createWindowMode(pi: ExtensionAPI, say: Say, overrides: readonly
 	let useActualWindowFallback = false;
 	let internalModelTransition = false;
 	let windowErrorNotified = false;
+	let lastWindowError = "";
 
 	const resolved = (ctx: ExtensionContext) => {
 		const declaration = modelDeclaration(ctx);
@@ -85,7 +86,7 @@ export function createWindowMode(pi: ExtensionAPI, say: Say, overrides: readonly
 		windowErrorNotified = false;
 		const target = resolved(ctx);
 		if (target.mode !== mode) { setMode("economy"); await ensureWindow(ctx); updateFooter(ctx); return false; }
-		if (!ctx.model || target.window <= 0 || ctx.model.contextWindow === target.window) return true;
+		if (!ctx.model || target.window <= 0 || ctx.model.contextWindow === target.window) { lastWindowError = ""; return true; }
 		const previousModel = ctx.model;
 		const thinkingLevel = pi.getThinkingLevel();
 		const restorePreviousModel = async (): Promise<boolean> => {
@@ -117,10 +118,17 @@ export function createWindowMode(pi: ExtensionAPI, say: Say, overrides: readonly
 				? say("Не удалось применить окно контекста; сохранён прежний режим", "Could not apply the context window; retained the previous mode")
 				: say("Не удалось применить окно контекста и восстановить согласованное окно; отображается фактическое окно, повторите выбор economy", "Could not apply the context window or restore a consistent window; showing the actual window, select economy again");
 			updateFooter(ctx);
-			notice(ctx, message, "error");
+			// Проверка окна идёт перед каждым ходом: одинаковый сбой одной модели не повторяем,
+			// но новая модель или режим сообщаются заново.
+			// Ключ повторяет маршрут модели: смена api или baseUrl — это тоже другой сбой.
+			const errorKey = `${ctx.model?.provider}/${ctx.model?.id}/${ctx.model?.api}/${ctx.model?.baseUrl}@${target.window}:${mode}:${message}`;
+			if (errorKey !== lastWindowError) notice(ctx, message, "error");
+			lastWindowError = errorKey;
 			windowErrorNotified = true;
 			return false;
 		}
+		// Успешное применение снимает запомненную ошибку: следующий сбой сообщится снова.
+		lastWindowError = "";
 		updateFooter(ctx);
 		return true;
 	};

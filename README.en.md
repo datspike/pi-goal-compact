@@ -6,7 +6,7 @@ A [Pi](https://github.com/badlogic/pi-mono) extension for long-running agent wor
 
 One extension replaces two earlier ones: [pi-codex-goal](https://github.com/datspike/pi-codex-goal) (long-running goals) and [context-compaction](https://github.com/datspike/context-compaction) (context window and compaction summaries). Sessions started with them open and continue as they are.
 
-> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction lives in an experimental branch: it is off by default, turns on for the current window with `/context append on`, and falls back to a standard summary with a visible reason whenever it cannot apply.
+> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction ships in the main branch: it is off by default, turns on for the current window with `/context append on`, and falls back to a standard summary with a visible reason whenever it cannot apply.
 
 ## Why
 
@@ -28,6 +28,8 @@ Tracking a goal and compacting context serve one purpose: finishing the work tha
 
 In a native subagent fork, the parent's Goal remains history: it neither starts a turn nor controls the child's completion. The child can create its own Goal, which survives restarts and `/reload`. Interactive forks keep their previous continuation behavior.
 
+**Honest completion.** The goal does not close while the plan has a live item — `planned`, `active` or `blocked`: the agent gets a refusal listing those items and keeps working. A blocker does not switch the whole goal off: it explains itself in `result` (what was tried and which resource is missing) and shows up in `get_goal`, while continuation stops only when no available step remains without the owner. A closed item names its observation in `result` or `evidence`, an open item never disappears from the plan: it is removed through `cancelled` with a reason. Decision — [0026](docs/adr/0026-chestnoe-zakrytie-i-zarabotannoe-prepyatstvie.md).
+
 **Lean protocol.** Without a goal the model sees a single goal tool, `create_goal`. The others appear once a goal is set and leave at the next window boundary after it closes: removing them at once would reset the cache. Smooth work needs no service calls on the way: coherent chat text counts as a report, the plan and the report for the same milestone go into one `update_goal_work`, and every goal tool response carries the fresh plan revision. Language remarks about a report arrive in the response as `languageNotes` and block nothing.
 
 **A controlled window.** Context window modes: an economy mode by default, an enlarged window for one compaction or for the whole conversation. The footer shows how full the window is, the compaction threshold and the goal state.
@@ -43,11 +45,19 @@ npm install --omit=dev
 pi install "$PWD"
 ```
 
+`pi install "$PWD"` enables the package for all projects. To enable it for only one project, run `pi install -l /absolute/path/to/pi-goal-compact` from that project instead. This writes to `.pi/settings.json` and only takes effect in a trusted project.
+
+Choose one installation scope. If Pi says `Tool "get_goal" conflicts with …` and shows two paths to `pi-goal-compact`, the same package was registered twice. `pi list` shows installs from settings: remove the extra entry with `pi remove <source>` for a global install, or run `pi remove -l <source>` inside the project for a project install. If the extra copy was added manually, take it out of the `extensions` list, the `-e` arguments, or the directory it is discovered from; there is no need to delete the checkout. Then restart Pi. If both copies already have duplicate protection, only the one Pi loads first is active; do not use this to select a version for a project.
+
 If `pi-codex-goal` and `context-compaction` are installed, remove them from Pi's `settings.json` first. Next to the new extension they duplicate tools and commands. To roll back, restore the two old entries and remove the new one.
 
 ## Usage
 
 Tell the agent you want to set a goal and describe the result. Before calling `create_goal`, the agent asks in one batch about everything that changes scope, design or acceptance and is not settled yet. If you asked it to work without questions, it does not ask and records its assumptions under "decided by me" instead.
+
+For an **outcome** goal, state the result and how to verify it. For **research**, state the question and boundaries; the agent picks the tests and delivers a comparison and recommendation. In `research`, the agent works as your engineering coauthor: it resolves working decisions using memory and past sessions and chooses another useful path after a failure. An active research goal does not open `ask_user`; if no authorized steps remain, the agent explains the blocker in chat. Pausing or closing restores normal availability of `ask_user`.
+
+The agreement retains any required result and any stated minimum effort. A minimum is not a deadline and does not block completion. When it can be estimated, Pi shows the approximate remainder at the stopping boundary and in status (`/gs`, `get_goal(view="status")`). Pauses and gaps between processes do not count, but hidden waits inside commands may be included. Asking to see a goal prompt returns a draft without starting the work.
 
 From there the agent works on its own. It reports progress briefly in chat; a separate `report_goal_progress` call is needed when it waits for an answer, hits a blocker or verifies the result. It also records decisions and deferred issues, and closes the goal only after checking against the agreement. The goal document lives in `.pi/goal-compact/<goalId>/GOAL.md` inside the project. It is regenerated from the goal data and is read-only.
 
@@ -163,6 +173,22 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 `create_goal` always requires an agreement; the switches do not change that.
 
+### Request recovery in chat, during an active goal, and in subagents
+
+When preparing a separate profile without PiRetry, add this to the global `settings.json`:
+
+```json
+{ "piGoalCompact": { "providerRetry": { "enabled": true, "windowMs": 900000, "allowSwitch": true } } }
+```
+
+The new policy is off unless explicitly enabled. Leave Pi’s built-in `retry` enabled. `windowMs` starts at the first confirmed temporary failure and defaults to 15 minutes. `allowSwitch: false` disables the switch from Astra to Sol without disabling retries. A shared outage, an unknown cancellation or an unverified tool outcome does not authorize a model switch.
+
+The TUI extends recovery in ordinary chat and during an active goal. If safe chat recovery reaches its deadline, `/retry-request` explicitly retries the last request on the same branch and model; new input invalidates that offer.
+
+Subagent recovery requires `pi-subagents` with `pi-subagents:provider-recovery` support and `pi-goal-compact` loaded in the child session. Waiting does not extend the task deadline, and model switches still obey the role’s restrictions. If PiRetry is loaded in the same session, it remains in charge of extended retries.
+
+An empty response, including reasoning without an answer, can be retried once. After an output limit, the model receives the text it already wrote and can continue it, up to three additional requests per run. These attempts do not switch models. If the cap is reached, generated text is kept; a subagent returns it as an incomplete response.
+
 ## Moving from the earlier extensions
 
 - Goals, reports and records of `pi-codex-goal`, and the window mode and cards of `context-compaction`, are read from session logs under their old names. Logs are not rewritten.
@@ -181,9 +207,9 @@ To restore the tool, set `features.checkpointCompactContinue: true` in `goal-rep
 
 ## How it is verified
 
-- `npm run verify` in one command: types, layers and dead code, 891 tests, a check that the tree contains no private paths, and the TLA+ models.
-- Two TLA+ models in `formal/`: continuation with holds, and the agreement with closing. Each property has a deliberate defect that makes the check fail. The approach is described in [decision 0008](docs/adr/0008-formalnaya-proverka.md) (in Russian).
-- Smoke runs on real Pi without network: an answer to a question survives compaction and restart, a session of the earlier pair continues under the new version, a goal change without an owner message is rejected.
+- `npm run verify` checks types, layers, dead code, tests, privacy boundaries, and the TLA+ models.
+- The TLA+ models check goal continuation, the agreement, model transfer, request retry, and recovery after context overflow. Correct models pass; deliberate faults produce counterexamples. See the [formal checks](formal/README.md) and [decision 0008](docs/adr/0008-formalnaya-proverka.md) (in Russian).
+- Smoke runs on real Pi without network: an answer to a question survives compaction and restart, a session of the earlier pair continues under the new version, a goal change without an owner message is rejected, the context window is restored after the host rebuilds the model, and overflow followed by a `length` reply ends in a paused goal.
 - Model scenarios that used to catch failures: verification loops instead of closing, four merge requests lost after compaction, a decision accepted without consent, closing on counters instead of the result. The new version passes them no worse than the earlier pair.
 
 ## Development

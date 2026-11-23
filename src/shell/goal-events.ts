@@ -21,6 +21,7 @@ import {
 import { onRecoverySuccessfulTurn, onRecoveryUserInput, recoveryPhaseBlocksContinuation } from "../goal/recovery-machine.js";
 import { isAssistantContextOverflow, isErrorAssistantMessage, reasonFromRecoveryPendingAttention } from "../goal/recovery.js";
 import { goalToolLoadout, registerCreateGoalTool, registerGoalTools, type ToolHost } from "../goal/tools.js";
+import { isAutonomousResearch, researchModelInput, researchQuestionBlocked, RESEARCH_QUESTION_TOOL } from "../goal/research-autonomy.js";
 import { CUSTOM_ENTRY_TYPE } from "../goal/types.js";
 import { LEGACY_RECORD_NAMES, RECORD } from "../records.js";
 import type { GoalSession } from "./goal-session.js";
@@ -33,7 +34,7 @@ const RETRY_CARRIERS = new Set(["pi-retry:retry", "pi-retry:continue"]);
 function isForeignRun(event: BeforeAgentStartEvent): boolean {
   if (event.messageType === "user" || "prompt" in event) return false;
   const type = event.message.customType;
-  return type !== CUSTOM_ENTRY_TYPE && type !== RECORD.ticket && !RETRY_CARRIERS.has(type);
+  return type !== CUSTOM_ENTRY_TYPE && type !== RECORD.ticket && type !== RECORD.manualProviderRetry && !RETRY_CARRIERS.has(type);
 }
 
 /** Регистрирует для каждой записи ленты рисовальщик под новым и прежним именем. */
@@ -131,6 +132,11 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
   let terminalFallbackHandled = false;
   let agentEndHandled = false;
   const activeToolCalls = new Map<string, string>();
+  // Не вычитаем ожидание, если в этом же интервале исполняется другой инструмент.
+  const refreshAccountingWait = (ctx: ExtensionContext): void => {
+    const names = [...activeToolCalls.values()];
+    session.accounting.setWaiting(ctx, names.length > 0 && names.every((name) => name === "bg_wait" || name === "ask_user"));
+  };
 
   const refreshToolActivity = (): void => {
     const name = [...activeToolCalls.values()].at(-1);
@@ -146,6 +152,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     await session.reloadFromSession(ctx);
     session.accountingState.activeGoalId = null;
     session.accountingState.lastAccountedAt = null;
+    session.accountingState.waiting = false;
     if (!ctx.isIdle()) session.accounting.beginAccounting();
   };
 
@@ -201,6 +208,18 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     return changed ? { messages } : undefined;
   });
 
+  pi.on("context_with_system", event => {
+    const current = session.getGoal();
+    if (!isAutonomousResearch(current)) return undefined;
+    return { messages: researchModelInput(event.messages, current) };
+  });
+  pi.on("tool_call", event => {
+    if (event.toolName === RESEARCH_QUESTION_TOOL && isAutonomousResearch(session.getGoal())) {
+      return { block: true, reason: researchQuestionBlocked() };
+    }
+    return undefined;
+  });
+
   pi.on("agent_start", async () => {
     if (session.runIsForeign()) return;
     session.noteAgentRun();
@@ -216,6 +235,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     terminalFallbackHandled = false;
     agentEndHandled = false;
     activeToolCalls.clear();
+    session.accountingState.waiting = false;
     session.accounting.beginAccounting();
     session.status.setActivity({ label: say("модель формирует ответ", "model is responding") });
     session.status.refreshUi(ctx);
@@ -225,6 +245,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     if (session.runIsForeign()) return;
     activeToolCalls.set(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`, event.toolName);
     refreshToolActivity();
+    refreshAccountingWait(ctx);
     session.status.refreshUi(ctx);
   });
 
@@ -235,6 +256,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     activeToolCalls.delete(event.toolCallId ?? `${event.toolName}:${session.getTurnIndex() ?? "unknown"}`);
     if (activeToolCalls.size === 0) session.status.setActivity({ label: event.isError ? say(`ошибка инструмента: ${event.toolName}`, `tool error: ${event.toolName}`) : say(`завершён инструмент: ${event.toolName}`, `tool finished: ${event.toolName}`) });
     else refreshToolActivity();
+    refreshAccountingWait(ctx);
     session.status.refreshUi(ctx);
     session.accounting.accountProgress(ctx, !session.isContinuationHeld(), 0, true);
     session.maybeFlushRuntime("runtime");
@@ -310,6 +332,7 @@ export function registerGoal(pi: ExtensionAPI, session: GoalSession): void {
     }
     session.accountingState.activeGoalId = null;
     session.accountingState.lastAccountedAt = null;
+    session.accountingState.waiting = false;
     if (aborted.length > 0) session.pauseForAbort(ctx);
     session.endUserTurn();
   });

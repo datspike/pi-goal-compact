@@ -3,7 +3,7 @@ import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent"
 
 import { inLanguage, type Language } from "../language.js";
 import { LEGACY_RECORD_NAMES } from "../records.js";
-import { avoidRepeatLine, compactContinuationPrompt, continuationPrompt } from "./prompts.js";
+import { ACTIVE_TIME_FRAME, avoidRepeatLine, compactContinuationPrompt, continuationPrompt } from "./prompts.js";
 import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "./types.js";
 
 type GoalCompactionInput = Pick<SessionBeforeCompactEvent["preparation"], "messagesToSummarize" | "turnPrefixMessages">;
@@ -13,6 +13,9 @@ const LANGUAGES: readonly Language[] = ["ru", "en"];
 const NAMESPACED_GET_GOAL = " (or the exposed namespaced equivalent, such as pi__get_goal)";
 // Recognize shipped footers after wording changes without embedding their old instructions.
 const SHIPPED_FOOTERS = new Set([
+  // Подсказки research до учёта минимума в Pi (ru, en).
+  "cb1ba0a324698a69ec1f30a22c9ae7a2ea3e17535a4761a16ee408d50c2ebf38",
+  "66978e89e7348b80ef1588fb5d70fb753e0fd1cb6e2d44836edbbe302fb2696f",
   "a3851424877dd4ef2e00267b01532ead231e3e5819ed603676b652ce5933b094",
   "a0593c2c1950b2294f859d3c2436168fd7cc50dcddd0ecf932265f1fbf3c030c",
   // Кадры compact и full до развилки «продолжить или закрыть» (ru, en).
@@ -35,6 +38,10 @@ function withoutBudgetCounters(content: string): string {
     );
 }
 
+// Остаток живёт только в подсказке; не переносим его в факты сводки.
+const activeTimeLine = new RegExp(`^<${ACTIVE_TIME_FRAME}>[^<\n]*</${ACTIVE_TIME_FRAME}>\n`, "m");
+const withoutActiveTime = (footer: string): string => footer.replace(activeTimeLine, "");
+
 function projectContinuation(message: PreparedMessage): PreparedMessage | null {
   // Pi отдаёт подготовленные сообщения с исходным типом записи: в сессиях прежнего pi-codex-goal
   // продолжения лежат под старым именем. Имя переводится только для сравнения, копия сохраняет исходное.
@@ -51,12 +58,15 @@ function projectContinuation(message: PreparedMessage): PreparedMessage | null {
     usage: { tokensUsed: 0, activeSeconds: 0 }, createdAt: 0, updatedAt: 0,
   };
   const sourceContent = message.content;
-  const frames = LANGUAGES.map((target) => inLanguage(target, () => ({
-    compact: compactContinuationPrompt(referenceGoal),
+  const variants: ThreadGoal[] = [referenceGoal, { ...referenceGoal, mode: "outcome" }, { ...referenceGoal, mode: "research" },
+    ...([null, 1] as const).map((minimumActiveSeconds): ThreadGoal => ({ ...referenceGoal, mode: "research", agreement: { ownerWants: "", doneWhen: "", revision: 1, minimumActiveSeconds } })),
+    { ...referenceGoal, agreement: { ownerWants: "", doneWhen: "", revision: 1, minimumActiveSeconds: 1 } }];
+  const frames = LANGUAGES.flatMap((target) => inLanguage(target, () => variants.map((variant) => ({
+    compact: compactContinuationPrompt(variant),
     full: continuationPrompt(referenceGoal),
     boundary: `\n${avoidRepeatLine()}`,
     budget: target === "ru" ? "\nБюджет:\n" : "\nBudget:\n",
-  })));
+  }))));
   if (frames.some(({ compact }) => withoutBudgetCounters(sourceContent) === withoutBudgetCounters(compact))) return null;
 
   // Use the actual producers as the frame contract, not a second copy of their instructions.
@@ -74,7 +84,7 @@ function projectContinuation(message: PreparedMessage): PreparedMessage | null {
     const sourceLast = message.content.lastIndexOf(INSTRUCTION_BOUNDARY);
     if (!header || sourceLast <= header.length) continue;
     const footer = message.content.slice(sourceLast);
-    if (footer !== reference.slice(last) && !SHIPPED_FOOTERS.has(createHash("sha256").update(footer).digest("hex"))) continue;
+    if (withoutActiveTime(footer) !== withoutActiveTime(reference.slice(last)) && !SHIPPED_FOOTERS.has(createHash("sha256").update(footer).digest("hex"))) continue;
     return {
       ...message,
       content: `Goal ID: ${details.goalId}\n` + message.content.slice(header.length, sourceLast),

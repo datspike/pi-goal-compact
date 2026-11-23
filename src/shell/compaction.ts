@@ -89,7 +89,7 @@ type PendingCard = Pick<CompactCardData, "kind" | "provider" | "model" | "durati
  * Сжатие без цели: режимы окна, сводки, контрольная точка с продолжением,
  * карточки и рабочая стадия (строки реестра С01–С14).
  */
-export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets, gate: () => GoalGate = () => "absent"): (effect: CoreEffect, ctx: ExtensionContext) => void {
+export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, driver: CoreDriver, tickets: Tickets, gate: () => GoalGate = () => "absent", cancelDeferredWakes: () => void = () => {}): (effect: CoreEffect, ctx: ExtensionContext) => void {
 	const language = settings.summaryLanguage;
 	const say = sayFor(language);
 	const window = createWindowMode(pi, say, settings.compactCapabilities ?? []);
@@ -351,6 +351,9 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		stage.observe("before_agent_start", event, ctx);
 		// Pi дожидается этого обработчика до первого запроса хода и берёт модель и окно уже после него.
 		if (manualCompaction && await manualCompaction.done) cancelWaitingRun = true;
+		// Окно режима могло тихо потеряться без model_select (хост пересобрал модель);
+		// перед запросом сверяем его с режимом, иначе контекст растёт до предела модели.
+		await window.modelChanged(ctx);
 	});
 	pi.on("agent_start", (event, ctx) => {
 		stage.observe("agent_start", event, ctx);
@@ -380,6 +383,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 		if (appendEnabled) append.install(ctx); else append.dispose();
 	});
 	const switched = (ctx: ExtensionContext): void => {
+		// Смена контекста отменяет отложенные пробуждения и начинает append заново.
+		cancelDeferredWakes();
 		append.reset();
 		++summarySequence;
 		transfer.cancel(ctx);
@@ -387,7 +392,7 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	};
 	pi.on("session_before_switch", (_event, ctx) => { switched(ctx); });
 	pi.on("session_before_fork", (_event, ctx) => { switched(ctx); });
-	pi.on("session_tree", (_event, ctx) => { transfer.cancel(ctx); });
+	pi.on("session_tree", (_event, ctx) => { switched(ctx); });
 	pi.on("model_select", async (event, ctx) => {
 		stage.observe("model_select", event, ctx);
 		++summarySequence;

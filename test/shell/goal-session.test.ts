@@ -102,3 +102,21 @@ test("обрыв хода ставит активную цель на паузу
     done();
   }
 });
+
+test("length после host compact не сбрасывает recovery через agent_end", async () => {
+  const { fake, done } = setup();
+  try {
+    await fake.event("session_start", { reason: "startup" });
+    await call(fake, "create_goal", { objective: OBJECTIVE });
+    await fake.event("agent_start", {});
+    await fake.event("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "context_length_exceeded" }] });
+    await fake.event("session_compact", { reason: "overflow", willRetry: true, compactionEntry: { id: "compact-1", tokensBefore: 1000, summary: "fixture" } });
+    await fake.event("agent_start", {});
+    await fake.event("agent_end", { messages: [{ role: "assistant", stopReason: "length" }] });
+    await fake.event("agent_start", {});
+    await fake.event("agent_end", { messages: [{ role: "assistant", stopReason: "error", errorMessage: "context_length_exceeded" }] });
+    assert.match(text(await call(fake, "get_goal", { view: "status" })), /paused/);
+  } finally {
+    done();
+  }
+});

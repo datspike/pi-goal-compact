@@ -7,6 +7,7 @@ import { asPi } from "../support/as-pi.js";
 import { RECORD } from "../../src/records.js";
 
 const target: Model<Api> = { provider: "test", id: "small", name: "Small", api: "openai-responses", baseUrl: "http://localhost", input: ["text"], reasoning: true, contextWindow: 64000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+const largeTarget: Model<Api> = { ...target, id: "large", name: "Large", contextWindow: 1_048_576, maxTokens: 16_384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 async function command(runtime: FakePi, name: string, args: string) {
  const cmd = runtime.commands.get(name);
  assert.ok(cmd);
@@ -25,6 +26,18 @@ test("отложенная модель не применяется до сох�
  assert.equal(runtime.sent.length, 0);
  await command(runtime, "model-next", "status");
  assert.ok(runtime.notices.at(-1)?.text.includes("не запланировано"));
+});
+
+test("внутренняя передача в economy применяет ограниченное окно новой модели", async () => {
+ const runtime = fakePi({ models: [largeTarget], emitModelSelect: true, registryContextWindow: largeTarget.contextWindow });
+ await command(runtime, "model-next", "test/large");
+ await saved(runtime, "threshold");
+ assert.equal(runtime.ctx.model.id, "large");
+ assert.equal(runtime.ctx.model.contextWindow, 272_000);
+ // После передачи хост мог вернуть модели полное окно без model_select; перед ходом оно возвращается.
+ runtime.ctx.model = { ...runtime.ctx.model, contextWindow: largeTarget.contextWindow };
+ await runtime.event("before_agent_start", { messageType: "user", prompt: "продолжай", systemPrompt: "" });
+ assert.equal(runtime.ctx.model.contextWindow, 272_000);
 });
 test("немедленная передача ждёт окончания работы и продолжает ровно один раз", async () => {
  const runtime = fakePi({ models: [target], emitModelSelect: true });

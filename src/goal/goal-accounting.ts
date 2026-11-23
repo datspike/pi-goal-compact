@@ -7,6 +7,7 @@ import { CUSTOM_ENTRY_TYPE, type ThreadGoal } from "./types.js";
 export interface AccountingState {
   activeGoalId: string | null;
   lastAccountedAt: number | null;
+  waiting: boolean;
   /** The sampled fraction belongs to one goal, even across a pause. */
   remainderGoalId: string | null;
   remainderMs: number;
@@ -29,6 +30,7 @@ export function createAccountingState(): AccountingState {
   return {
     activeGoalId: null,
     lastAccountedAt: null,
+    waiting: false,
     remainderGoalId: null,
     remainderMs: 0,
     budgetWarningSentFor: null,
@@ -122,7 +124,7 @@ export function createGoalAccounting(deps: GoalAccountingDeps) {
     }
 
     const now = Date.now();
-    const deltaMs = accounting.lastAccountedAt === null ? 0 : Math.max(0, now - accounting.lastAccountedAt);
+    const deltaMs = accounting.waiting || accounting.lastAccountedAt === null ? 0 : Math.max(0, now - accounting.lastAccountedAt);
     const totalMs = accounting.remainderMs + deltaMs;
     const elapsed = Math.floor(totalMs / 1000);
     accounting.remainderMs = totalMs - elapsed * 1000;
@@ -155,6 +157,13 @@ export function createGoalAccounting(deps: GoalAccountingDeps) {
   return {
     clearActiveAccounting,
     beginAccounting,
+    setWaiting(ctx: ExtensionContext, waiting: boolean): void {
+      const accounting = deps.getAccounting();
+      if (accounting.waiting === waiting) return;
+      // Закрываем предыдущий интервал до смены признака, не теряя доли секунды.
+      accountProgress(ctx, false, 0, true);
+      accounting.waiting = waiting;
+    },
     accountProgress,
   };
 }

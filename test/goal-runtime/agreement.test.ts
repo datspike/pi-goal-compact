@@ -137,7 +137,7 @@ test("правка плана или нового пункта после пер
   await assert.rejects(complete(harness), /agreement_check/);
   await assert.rejects(complete(harness), /свежий отчёт со статусом verifying/);
   await harness.runTool("report_goal_progress", { ...verifying, verification: "Округление сверено с выгрузкой." });
-  const plan = { outcome: "Отчёт о продажах.", doneWhen: "Отчёт сходится.", summary: "Отчёт собран.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "done", source: "user" }] };
+  const plan = { outcome: "Отчёт о продажах.", doneWhen: "Отчёт сходится.", summary: "Отчёт собран.", activeDecisionIds: [], items: [{ id: "report", title: "Собрать отчёт", status: "done", source: "user", result: "Отчёт сходится с исходными данными" }] };
   await harness.runTool("update_goal_work", { goal_id: goalId, expected_revision: 0, state: plan });
   // Новый план — новая пара: проверка из первой попытки засчитывается ей, вторая попытка закрывает.
   await assert.rejects(harness.runTool("update_goal", { status: "complete", verification: "План сверен, итоги совпали с выгрузкой." }, undefined, { agreementCheck: "raw" }), /agreement_check/);

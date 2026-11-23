@@ -1,9 +1,11 @@
 import { goalWorkNeedsCompaction, selectNextGoalWork, type GoalWorkState, type GoalWorkItem } from "./goal-work-state.js";
 import type { GoalDecisionEntry } from "./goal-projection-state.js";
-import { formatDuration, formatTokenValue } from "./format.js";
+import { activeTimeEstimate, formatActiveTimeEstimate, formatDuration, formatTokenValue } from "./format.js";
 import type { ThreadGoal } from "./types.js";
 import { say } from "../language.js";
 import { MAX_GOAL_PROSE_PARAGRAPH_CHARS } from "./goal-language-quality.js";
+
+export const ACTIVE_TIME_FRAME = "pi_goal_active_time";
 
 const CONTINUATION_MARKER_PREFIX = "<pi_goal_continuation goal_id=\"";
 
@@ -24,11 +26,11 @@ export function goalToolReference(toolName: GoalToolName): string {
 const UPDATE_GOAL_REF_PLACEHOLDER = "{update_goal_ref}";
 
 const completionAuditToolGuidelineTemplates = (): string[] => say<string[]>([
-  `Вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} со статусом complete только после проверки завершения, которая доказывает, что цель достигнута и обязательной работы не осталось: каждое явное требование полного договора (get_goal view=full, с одобренными поправками) сопоставлено с конкретным доказательством — файлами, выводом команд, результатами тестов, состоянием PR или другими реальными артефактами. Краткий документ и короткий план их не заменяют; неуверенность означает, что цель не завершена.`,
+  `Вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} со статусом complete только после проверки завершения, которая доказывает, что цель достигнута и обязательной работы не осталось: каждое явное требование полного договора с одобренными поправками сопоставлено с конкретным доказательством — файлами, выводом команд, результатами тестов, состоянием PR или другими реальными артефактами. Если действующая редакция уже в окне, используй её; get_goal(view="full") нужен только при отсутствии договора или сомнении в редакции. Краткий документ и план не заменяют доказательства.`,
   `Не вызывай ${UPDATE_GOAL_REF_PLACEHOLDER} только потому, что работа останавливается, сделано много, тесты прошли, но покрывают не все требования, или бюджет токенов почти исчерпан.`,
   `Остаточному риску нужны сценарий проявления и вердикт, и он не заменяет обязательную работу или доказательство. Сравнение может закончиться без выигрыша после согласованных экспериментов и обязательных доказательств; неизрасходованный бюджет не квота на новые попытки.`,
 ], [
-  `Use ${UPDATE_GOAL_REF_PLACEHOLDER} with status complete only after a completion audit proves the objective is achieved and no required work remains: every explicit requirement of the full contract (get_goal view=full, with approved amendments) maps to concrete evidence from files, command output, test results, PR state, or other real artifacts. The compact document and a short plan are not substitutes; uncertainty means the goal is not complete.`,
+  `Use ${UPDATE_GOAL_REF_PLACEHOLDER} with status complete only after a completion audit proves the objective is achieved and no required work remains: every explicit requirement of the full contract with approved amendments maps to concrete evidence from files, command output, test results, PR state, or other real artifacts. Use the current revision if it is already in context; use get_goal(view="full") only if the contract is missing or its revision is uncertain. A compact document or plan does not replace evidence.`,
   `Do not use ${UPDATE_GOAL_REF_PLACEHOLDER} merely because work is stopping, substantial progress was made, tests passed without covering every requirement, or the token budget is nearly exhausted.`,
   `A residual risk needs a manifestation scenario and verdict, and cannot replace required work or evidence. A comparison may finish without benefit after agreed experiments and required evidence; unused budget is not a quota for more trials.`,
 ]);
@@ -157,7 +159,7 @@ function formatRemainingTokens(goal: ThreadGoal): string {
 function budgetPromptLines(goal: ThreadGoal, includeRemaining: boolean): string[] {
   const lines = [
     say("Бюджет:", "Budget:"),
-    `${say("- Время работы над целью", "- Time spent pursuing goal")}: ${formatDuration(goal.usage.activeSeconds)}`,
+    ...(goal.agreement?.minimumActiveSeconds === undefined ? [`${say("- Время работы над целью", "- Time spent pursuing goal")}: ${formatDuration(goal.usage.activeSeconds)}`] : []),
     `${say("- Использовано токенов", "- Tokens used")}: ${formatTokenValue(goal.usage.tokensUsed)}`,
     `${say("- Бюджет токенов", "- Token budget")}: ${formatOptionalTokenBudget(goal)}`,
   ];
@@ -246,11 +248,35 @@ export const continueLine = (): string => say("Продолжай работу �
 /** Граница между данными и правилами продолжения; по ней сжатие отделяет кадр от фактов. */
 export const avoidRepeatLine = (): string => say("Не повторяй уже сделанную работу. Выбери следующее конкретное действие к цели.", "Avoid repeating work that is already done. Choose the next concrete action toward the objective.");
 
+/** Выбирает вопрос о завершении, не повторяя договорённость. */
+function modeStoppingLine(goal: ThreadGoal): string | undefined {
+  const mode = goal.mode;
+  const close = goalToolReference("update_goal");
+  if (goal.agreement?.minimumActiveSeconds === null) return say(
+    `Обязательный минимум времени не подтверждён: у Pi нет оценки. Не читай историю для подсчёта, не подставляй общие счётчики и не утверждай, что минимум набран или не набран. Пока подтверждения нет, цель оставь открытой: не вызывай ${close} со статусом "complete". Сделай полезный разрешённый шаг, если он ещё возможен. Иначе зафиксируй блокер и скажи, что уже проверено и чего не хватает. Не повторяй проверки ради времени.`,
+    `The required time minimum is unverified: Pi has no estimate. Do not read history to calculate it, substitute general usage counters, or assert that the minimum was or was not met. Leave the goal open while evidence is missing: do not call ${close} with status "complete". Take a useful authorized step if one remains. Otherwise report the blocker and explain what is verified and what is missing. Do not repeat tests to fill time.`,
+  );
+  if (goal.agreement?.minimumActiveSeconds !== undefined) return say(
+    `Время считает Pi; используй оценку выше. Не вызывай инструменты для пересчёта или повторной сверки времени. Если по оценке минимум не набран и следующий полезный шаг известен, сразу начни его. Если минимум по оценке набран, отдельно проверь остальные условия «Готово, когда». Когда все условия выполнены и действующая договорённость уже в окне, переходи сразу к ${close} со статусом "complete" и verification: ${mode === "research" ? "что проверено, что рекомендуешь и чего данные не доказывают" : "чем сделанное отвечает условиям договора"}. Не повторяй работу ради времени; если полезного шага нет, назови ограничение.`,
+    `Pi accounts for time; use the estimate above. Do not call tools to recalculate or recheck time. If below the estimated minimum and the useful next step is known, start it directly. If the estimated minimum is met, check the other Done when conditions separately. When all conditions are met and the current agreement is already in context, proceed directly to ${close} with status "complete" and verification: ${mode === "research" ? "what was tested, your recommendation, and what the evidence does not establish" : "how the work meets the agreement"}. Do not repeat work to fill time; if no useful step remains, state the limitation.`,
+  );
+  if (mode === "outcome") return say(
+    `Сверься с «Готово, когда». Если результат не доказан, сделай следующий разрешённый шаг или назови подтверждённый блокер. Запасной путь достаточен только если это согласовано. Если критерий выполнен, закрой цель через ${close} со статусом "complete" и verification. Не жди отложенных дел и не начинай новый круг улучшений.`,
+    `Check Done when. If the result is not proven, take the next authorized step or state the confirmed blocker. A fallback is sufficient only if agreed. If the criterion is met, close via ${close} with status "complete" and verification. Do not wait for deferred work or start another round of improvements.`,
+  );
+  if (mode === "research") return say(
+    `Сверься с «Готово, когда». Если обязательный результат не доказан, продолжай с него. Если минимум задан, а оценки Pi нет, не пересчитывай время по журналу и не считай минимум подтверждённым. Если следующая проверка может изменить рекомендацию, сделай полезный разрешённый шаг. Не повторяй проверки ради счётчика. Если полезного пути нет, назови ограничение, а не выдумывай доказательство. Когда условия выполнены, закрой через ${close} со статусом "complete" и verification: что проверено, что рекомендуешь и чего данные не доказывают.`,
+    `Check Done when. If a required result is unproven, continue with it. If a minimum was stated but Pi has no estimate, do not reconstruct time from history or treat the minimum as established. If another test could change the recommendation, take a useful authorized step. Do not repeat tests for the counter. If no useful path remains, state the limitation rather than invent evidence. Once conditions are met, close via ${close} with status "complete" and verification: what was tested, your recommendation, and what the evidence does not establish.`,
+  );
+  return undefined;
+}
+
 export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalContinuationSnapshot): string {
   const brief = (value: string): string => {
     const chars = [...value];
     return escapeXmlText(chars.length > 360 ? `${chars.slice(0, 359).join("")}…` : value);
   };
+  const time = formatActiveTimeEstimate(activeTimeEstimate(goal));
   const snapshotLines = snapshot ? [
     say("Производное состояние цели:", "Derived goal state:"),
     `${say("- Номер проекции", "- Projection sequence")}: ${snapshot.currentProjectionSeq}/${snapshot.stateSeq}`,
@@ -269,8 +295,10 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
   return [
     `${CONTINUATION_MARKER_PREFIX}${goal.goalId}\">`,
     continueLine(),
-    "",
-    say(`При необходимости проверь текущую цель и статус через ${goalToolReference("get_goal")}.`, `Inspect the current objective and status with ${goalToolReference("get_goal")} if needed.`),
+    ...(goal.mode === undefined && !time ? [
+      "",
+      say(`При необходимости проверь текущую цель и статус через ${goalToolReference("get_goal")}.`, `Inspect the current objective and status with ${goalToolReference("get_goal")} if needed.`),
+    ] : []),
     "",
     ...budgetPromptLines(goal, true),
     "",
@@ -281,7 +309,8 @@ export function compactContinuationPrompt(goal: ThreadGoal, snapshot?: GoalConti
     "",
     // Продолжение приходит, когда модель пытается закончить ход с открытой целью (решение 0017): развилка
     // «продолжить или закрыть с проверкой» ссылается на «Готово, когда», не повторяя текст договорённости.
-    say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
+    ...(time ? [`<${ACTIVE_TIME_FRAME}>${time}</${ACTIVE_TIME_FRAME}>`] : []),
+    modeStoppingLine(goal) ?? say(`Цель не закрыта. Сверь сделанное с «Готово, когда». Если какой-то пункт не выполнен, продолжай с него. Если выполнены все, закрой цель: ${goalToolReference("update_goal")} со статусом "complete" и verification — чем сделанное отвечает каждому пункту. Названному остаточному риску нужны сценарий проявления и вердикт; он не заменяет обязательную работу или доказательство.`,
       `The goal is not closed. Check the work against "Done when". If an item is not met, continue with it. If all are met, close the goal: call ${goalToolReference("update_goal")} with status \"complete\" and verification — how the work meets each item. A named residual risk needs a manifestation scenario and verdict; it cannot replace required work or proof.`),
     "</pi_goal_continuation>",
   ].join("\n");

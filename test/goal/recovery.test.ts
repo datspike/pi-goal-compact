@@ -453,3 +453,7 @@ test("terminal provider-limit errors pause immediately instead of pending host r
   }
   assert.equal(state.counters.transientAttempts, 0);
 });
+
+test("length-limited assistant turns do not count as successful recovery", () => {
+  assert.equal(isSuccessfulAssistantTurn({ role: "assistant", stopReason: "length" }), false);
+});

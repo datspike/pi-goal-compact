@@ -1,5 +1,7 @@
 import { say } from "../language.js";
+import { isHumanUserMessage } from "../compaction/checkpoint.js";
 import type { AgentMessage } from "../compaction/file-hints.js";
+import { classifySummaryLines, isSplitTurnBoundary } from "../compaction/summary.js";
 
 import { RECORD, withCurrentRecordNames } from "../records.js";
 import { renderAgreement } from "./agreement.js";
@@ -21,19 +23,21 @@ const GOAL_HEADINGS = ["## Цель", "## Goal"];
 
 /**
  * Убирает из сводки её раздел «Цель»: при незакрытой цели его место занимает договорённость (Т5.3).
- * Раздел идёт от заголовка до следующего заголовка второго уровня.
+ * Раздел кончается перед следующим заголовком второго уровня, разрезанным ходом или файловым приложением.
  */
 export function withoutGoalSection(summary: string): string {
-  const lines = summary.split("\n");
   const kept: string[] = [];
   let skipping = false;
-  for (const line of lines) {
-    const heading = line.trimEnd();
-    if (GOAL_HEADINGS.includes(heading)) {
-      skipping = true;
-      continue;
+  for (const { line, protected: isProtected, fileBlockStart } of classifySummaryLines(summary)) {
+    if (fileBlockStart) skipping = false;
+    if (!isProtected) {
+      const heading = line.trimEnd();
+      if (GOAL_HEADINGS.includes(heading)) {
+        skipping = true;
+        continue;
+      }
+      if (skipping && (/^## /.test(heading) || isSplitTurnBoundary(heading))) skipping = false;
     }
-    if (skipping && /^## /.test(heading)) skipping = false;
     if (!skipping) kept.push(line);
   }
   return kept.join("\n").replace(/^\n+/, "");
@@ -103,16 +107,17 @@ interface BranchEntry {
   type: string;
   id: string;
   firstKeptEntryId?: string;
-  message?: unknown;
+  message?: { role?: string; content?: unknown };
+  customType?: string;
+  data?: unknown;
+  targetId?: string;
+  replacement?: { content: unknown } | null;
 }
 
-function messageText(message: unknown): string | null {
-  if (!message || typeof message !== "object") return null;
-  const candidate = message as { role?: unknown; content?: unknown };
-  if (candidate.role !== "user") return null;
-  if (typeof candidate.content === "string") return candidate.content;
-  if (!Array.isArray(candidate.content)) return null;
-  const text = candidate.content
+function messageText(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const text = content
     .filter((part): part is { type: "text"; text: string } => Boolean(part) && typeof part === "object" && part.type === "text" && typeof part.text === "string")
     .map((part) => part.text).join("\n");
   return text || null;
@@ -129,11 +134,23 @@ export function compactedOwnerReplies(branch: readonly BranchEntry[]): string[] 
   }
   if (!compaction) return [];
   const keptIndex = branch.findIndex((entry) => entry.id === compaction.firstKeptEntryId);
-  const end = keptIndex >= 0 ? keptIndex : branch.indexOf(compaction);
+  const compactIndex = branch.indexOf(compaction);
+  const end = keptIndex >= 0 ? keptIndex : compactIndex;
+  // Как и договорённость, дословные реплики фиксируются на момент сжатия.
+  // Правка может стоять в хвосте, хотя меняет реплику из сжатой части.
+  const beforeCompaction = branch.slice(0, compactIndex);
+  const edits = new Map<string, { content: unknown } | null>();
+  for (const entry of beforeCompaction) {
+    if (entry.type === "context_edit" && entry.targetId && entry.replacement !== undefined) {
+      edits.set(entry.targetId, entry.replacement);
+    }
+  }
   const replies: string[] = [];
   for (const entry of branch.slice(0, end)) {
-    if (entry.type !== "message") continue;
-    const text = messageText(entry.message);
+    if (!isHumanUserMessage(entry, beforeCompaction)) continue;
+    const edit = edits.get(entry.id);
+    if (edit === null) continue;
+    const text = messageText(edit ? edit.content : entry.message?.content);
     if (text) replies.push(text);
   }
   return replies;
