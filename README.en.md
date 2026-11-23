@@ -198,7 +198,7 @@ An empty response, including reasoning without an answer, can be retried once. A
 
 ## Limitations
 
-- Append compaction exists only in this experimental branch; it is not deployed to the working installation or Pi settings.
+- Append compaction never turns itself on: without `/context append on` the standard summary runs, and no Pi setting enables the mode.
 - Append does not promise a provider cache hit: with a short prefix or after a route change the miss shows up in the card as a warning.
 - With an already applied summary (`previousSummary`) append always yields to a standard summary and leaves the `previous-summary` reason in the card.
 - The model writes the agreement in its own words. The extension stores it unchanged, but how faithful the retelling is depends on the model.
