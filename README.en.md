@@ -6,7 +6,7 @@ A [Pi](https://github.com/badlogic/pi-mono) extension for long-running agent wor
 
 One extension replaces two earlier ones: [pi-codex-goal](https://github.com/datspike/pi-codex-goal) (long-running goals) and [context-compaction](https://github.com/datspike/context-compaction) (context window and compaction summaries). Sessions started with them open and continue as they are.
 
-> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction is ready to merge into the main branch and still lives in the `datspike/append-observability` branch: it is off by default, turns on for the current window with `/context append on`, and falls back to a standard summary with a visible reason whenever it cannot apply.
+> **Status.** The extension works and is tested, but it is not published to npm. Version `0.0.0`, installed from a local checkout. The cache-preserving append compaction ships in the main branch: it is off by default, turns on for the current window with `/context append on`, and falls back to a standard summary with a visible reason whenever it cannot apply.
 
 ## Why
 
@@ -199,7 +199,6 @@ An empty response, including reasoning without an answer, can be retried once. A
 ## Limitations
 
 - Append compaction never turns itself on: without `/context append on` the standard summary runs, and no Pi setting enables the mode.
-- The append branch is not merged into `main` yet: before the merge the mode exists only there.
 - Append does not promise a provider cache hit: with a short prefix or after a route change the miss shows up in the card as a warning.
 - With an already applied summary (`previousSummary`) append always yields to a standard summary and leaves the `previous-summary` reason in the card.
 - The model writes the agreement in its own words. The extension stores it unchanged, but how faithful the retelling is depends on the model.
