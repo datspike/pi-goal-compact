@@ -2,49 +2,62 @@
 (* Передача: сохранённое сжатие, применение модели и одно продолжение. *)
 EXTENDS Naturals
 CONSTANT Bug
-VARIABLES phase, saved, switched, held, retry, resumes, bad
-vars == <<phase, saved, switched, held, retry, resumes, bad>>
+VARIABLES phase, saved, switched, held, retry, resumes, bad, run, broke
+vars == <<phase, saved, switched, held, retry, resumes, bad, run, broke>>
 Init == /\ phase = "none" /\ saved = FALSE /\ switched = FALSE
         /\ held = FALSE /\ retry = FALSE /\ resumes = 0 /\ bad = ""
+        /\ run = "running" /\ broke = FALSE
 Request == /\ phase = "none"
            /\ phase' = "queued"
-           /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
+           /\ UNCHANGED <<saved, switched, held, retry, resumes, bad, run, broke>>
 Hold == /\ ~held /\ held' = TRUE
-        /\ UNCHANGED <<phase, saved, switched, retry, resumes, bad>>
+        /\ UNCHANGED <<phase, saved, switched, retry, resumes, bad, run, broke>>
+(* Передача со сжатием рвёт ход на его границе: следующий запрос ещё не ушёл. *)
+Break == /\ phase = "queued" /\ run = "running"
+         /\ run' = "idle" /\ broke' = TRUE
+         /\ UNCHANGED <<phase, saved, switched, held, retry, resumes, bad>>
+(* Ход заканчивается сам, например без запланированного разрыва. *)
+Settle == /\ run = "running"
+          /\ run' = "idle"
+          /\ UNCHANGED <<phase, saved, switched, held, retry, resumes, bad, broke>>
 Compact == /\ phase = "queued"
            /\ phase' = "saved" /\ saved' = TRUE
            /\ retry' \in BOOLEAN
-           /\ UNCHANGED <<switched, held, resumes, bad>>
+           /\ UNCHANGED <<switched, held, resumes, bad, run, broke>>
 Switch == /\ phase = "saved" \/ (Bug = "beforeSaved" /\ phase = "queued")
           /\ phase' = "applying"
           /\ bad' = IF ~saved THEN "unsaved" ELSE bad
-          /\ UNCHANGED <<saved, switched, held, retry, resumes>>
+          /\ UNCHANGED <<saved, switched, held, retry, resumes, run, broke>>
 Applied == /\ phase = "applying" /\ phase' = "ready" /\ switched' = TRUE
-           /\ UNCHANGED <<saved, held, retry, resumes, bad>>
+           /\ UNCHANGED <<saved, held, retry, resumes, bad, run, broke>>
 (* Сбой или отмена сжатия: сжатия нет, передача ждёт следующего. *)
 CompactFailed == /\ phase = "queued"
                  /\ phase' = IF Bug = "failOnCompact" THEN "failed" ELSE "queued"
-                 /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
+                 /\ UNCHANGED <<saved, switched, held, retry, resumes, bad, run, broke>>
 Failed == /\ phase \in {"saved", "applying"}
           /\ phase' = "failed"
-          /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
+          /\ UNCHANGED <<saved, switched, held, retry, resumes, bad, run, broke>>
 Resume == /\ phase = "ready" \/ (Bug = "earlyRequest" /\ phase = "applying")
           /\ (~held \/ Bug = "noHold")
-          /\ resumes' = IF retry /\ Bug = "doubleResume" THEN 2 ELSE 1
+          /\ resumes' = IF Bug = "doubleResume" /\ retry THEN 2
+                        ELSE IF Bug = "noResumeAfterBreak" /\ broke THEN 0
+                        ELSE 1
           /\ bad' = IF ~switched THEN "oldModel" ELSE IF held THEN "hold" ELSE bad
           /\ phase' = "done"
-          /\ UNCHANGED <<saved, switched, held, retry>>
+          /\ UNCHANGED <<saved, switched, held, retry, run, broke>>
 Cancel == /\ phase \in {"queued", "saved", "applying", "ready"}
           /\ phase' = "cancelled"
-          /\ UNCHANGED <<saved, switched, held, retry, resumes, bad>>
-Next == Request \/ Hold \/ Compact \/ CompactFailed \/ Switch \/ Applied \/ Failed \/ Resume \/ Cancel
+          /\ UNCHANGED <<saved, switched, held, retry, resumes, bad, run, broke>>
+Next == Request \/ Hold \/ Break \/ Settle \/ Compact \/ CompactFailed \/ Switch \/ Applied \/ Failed \/ Resume \/ Cancel
 Spec == Init /\ [][Next]_vars
 TypeOK == /\ phase \in {"none", "queued", "saved", "applying", "ready", "failed", "done", "cancelled"}
           /\ saved \in BOOLEAN /\ switched \in BOOLEAN /\ held \in BOOLEAN
           /\ retry \in BOOLEAN /\ resumes \in 0..2
+          /\ run \in {"idle", "running"} /\ broke \in BOOLEAN
 P10_SavedBeforeSwitch == bad # "unsaved"
 P11_SwitchedBeforeRequest == bad # "oldModel"
 P12_OneTransferContinuation == resumes <= 1
 P13_TransferRespectsHold == bad # "hold"
 P16_FailureOnlyAfterSaved == phase = "failed" => saved
+P22_BreakKeepsWork == broke /\ phase = "done" => resumes >= 1
 =============================================================================

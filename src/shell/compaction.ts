@@ -364,6 +364,8 @@ export function registerCompaction(pi: ExtensionAPI, settings: SummarySettings, 
 	});
 	pi.on("turn_end", (event, ctx) => {
 		stage.observe("turn_end", event, ctx);
+		// Передача со сжатием рвёт прогон на границе хода: следующий запрос ещё не ушёл, а продолжение пойдёт уже новой модели.
+		driver.dispatch({ type: "checkpoint_turn_boundary" }, ctx);
 		window.updateFooter(ctx);
 	});
 	pi.on("session_start", async (event, ctx) => {

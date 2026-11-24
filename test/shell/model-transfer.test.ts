@@ -251,3 +251,55 @@ test("после сбоя применения модели каждый обо�
  assert.equal(runtime.aborts, aborts);
  assert.equal(runtime.notices.length, notices);
 });
+
+test("короткие имена mn и mnn равнозначны полным командам", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ for (const [alias, full] of [["mn", "model-next"], ["mnn", "model-next-now"]] as const) assert.equal(runtime.commands.get(alias)?.handler, runtime.commands.get(full)?.handler, `${alias} — тот же обработчик, что ${full}`);
+ await command(runtime, "mn", "small");
+ assert.equal(runtime.ctx.model.id, "gpt-5.6-sol", "до сжатия модель не меняется");
+ await command(runtime, "mn", "status");
+ assert.match(runtime.notices.at(-1)?.text ?? "", /test\/small/);
+ await command(runtime, "mn", "cancel");
+ assert.match(runtime.notices.at(-1)?.text ?? "", /Переключение отменено/);
+ await runtime.settle();
+ await command(runtime, "mnn", "test/small");
+ assert.equal(runtime.compactOptions.length, 1, "mnn в простое сразу просит сжатие, как model-next-now");
+ await saved(runtime);
+ assert.equal(runtime.ctx.model.id, "small");
+});
+test("автодополнение коротких имён совпадает с полными", async () => {
+ const runtime = fakePi({ models: [target] });
+ await command(runtime, "mn", "status");
+ const values = async (name: string, prefix: string) => {
+  const items = await runtime.commands.get(name)?.getArgumentCompletions?.(prefix);
+  return items?.map(item => item.value) ?? null;
+ };
+ assert.deepEqual(await values("mn", "st"), await values("model-next", "st"));
+ assert.deepEqual(await values("mn", "ca"), ["cancel"]);
+ assert.deepEqual(await values("mnn", "sm"), await values("model-next-now", "sm"));
+});
+
+test("немедленная передача рвёт ход на его границе и продолжает работу до простоя", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await runtime.event("agent_start", {});
+ await command(runtime, "mnn", "test/small --thinking medium");
+ assert.equal(runtime.compactOptions.length, 0, "до границы хода сжатие не начато");
+ await runtime.event("turn_end", { message: { stopReason: "toolUse" }, toolResults: [], turnIndex: 0 });
+ assert.equal(runtime.compactOptions.length, 1, "граница хода запускает сжатие сразу");
+ await runtime.settle(true, true);
+ await saved(runtime);
+ assert.equal(runtime.ctx.model.id, "small", "работа ушла новой модели");
+ runtime.compactOptions[0]?.onComplete?.({ summary: "fixture", firstKeptEntryId: "x", tokensBefore: 1000 });
+ await runtime.flush();
+ assert.equal(runtime.sent.length, 1, "ровно одно продолжение и без реплики владельца");
+ assert.equal(runtime.thinkingLevel, "medium");
+});
+test("граница хода не запускает сжатие для отложенной передачи без --now", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await runtime.event("agent_start", {});
+ await command(runtime, "mn", "test/small");
+ await runtime.event("turn_end", { message: { stopReason: "toolUse" }, toolResults: [], turnIndex: 0 });
+ assert.equal(runtime.compactOptions.length, 0);
+ await runtime.event("agent_settled", { aborted: false });
+ assert.equal(runtime.compactOptions.length, 0, "сжатие остаётся за следующим компактом");
+});

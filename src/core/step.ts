@@ -50,7 +50,12 @@ export function step(state: CoreState, event: CoreEvent): StepResult {
     case "checkpoint_requested": {
       if (state.checkpoint.phase !== "none") return result(state, { type: "checkpoint_refused", reason: "in_progress" });
       if (event.alreadyCompacted) return result(state, { type: "checkpoint_refused", reason: "already_compacted" });
-      return result({ ...state, checkpoint: { phase: "pending", request: event.request, epoch: state.epoch, suppressed: false, ...(event.continueAfter === undefined ? {} : { continueAfter: event.continueAfter }) } }, { type: "checkpoint_scheduled" });
+      return result({ ...state, checkpoint: { phase: "pending", request: event.request, epoch: state.epoch, suppressed: false, ...(event.continueAfter === undefined ? {} : { continueAfter: event.continueAfter }), ...(event.breakTurn === true ? { breakTurn: true } : {}) } }, { type: "checkpoint_scheduled" });
+    }
+    case "checkpoint_turn_boundary": {
+      // Пороговое сжатие Pi сжимает как раз здесь: ход уже закончен, следующего запроса ещё нет.
+      if (state.checkpoint.phase !== "pending" || state.checkpoint.breakTurn !== true) return result(state);
+      return result({ ...state, checkpoint: { ...state.checkpoint, phase: "compacting" } }, { type: "compact", request: state.checkpoint.request });
     }
     case "settled": {
       const idle: CoreState = { ...state, agent: "idle", selfAbort: false };

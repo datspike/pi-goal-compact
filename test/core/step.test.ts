@@ -147,4 +147,15 @@ describe("продолжение цели", () => {
     expect(step(state, { type: "ticket_arrived", ticket, gate: "held" }).effects).toEqual([{ type: "abort_run" }]);
     expect(step(state, { type: "ticket_arrived", ticket, gate: "runs" }).effects).toEqual([{ type: "admit_ticket" }]);
   });
+  test("передача со сжатием рвёт ход на его границе и продолжает работу", () => {
+    const armed: CoreEvent = { type: "checkpoint_requested", request, alreadyCompacted: false, breakTurn: true, continueAfter: true };
+    expect(run([{ type: "run_started" }, armed, { type: "checkpoint_turn_boundary" }]).effects).toEqual(["checkpoint_scheduled", "compact"]);
+    const aborted = run([{ type: "run_started" }, armed, { type: "checkpoint_turn_boundary" }, { type: "settled", aborted: true }, done]);
+    expect(aborted.effects.at(-1)).toBe("send_ticket");
+  });
+  test("граница хода не трогает обычную точку и уже идущее сжатие", () => {
+    expect(run([...scheduled, { type: "checkpoint_turn_boundary" }]).effects).toEqual(["checkpoint_scheduled"]);
+    const armed: CoreEvent = { type: "checkpoint_requested", request, alreadyCompacted: false, breakTurn: true };
+    expect(run([armed, { type: "checkpoint_turn_boundary" }, { type: "checkpoint_turn_boundary" }]).effects).toEqual(["checkpoint_scheduled", "compact"]);
+  });
 });

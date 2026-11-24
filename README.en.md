@@ -90,11 +90,11 @@ Without a goal the model is offered only `create_goal`; `checkpoint_compact_cont
 
 ### Switch models after compaction
 
-`/model-next` opens a model picker for the next successful compaction. `/model-next-now` requests compaction and switching after the current turn without interrupting a running tool. Both work with or without a goal: no argument opens search, an exact `provider/model` selects directly, and a partial name opens search with that text. Autocomplete and an optional `--thinking medium` (or another supported level) are available.
+`/model-next` opens a model picker for the next successful compaction. `/model-next-now` does it right away: it breaks the current turn at a step boundary, compacts the context and continues the same work on the new model without a message from you; a running tool finishes first. The short names `/mn` and `/mnn` are equivalent to them. Both work with or without a goal: no argument opens search, an exact `provider/model` selects directly, and a partial name opens search with that text. Autocomplete and an optional `--thinking medium` (or another supported level) are available.
 
-`/model-next status` shows a pending transfer; `/model-next cancel` cancels it. Once model application is in progress, wait for its result before cancelling. Pending transfers survive `/reload` and restarts; navigating to another branch or session, or manually choosing a model, cancels them.
+`/model-next status` shows a pending transfer; `/model-next cancel` cancels it, and `/mn` accepts the same arguments. Once model application is in progress, wait for its result before cancelling. Pending transfers survive `/reload` and restarts; navigating to another branch or session, or manually choosing a model, cancels them.
 
-The previous model writes the summary. The new model is applied only after compaction is saved; goal pauses and owner-decision holds remain in force. An idle session without an active task does not start new work.
+If the turn finished on its own, compaction follows it at once and the continuation adds no extra message.
 
 If compaction fails or you cancel it, the transfer stays queued and is applied by the next successful compaction: running `/compact` again is enough. Until then work continues on the previous model. A failed summary request is retried twice automatically; each retry and the failure reason are reported as a warning. A turn that starts during manual compaction, for example from a subagent notification, waits for it to finish: after successful compaction it goes to the new model with the compacted window; after failure it continues on the previous model; if the owner cancels compaction, the waiting turn is not sent.
 

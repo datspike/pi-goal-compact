@@ -52,6 +52,7 @@ export const RUNS: readonly Run[] = [
   { model: "ModelTransfer", bug: "doubleResume", expect: "P12_OneTransferContinuation", meaning: "повтор Pi и своё продолжение одновременно" },
   { model: "ModelTransfer", bug: "noHold", expect: "P13_TransferRespectsHold", meaning: "передача обходит удержание цели" },
   { model: "ModelTransfer", bug: "failOnCompact", expect: "P16_FailureOnlyAfterSaved", meaning: "сбой сжатия ломает ожидающую передачу" },
+  { model: "ModelTransfer", bug: "noResumeAfterBreak", expect: "P22_BreakKeepsWork", meaning: "разрыв хода оставляет работу без продолжения" },
   { model: "ProviderRetry", bug: "none", expect: null, meaning: "исправная модель повтора запроса" },
   { model: "ProviderRetry", bug: "raceEsc", expect: "RetryCancellation", meaning: "отмена между выбором модели и отправкой игнорируется" },
   { model: "ProviderRetry", bug: "doubleOwner", expect: "RetryOneOwner", meaning: "продолжение доступно одновременно со штатным повтором" },

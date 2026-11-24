@@ -11,6 +11,11 @@ import { notice } from "./notice.js";
 
 type PendingTransfer = { version: 1; id: string; sessionId: string; provider: string; model: string; phase: "queued" | "applying" | "failed"; immediate?: boolean; thinking?: ThinkingLevel; compactId?: string };
 const LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** Короткие имена равнозначны полным: та же команда, аргументы и автодополнение. */
+const COMMAND_NAMES = {
+ "model-next": ["model-next", "mn"],
+ "model-next-now": ["model-next-now", "mnn"],
+} as const;
 
 function pendingRecord(data: unknown): PendingTransfer | undefined {
  if (!data || typeof data !== "object") return undefined;
@@ -90,8 +95,8 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
   } finally { applying = false; }
  };
  for (const command of ["model-next", "model-next-now"] as const) {
-  pi.registerCommand(command, {
-   description: command === "model-next" ? say("Выбрать модель после следующего сжатия; status, cancel", "Choose a model after next compaction; status, cancel") : say("Сжать и переключить модель после текущего хода", "Compact and switch model after the current turn"),
+  const options: Parameters<ExtensionAPI["registerCommand"]>[1] = {
+   description: command === "model-next" ? say("Выбрать модель после следующего сжатия; status, cancel", "Choose a model after next compaction; status, cancel") : say("Сжать на границе хода и переключить модель", "Compact at the turn boundary and switch model"),
    getArgumentCompletions(prefix) {
     const ctx = lastContext;
     if (!ctx) return null;
@@ -131,7 +136,7 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
      return;
     }
     if (command === "model-next-now") {
-     driver.dispatch({ type: "checkpoint_requested", alreadyCompacted: false, continueAfter: !ctx.isIdle() || gate() === "runs", request: {
+     driver.dispatch({ type: "checkpoint_requested", alreadyCompacted: false, breakTurn: true, continueAfter: !ctx.isIdle() || gate() === "runs", request: {
       mainObjective: say("Продолжить текущую незавершённую работу", "Continue the current unfinished task"),
       completedCheckpoint: say("Передать текущие решения и состояние новой модели", "Transfer current decisions and state to the next model"),
       continuationTarget: say("Продолжить с последнего незавершённого шага; не начинать новую задачу", "Resume the last unfinished step; do not start a new task"),
@@ -139,7 +144,8 @@ export function registerModelTransfer(pi: ExtensionAPI, driver: CoreDriver, gate
      if (ctx.isIdle()) driver.dispatch({ type: "settled", aborted: false }, ctx);
     }
    },
-  });
+  };
+  for (const name of COMMAND_NAMES[command]) pi.registerCommand(name, options);
  }
  let lastContext: ExtensionContext | undefined;
  return {

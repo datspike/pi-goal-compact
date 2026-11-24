@@ -19,6 +19,15 @@ function response(message: AssistantMessage, delayMs?: number) {
  if (delayMs === undefined) queueMicrotask(emit); else setTimeout(emit, delayMs);
  return stream;
 }
+/** Ждёт условие после возврата prompt: сжатие и продолжение новой модели идут уже вне его. */
+async function waitFor(condition: () => boolean, timeoutMs = 15_000): Promise<boolean> {
+ const deadline = Date.now() + timeoutMs;
+ while (Date.now() < deadline) {
+  if (condition()) return true;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+ }
+ return condition();
+}
 const SUMMARY = "## Цель\nПродолжить проверку.\n\n## Исходный запрос\nСохранить решение и закончить проверку.";
 type SummaryStep = "ok" | "invalid" | "error";
 /** Сессия с историей и отложенной передачей old → small; ответы сводки задаются по шагам. */
@@ -183,4 +192,53 @@ test("настоящий SDK: разовый сбой запроса сводк�
   assert.equal(session.model?.id, "small");
   assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 1);
  } finally { await fixture.close(); }
+});
+test("настоящий SDK: /mnn рвёт ход на границе и продолжает работу новой моделью", { timeout: 30_000 }, async () => {
+ const cwd = await mkdtemp(join(tmpdir(), "model-transfer-break-"));
+ const trace: string[] = [];
+ const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
+ let work = 0;
+ let hooks = 0;
+ const runtime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null, credentials: new InMemoryCredentialStore() });
+ const loader = new DefaultResourceLoader({ cwd, agentDir: join(cwd, "agent"), noContextFiles: true, noExtensions: true, extensionFactories: [pi => {
+  // Владелец нажимает /mnn в конце первого хода: расширение ещё не обрабатывало turn_end.
+  pi.on("turn_end", async (_event, ctx) => {
+   if (hooks++ !== 0) return;
+   await commands.get("mnn")?.handler("transfer-probe/small", ctx as ExtensionCommandContext);
+  });
+  extension({ ...pi, registerCommand(name, options) { commands.set(name, options); pi.registerCommand(name, options); } });
+  pi.registerProvider("transfer-probe", { api: "transfer-probe", baseUrl: "http://127.0.0.1:1", apiKey: "offline", models: ["old", "small"].map(id => ({ id, name: id, reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: id === "old" ? 272000 : 64000, maxTokens: 1024 })),
+   streamSimple(model, context) {
+    const base = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), usage };
+    const isSummary = JSON.stringify(context).includes("context summarization assistant");
+    trace.push(`${model.id}:${isSummary ? "summary" : "work"}`);
+    if (isSummary) return response({ ...base, stopReason: "stop", content: [{ type: "text", text: SUMMARY }] });
+    work++;
+    // Ход не закончен: модель просит ещё шаг. Второй рабочий ответ старой модели не должен случиться.
+    if (work === 1) return response({ ...base, stopReason: "toolUse", content: [{ type: "toolCall", id: "call-1", name: "probe_step", arguments: {} }] });
+    return response({ ...base, stopReason: "stop", content: [{ type: "text", text: "DONE" }] });
+   },
+  });
+ }] });
+ await loader.reload();
+ const manager = SessionManager.create(cwd, join(cwd, "sessions"));
+ for (let i = 0; i < 3; i++) {
+  manager.appendMessage({ role: "user", content: `Шаг ${i}: ${"Offline fixture ".repeat(500)}`, timestamp: Date.now() });
+  manager.appendMessage({ role: "assistant", api: "transfer-probe", provider: "transfer-probe", model: "old", stopReason: "stop", usage, content: [{ type: "text", text: `Готово ${i}` }], timestamp: Date.now() });
+ }
+ const oldModel = { provider: "transfer-probe", id: "old", name: "Old", api: "transfer-probe", baseUrl: "http://127.0.0.1:1", reasoning: false, input: ["text" as const], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 272000, maxTokens: 1024 };
+ const { session } = await createAgentSession({ cwd, agentDir: join(cwd, "agent"), modelRuntime: runtime, model: oldModel, resourceLoader: loader, sessionManager: manager, noTools: "builtin", settingsManager: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 100 } }) });
+ try {
+  await session.bindExtensions({});
+ await session.prompt("Continue the fixture.");
+ // Сжатие и продолжение идут после возврата prompt: ждём, пока продолжение новой модели отработает.
+ assert.ok(await waitFor(() => trace.length >= 3), `ждали сжатие и продолжение: ${trace.join(",")}`);
+ await waitFor(() => session.isIdle);
+ // Сжатие случилось на границе первого хода: второй рабочий ответ ушёл бы старой модели.
+ assert.deepEqual(trace, ["old:work", "old:summary", "small:work"]);
+  assert.equal(session.model?.id, "small");
+  assert.equal(manager.getBranch().filter(entry => entry.type === "compaction").length, 1);
+  // Продолжение пишет расширение: новых реплик владельца нет — три шага истории и исходный запрос.
+  assert.equal(manager.getBranch().filter(entry => entry.type === "message" && entry.message.role === "user").length, 4);
+} finally { await new Promise((resolve) => setTimeout(resolve, 20)); session.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });

@@ -13,8 +13,8 @@ export type CheckpointRequest = Readonly<CheckpointParams>;
 
 export type CheckpointState =
   | { readonly phase: "none" }
-  | { readonly phase: "pending"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean }
-  | { readonly phase: "compacting"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean };
+  | { readonly phase: "pending"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean; readonly breakTurn?: boolean }
+  | { readonly phase: "compacting"; readonly request: CheckpointRequest; readonly epoch: number; readonly suppressed: boolean; readonly continueAfter?: boolean; readonly breakTurn?: boolean };
 
 export interface CoreState {
   /** Растёт на реплике владельца, смене ветки, сессии или модели. Билет прошлой эпохи устарел. */
@@ -67,7 +67,10 @@ export type CoreEvent =
   | { readonly type: "run_started" }
   | { readonly type: "settled"; readonly aborted: boolean }
   /** Агент попросил контрольную точку; alreadyCompacted — сжатие уже было после последней реплики владельца. */
-  | { readonly type: "checkpoint_requested"; readonly request: CheckpointRequest; readonly alreadyCompacted: boolean; readonly continueAfter?: boolean }
+  /** breakTurn — владелец хочет сжать сразу на границе хода, не дожидаясь простоя. */
+  | { readonly type: "checkpoint_requested"; readonly request: CheckpointRequest; readonly alreadyCompacted: boolean; readonly continueAfter?: boolean; readonly breakTurn?: boolean }
+  /** Граница перед следующим ходом: ход закончен, следующий ещё не начат. */
+  | { readonly type: "checkpoint_turn_boundary" }
   | { readonly type: "compaction_started"; readonly reason: CompactionReason; readonly willRetry: boolean }
   | { readonly type: "compaction_finished"; readonly reason: CompactionReason; readonly willRetry: boolean; readonly ok: boolean }
   /** Сжатие по запросу агента полностью завершилось, Pi отпустил блокировку. */
