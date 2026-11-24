@@ -12,7 +12,7 @@
 
 Настройка остаётся только разрешением: `appendCompaction` не включает режим и не влияет на выбор владельца, кроме полного запрета. Рабочая установка и её настройки не меняются.
 
-Причина отказа append становится частью итога сжатия, а не только уведомлением. Коды маршрута переводятся в короткие слова (`previous-summary`, `no-captured-request`, `route-changed`, `branch-changed`, `context-changed`, `sources-unavailable`, `payload-mismatch`, `request-too-large`, `output-limit-mismatch`, `unsupported-route`) и попадают в карточку и в отдельную запись `goal-compact-compact-metrics` с типом сжатия, состоянием кэша, размерами, временем и стоимостью. Та же запись пишется при неудачном сжатии с `outcome: "failed"`.
+Причина отказа append становится частью итога сжатия, а не только уведомлением. Коды маршрута переводятся в короткие слова (`no-captured-request`, `route-changed`, `branch-changed`, `context-changed`, `sources-unavailable`, `payload-mismatch`, `request-too-large`, `output-limit-mismatch`, `unsupported-route`) и попадают в карточку и в отдельную запись `goal-compact-compact-metrics` с типом сжатия, состоянием кэша, размерами, временем и стоимостью. Та же запись пишется при неудачном сжатии с `outcome: "failed"`.
 
 Шаги попытки append пишутся под именем `goal-compact-append-attempt`; прежнее имя этой ветки `append-pilot-attempt` читается как новое.
 

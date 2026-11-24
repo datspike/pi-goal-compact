@@ -33,7 +33,6 @@ const workingStandard = (): string => say("Compact: стандартная св�
 const workingAppend = (): string => say("Compact: append по кэшу последнего запроса", "Compact: append on the last request cache");
 /** Коды отказа маршрута append в слова владельцу: причина видна в карточке и в журнале. */
 const APPEND_REFUSAL_REASONS: Readonly<Record<string, string>> = {
-	APPEND_PREVIOUS_SUMMARY: "previous-summary",
 	APPEND_CAPTURE_UNAVAILABLE: "no-captured-request",
 	APPEND_ROUTE_CHANGED: "route-changed",
 	APPEND_BRANCH_CHANGED: "branch-changed",

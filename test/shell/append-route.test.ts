@@ -149,11 +149,16 @@ test("append резервирует ответ по служебному окн�
     assert.equal(f.sent.length, 2);
 });
 
-test("уже применённая сводка отправляет сжатие на обычный путь", async () => {
-    const f = fixture(); await f.warm();
+test("прежняя сводка не отменяет append: она уходит в текст нового сообщения", async () => {
+    const f = fixture(); await f.warm("stream");
     const event = asPi<SessionBeforeCompactEvent>({ signal: f.controller.signal, preparation: { previousSummary: "## Цель\nПрежняя сводка" } });
-    assert.throws(() => f.route.prepare(f.ctx, event, "ru", f.model.contextWindow), /APPEND_PREVIOUS_SUMMARY/);
-    assert.equal(f.sent.length, 1);
+    const transport = f.route.prepare(f.ctx, event, "ru", f.model.contextWindow);
+    const task = transport.prompt([f.user], "Сводка", "## Цель\nПрежняя сводка", []);
+    assert.match(task, /<previous-summary>\n## Цель\nПрежняя сводка\n<\/previous-summary>/);
+    await transport.request(f.model, task, { maxTokens: 1024 });
+    assert.equal(f.sent.length, 2);
+    const [previous, next] = f.sent as { input: unknown[] }[];
+    assert.deepEqual(next!.input.slice(0, previous!.input.length), previous!.input);
 });
 
 test("продолжение проверяется по форме провайдера: turns Responses и messages chat completions", () => {

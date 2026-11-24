@@ -158,8 +158,8 @@ export class AppendRoute {
     prepare(ctx: ExtensionContext, event: SessionBeforeCompactEvent, language: Language, serviceWindow: number): SummaryTransport {
         const capture = this.capture, registration = this.registration;
         if (!capture?.payload || !capture.settled || !registration) throw Error("APPEND_CAPTURE_UNAVAILABLE");
-        // Сводка уже применена: append продолжил бы новый запрос, но не сумеет переписать прежнюю сводку.
-        if (event.preparation?.previousSummary) throw Error("APPEND_PREVIOUS_SUMMARY");
+        // Прежняя сводка не запрещает продолжение: она уходит внутрь нового сообщения пользователя,
+        // а захваченный префикс остаётся тем же, и расхождение поймает сверка payload.
         if (capture.session !== ctx.sessionManager.getSessionId() || registration.registry !== ctx.modelRegistry
             || ctx.modelRegistry.getRegisteredNativeProvider(capture.model.provider) !== registration.proxy
             || (["provider", "id", "api", "baseUrl"] as const).some(key => capture.model[key] !== ctx.model?.[key])) throw Error("APPEND_ROUTE_CHANGED");
