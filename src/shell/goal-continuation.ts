@@ -41,14 +41,19 @@ const asGate = (reason: HoldReason): GoalGate => reason === "subagents" ? "held"
  * ядро; здесь — разрешение цели, тексты и связь с Pi.
  */
 export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession, driver: CoreDriver, tickets: Tickets, retryConfig: ProviderRetryConfig = { enabled: false, windowMs: 900_000, allowSwitch: true }) {
-  const providerRetry = retryConfig.enabled ? registerProviderRetry(pi, session, retryConfig, () => driver.state.selfAbort) : undefined;
+  // После отказа устаревшему билету Pi присылает обычный aborted; сохраняем источник
+  // до agent_end, иначе цель примет наш технический отказ за Esc владельца.
+  let selfAbortRun = false;
+  /** Наш технический обрыв: отказ билету или прерванное собственное сжатие. */
+  const ownAbort = () => driver.state.selfAbort || selfAbortRun || driver.state.checkpoint.phase === "compacting";
+  const providerRetry = retryConfig.enabled ? registerProviderRetry(pi, session, retryConfig, ownAbort) : undefined;
+
   // Контекст для будильников из таймеров и событий шины: у них своего контекста нет.
   let wakeContext: ExtensionContext | null = null;
   // Скрытые продолжения подряд без реплики владельца (Ц27).
   let hidden: { goalId: string; count: number } | null = null;
   let limitNoticeFor: string | null = null;
   let agentEndHandled = false;
-
   const isLimitHeld = (): boolean => {
     const goal = session.getGoal();
     const limit = session.reports.getState().policy.maxHiddenContinuations ?? 0;
@@ -254,7 +259,11 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     return undefined;
   });
 
+  pi.on("before_agent_start", () => {
+    if (driver.state.selfAbort) selfAbortRun = true;
+  });
   pi.on("agent_start", () => { agentEndHandled = false; });
+  pi.on("agent_settled", () => { selfAbortRun = false; });
   pi.on("turn_start", (_event, ctx) => {
     // Каждый ход заканчивается своим agent_end; повтор отбрасывается только внутри хода.
     agentEndHandled = false;
@@ -291,7 +300,7 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
       if (lastError) {
         recordOverflow(lastError, ctx);
         const failureId = providerRetry?.active() ? ctx.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant")?.id : undefined;
-        if (!isContextOverflowError(lastError.errorMessage) && !providerRetry?.owns(failureId)) recoveryRuntime.handlePersistentAssistantError(lastError, ctx);
+        if (!isContextOverflowError(lastError.errorMessage) && !ownAbort() && !providerRetry?.owns(failureId)) recoveryRuntime.handlePersistentAssistantError(lastError, ctx);
       } else if (!lastAssistant || (!recordOverflow(lastAssistant, ctx) && lastAssistant.stopReason !== "length")) {
         session.resetRecovery();
       }
@@ -330,10 +339,10 @@ export function registerGoalContinuation(pi: ExtensionAPI, session: GoalSession,
     externalRetryActive: () => externalRetry.active() || Boolean(providerRetry?.active()),
     clearContinuation: () => { subagents.cancelWait(); providerRetry?.clear(); },
     invalidateExternalRetry: () => { externalRetry.invalidate(); providerRetry?.clear(); },
-    ownsAbortHandling: () => Boolean(providerRetry?.enabled()) && !driver.state.selfAbort,
+    ownsAbortHandling: () => Boolean(providerRetry?.enabled()) && !ownAbort(),
     cancelProviderLimitAutoResume: () => providerLimit.clear(),
     isProviderLimitAutoResumeScheduled: (goalId) => providerLimit.isScheduledFor(goalId),
-    ownAbort: () => driver.state.selfAbort,
+    ownAbort,
     isLimitHeld,
   };
 

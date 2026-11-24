@@ -303,3 +303,13 @@ test("граница хода не запускает сжатие для отл
  await runtime.event("agent_settled", { aborted: false });
  assert.equal(runtime.compactOptions.length, 0, "сжатие остаётся за следующим компактом");
 });
+
+test("отмена владельцем не запускает разрыв хода для /mnn", async () => {
+ const runtime = fakePi({ models: [target], emitModelSelect: true });
+ await runtime.event("agent_start", {});
+ await command(runtime, "mnn", "test/small");
+ await runtime.event("turn_end", { outcome: "aborted", message: { stopReason: "aborted" }, toolResults: [], turnIndex: 0 });
+ assert.equal(runtime.compactOptions.length, 0, "отменённый ход не запускает сжатие");
+ await runtime.settle(true, true);
+ assert.equal(runtime.sent.length, 0, "после Esc нет скрытого продолжения");
+});
